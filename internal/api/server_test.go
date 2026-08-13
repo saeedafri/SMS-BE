@@ -32,11 +32,14 @@ func TestHealthzReportsOK(t *testing.T) {
 // An operation we have not built yet must answer with the contract's Error
 // envelope, not a bare Go error string. The frontend's error states read
 // error.code, so the shape is part of the contract even for a 501.
+//
+// This deliberately targets an operation from a later stage. As stages land,
+// point it at something still unbuilt — when nothing is left, delete it.
 func TestUnimplementedOperationReturnsContractErrorEnvelope(t *testing.T) {
 	router := api.NewRouter(&api.Server{})
 	rec := httptest.NewRecorder()
 
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/me", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/campaigns", nil))
 
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
