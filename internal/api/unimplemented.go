@@ -152,30 +152,6 @@ func (Unimplemented) ImportContacts(ctx context.Context, request gen.ImportConta
 	return nil, errNotImplemented("ImportContacts")
 }
 
-func (Unimplemented) ListConversations(ctx context.Context, request gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {
-	return nil, errNotImplemented("ListConversations")
-}
-
-func (Unimplemented) GetConversation(ctx context.Context, request gen.GetConversationRequestObject) (gen.GetConversationResponseObject, error) {
-	return nil, errNotImplemented("GetConversation")
-}
-
-func (Unimplemented) CloseConversation(ctx context.Context, request gen.CloseConversationRequestObject) (gen.CloseConversationResponseObject, error) {
-	return nil, errNotImplemented("CloseConversation")
-}
-
-func (Unimplemented) MarkConversationRead(ctx context.Context, request gen.MarkConversationReadRequestObject) (gen.MarkConversationReadResponseObject, error) {
-	return nil, errNotImplemented("MarkConversationRead")
-}
-
-func (Unimplemented) ReopenConversation(ctx context.Context, request gen.ReopenConversationRequestObject) (gen.ReopenConversationResponseObject, error) {
-	return nil, errNotImplemented("ReopenConversation")
-}
-
-func (Unimplemented) ReplyToConversation(ctx context.Context, request gen.ReplyToConversationRequestObject) (gen.ReplyToConversationResponseObject, error) {
-	return nil, errNotImplemented("ReplyToConversation")
-}
-
 func (Unimplemented) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveIpAllowlistEntryRequestObject) (gen.RemoveIpAllowlistEntryResponseObject, error) {
 	return nil, errNotImplemented("RemoveIpAllowlistEntry")
 }
@@ -370,22 +346,6 @@ func (Unimplemented) ListSessions(ctx context.Context, request gen.ListSessionsR
 
 func (Unimplemented) RevokeSession(ctx context.Context, request gen.RevokeSessionRequestObject) (gen.RevokeSessionResponseObject, error) {
 	return nil, errNotImplemented("RevokeSession")
-}
-
-func (Unimplemented) GetSupportTickets(ctx context.Context, request gen.GetSupportTicketsRequestObject) (gen.GetSupportTicketsResponseObject, error) {
-	return nil, errNotImplemented("GetSupportTickets")
-}
-
-func (Unimplemented) CreateSupportTicket(ctx context.Context, request gen.CreateSupportTicketRequestObject) (gen.CreateSupportTicketResponseObject, error) {
-	return nil, errNotImplemented("CreateSupportTicket")
-}
-
-func (Unimplemented) GetSupportTicket(ctx context.Context, request gen.GetSupportTicketRequestObject) (gen.GetSupportTicketResponseObject, error) {
-	return nil, errNotImplemented("GetSupportTicket")
-}
-
-func (Unimplemented) AddSupportMessage(ctx context.Context, request gen.AddSupportMessageRequestObject) (gen.AddSupportMessageResponseObject, error) {
-	return nil, errNotImplemented("AddSupportMessage")
 }
 
 func (Unimplemented) ListSuppressions(ctx context.Context, request gen.ListSuppressionsRequestObject) (gen.ListSuppressionsResponseObject, error) {

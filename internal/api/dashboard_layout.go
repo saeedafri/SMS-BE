@@ -35,15 +35,3 @@ func (s *Server) GetAlerts(ctx context.Context, _ gen.GetAlertsRequestObject) (g
 		},
 	}), nil
 }
-
-func (s *Server) ListConversations(ctx context.Context, _ gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {
-	if _, ok := identityFrom(ctx); !ok {
-		return gen.ListConversations401JSONResponse(
-			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
-	}
-	return gen.ListConversations200JSONResponse(gen.ConversationPage{
-		Conversations: []gen.Conversation{},
-		Total:         0,
-		NextCursor:    nil,
-	}), nil
-}
