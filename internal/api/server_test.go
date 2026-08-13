@@ -39,7 +39,7 @@ func TestUnimplementedOperationReturnsContractErrorEnvelope(t *testing.T) {
 	router := api.NewRouter(&api.Server{})
 	rec := httptest.NewRecorder()
 
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/automation/journeys", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/operator/tenants", nil))
 
 	if rec.Code != http.StatusNotImplemented {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)

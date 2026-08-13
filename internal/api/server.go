@@ -41,12 +41,16 @@ type Server struct {
 	// ClickHouse holds message logs. Nil means the logs explorer fails loudly
 	// rather than reporting an empty history.
 	ClickHouse driver.Conn
+
+	// Metrics is the live picture of this process. Nil disables collection
+	// entirely, which keeps tests from accumulating state between cases.
+	Metrics *Metrics
 }
 
 func NewRouter(s *Server) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
-	r.Use(requestLogger(s.Logger))
+	r.Use(requestLogger(s.Logger, s.Metrics))
 	r.Use(s.authenticate)
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -58,6 +62,13 @@ func NewRouter(s *Server) http.Handler {
 	})
 
 	r.Get("/healthz", s.healthz)
+	// Liveness vs readiness are different questions: healthz says "this process
+	// works", readyz says "send it traffic". A load balancer wants the second.
+	r.Get("/readyz", s.readiness)
+	// Live counters, timings and recent incidents. No tenant data, so no auth —
+	// an observability endpoint that needs a working login is useless exactly
+	// when login is what has broken.
+	r.Get("/metrics", s.metrics)
 
 	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
 		// A request the generated binder rejects — bad JSON, a malformed
@@ -104,6 +115,27 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 			checks["redis"], healthy = "down", false
 		} else {
 			checks["redis"] = "up"
+		}
+	}
+	// ClickHouse is reported but does NOT fail the check. It holds message
+	// logs and analytics; every other domain works without it. Failing the
+	// health check would make a load balancer pull a node that can still serve
+	// authentication, campaigns, billing and compliance — a worse outage than
+	// the one being reported.
+	if s.ClickHouse != nil {
+		if err := s.ClickHouse.Ping(r.Context()); err != nil {
+			checks["clickhouse"] = "down"
+		} else {
+			checks["clickhouse"] = "up"
+		}
+	} else {
+		checks["clickhouse"] = "not_configured"
+	}
+	if s.Connector != nil {
+		if health := s.Connector.Health(r.Context()); health.Healthy {
+			checks["carrier"] = "up"
+		} else {
+			checks["carrier"] = "down"
 		}
 	}
 

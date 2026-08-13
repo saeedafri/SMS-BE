@@ -72,36 +72,8 @@ func (Unimplemented) ResendVerificationEmail(ctx context.Context, request gen.Re
 	return nil, errNotImplemented("ResendVerificationEmail")
 }
 
-func (Unimplemented) ListJourneys(ctx context.Context, request gen.ListJourneysRequestObject) (gen.ListJourneysResponseObject, error) {
-	return nil, errNotImplemented("ListJourneys")
-}
-
-func (Unimplemented) CreateJourney(ctx context.Context, request gen.CreateJourneyRequestObject) (gen.CreateJourneyResponseObject, error) {
-	return nil, errNotImplemented("CreateJourney")
-}
-
-func (Unimplemented) GetJourney(ctx context.Context, request gen.GetJourneyRequestObject) (gen.GetJourneyResponseObject, error) {
-	return nil, errNotImplemented("GetJourney")
-}
-
 func (Unimplemented) UpdateJourney(ctx context.Context, request gen.UpdateJourneyRequestObject) (gen.UpdateJourneyResponseObject, error) {
 	return nil, errNotImplemented("UpdateJourney")
-}
-
-func (Unimplemented) ActivateJourney(ctx context.Context, request gen.ActivateJourneyRequestObject) (gen.ActivateJourneyResponseObject, error) {
-	return nil, errNotImplemented("ActivateJourney")
-}
-
-func (Unimplemented) ArchiveJourney(ctx context.Context, request gen.ArchiveJourneyRequestObject) (gen.ArchiveJourneyResponseObject, error) {
-	return nil, errNotImplemented("ArchiveJourney")
-}
-
-func (Unimplemented) PauseJourney(ctx context.Context, request gen.PauseJourneyRequestObject) (gen.PauseJourneyResponseObject, error) {
-	return nil, errNotImplemented("PauseJourney")
-}
-
-func (Unimplemented) ResumeJourney(ctx context.Context, request gen.ResumeJourneyRequestObject) (gen.ResumeJourneyResponseObject, error) {
-	return nil, errNotImplemented("ResumeJourney")
 }
 
 func (Unimplemented) EstimateCost(ctx context.Context, request gen.EstimateCostRequestObject) (gen.EstimateCostResponseObject, error) {
