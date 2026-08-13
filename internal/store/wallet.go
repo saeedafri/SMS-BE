@@ -440,3 +440,58 @@ func UpsertAutoRecharge(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	}
 	return saved, nil
 }
+
+// PricingRate is one rate-card line. Rates are platform-wide, not tenant-owned,
+// so this needs no tenant scope. Per-tenant overrides arrive with the operator
+// console in Stage 9.
+type PricingRate struct {
+	Country         string
+	Channel         string
+	Category        string
+	PerSegmentMinor int64
+	Currency        string
+}
+
+func ListPricingRates(ctx context.Context, pool *pgxpool.Pool) ([]PricingRate, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
+		FROM pricing_rates ORDER BY country, channel, category`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list pricing: %w", err)
+	}
+	defer rows.Close()
+
+	var out []PricingRate
+	for rows.Next() {
+		var rate PricingRate
+		if err := rows.Scan(&rate.Country, &rate.Channel, &rate.Category,
+			&rate.PerSegmentMinor, &rate.Currency); err != nil {
+			return nil, fmt.Errorf("store: scan pricing: %w", err)
+		}
+		out = append(out, rate)
+	}
+	return out, rows.Err()
+}
+
+// FindPricingRate resolves the rate for a country/channel, preferring a
+// category-specific line and falling back to the catch-all.
+func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
+	country, channel, category string) (PricingRate, error) {
+
+	var rate PricingRate
+	err := pool.QueryRow(ctx, `
+		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
+		FROM pricing_rates
+		WHERE country = $1 AND channel = $2 AND coalesce(category, '') IN ($3, '')
+		ORDER BY coalesce(category, '') DESC
+		LIMIT 1`, country, channel, category,
+	).Scan(&rate.Country, &rate.Channel, &rate.Category,
+		&rate.PerSegmentMinor, &rate.Currency)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PricingRate{}, ErrNotFound
+	}
+	if err != nil {
+		return PricingRate{}, fmt.Errorf("store: find pricing rate: %w", err)
+	}
+	return rate, nil
+}
