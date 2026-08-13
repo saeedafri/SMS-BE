@@ -161,9 +161,142 @@ func TestImplementedOperationsMatchTheContract(t *testing.T) {
 			map[string]string{"code": "000000"}},
 		{"mfa challenge expired", http.MethodPost, "/v1/auth/mfa/challenge", "",
 			map[string]string{"challengeToken": "nope", "code": "000000", "method": "totp"}},
-
-		{"logout", http.MethodPost, "/v1/auth/logout", owner.Token, nil},
 	}
+
+	// Stage 2 needs live rows to read back, so those operations are driven
+	// after the table above rather than inside it.
+	senderRes := h.do(http.MethodPost, "/v1/sender-ids", owner.Token, map[string]string{
+		"header": "CTRHDR", "channel": "SMS", "country": "IN",
+	})
+	var sender gen.SenderId
+	senderRes.decode(t, &sender)
+
+	templateRes := h.do(http.MethodPost, "/v1/templates", owner.Token, map[string]any{
+		"name": "Contract template", "senderId": sender.Id.String(), "body": "Hi {{name}}",
+	})
+	var template gen.Template
+	templateRes.decode(t, &template)
+
+	registrationRes := h.do(http.MethodPost, "/v1/registrations", owner.Token, map[string]any{
+		"country": "IN", "objectKey": "pe_rtm_entity", "fields": indiaEntityFields(),
+	})
+	var registration gen.Registration
+	registrationRes.decode(t, &registration)
+
+	voiceSender := createSender(t, h, owner.Token, "+14155559999", "VOICE", "US")
+
+	cases = append(cases,
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"list senders", http.MethodGet, "/v1/sender-ids", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create sender duplicate", http.MethodPost, "/v1/sender-ids", owner.Token,
+			map[string]string{"header": "CTRHDR", "channel": "SMS", "country": "IN"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"get sender", http.MethodGet, "/v1/sender-ids/" + sender.Id.String(), owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"get sender missing", http.MethodGet,
+			"/v1/sender-ids/00000000-0000-0000-0000-000000000000", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"voice call", http.MethodPost,
+			"/v1/sender-ids/" + voiceSender.Id.String() + "/voice-call", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"voice code wrong", http.MethodPost,
+			"/v1/sender-ids/" + voiceSender.Id.String() + "/voice-code", owner.Token,
+			map[string]string{"code": "000000"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"list templates", http.MethodGet, "/v1/templates", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"get template", http.MethodGet, "/v1/templates/" + template.Id.String(), owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create template duplicate", http.MethodPost, "/v1/templates", owner.Token,
+			map[string]any{"name": "Contract template", "senderId": sender.Id.String(), "body": "Hi"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"list registrations", http.MethodGet, "/v1/registrations", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"get registration", http.MethodGet,
+			"/v1/registrations/" + registration.Id.String(), owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create registration duplicate", http.MethodPost, "/v1/registrations", owner.Token,
+			map[string]any{"country": "IN", "objectKey": "pe_rtm_entity", "fields": indiaEntityFields()}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create registration forbidden", http.MethodPost, "/v1/registrations", member.Token,
+			map[string]any{"country": "IN", "objectKey": "pe_rtm_entity", "fields": indiaEntityFields()}},
+		// Logout goes last on purpose: it revokes the owner's session, so any
+		// case after it would 401 for a reason that has nothing to do with the
+		// operation under test.
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"logout", http.MethodPost, "/v1/auth/logout", owner.Token, nil},
+	)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -181,7 +314,7 @@ func TestUnimplementedOperationsStillUseTheErrorEnvelope(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
-	for _, path := range []string{"/v1/campaigns", "/v1/templates", "/v1/sender-ids"} {
+	for _, path := range []string{"/v1/campaigns", "/v1/contacts", "/v1/verify/services"} {
 		res := h.do(http.MethodGet, path, acct.Token, nil)
 		if res.Code != http.StatusNotImplemented {
 			t.Errorf("%s: status = %d, want 501", path, res.Code)

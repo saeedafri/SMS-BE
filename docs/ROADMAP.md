@@ -11,7 +11,7 @@ backend, the stage isn't done — regardless of what our own tests say.
 |---|---|---|---|---|
 | **0** | ✅ **Foundation** | 0 (+`/healthz`) | none — infra only | `2026-08-13-stage-0-foundation.md` |
 | 1 | ✅ Identity & tenancy | 21 | login, signup, MFA, /me, team, sessions, profile | `2026-08-13-stage-1-identity.md` |
-| 2 | Compliance spine | 11 | sender IDs, templates, registrations | — |
+| 2 | ✅ Compliance spine | 11 | sender IDs, templates, registrations | `2026-08-13-stage-2-compliance.md` |
 | 3 | Money | 15 | wallet, ledger, top-up, invoices, pricing | — |
 | 4 | Audience | 11 | contacts, lists, CSV import, suppressions | — |
 | 5 | **Data plane** | +public spec | message logs; first real delivered message | — |
@@ -38,15 +38,20 @@ before campaigns, data plane before campaigns can mean anything.
 
 - **Stage 0** complete: 8/8 tasks, RLS proven, contract surface generated.
 - **Stage 1** complete: 21/21 contract operations + 3 dashboard-layout endpoints.
-  114 backend tests, 28/28 end-to-end checks against the real UI, SMS-UI's own
-  2037 tests and typecheck still green.
+- **Stage 2** complete: 11/11 contract operations. India/DLT and US/10DLC are working
+  regime adapters; GB/AE stubs prove the pattern.
+- **Totals**: 35 of 151 contract operations live. 154 backend tests, 43 contract-validated
+  request/response pairs, 37/37 end-to-end checks against the real UI. SMS-UI's own 2037
+  tests and typecheck still green.
 
 ## Open decisions carried forward
 
 - **VPS specs** (blocks production sizing, not local development)
 - **ClickHouse install route** — the macOS brew cask is Gatekeeper-quarantined; needed before
   Stage 5. Options in `LOCAL_DEV.md`.
-- Launch countries/currencies → shapes Stage 2
+- **Launch countries** — Stage 2 shipped IN + US as working regimes and GB + AE as stubs,
+  per the PRD's reference-adapter plan. If your launch set differs, say so and the stubs
+  become real adapters (a file each, no handler changes).
 - Payment gateway → shapes Stage 3
 - `/v1/dev/*` endpoints: ten endpoints the UI's dev tooling calls that are absent from
   `openapi.json`. Implement for sandbox with a production kill-switch, or gate the tooling off.

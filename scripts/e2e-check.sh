@@ -143,6 +143,50 @@ check "MFA is not enabled until the code is confirmed" \
   "$([[ $mfa_still_off == false ]] && echo true || echo false)"
 
 echo
+echo "== compliance spine =="
+sender=$(curl -s --max-time 10 -X POST "$API/v1/sender-ids" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"header":"E2EHDR","channel":"SMS","country":"IN"}')
+sender_id=$(echo "$sender" | jq -r '.id // empty')
+check "sender created, pending review" \
+  "$([[ $(echo "$sender" | jq -r .status) == pending_review ]] && echo true || echo false)"
+
+template=$(curl -s --max-time 10 -X POST "$API/v1/templates" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"name\":\"E2E template ${stamp}\",\"senderId\":\"$sender_id\",\"body\":\"Hi {{name}}, order {{order_id}}\"}")
+template_vars=$(echo "$template" | jq -r '.variables | join(",")')
+check "template parses its variables (got $template_vars)" \
+  "$([[ $template_vars == "name,order_id" ]] && echo true || echo false)"
+
+shortened=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/templates" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"name\":\"Shortened ${stamp}\",\"senderId\":\"$sender_id\",\"body\":\"Deal\",\"ctaUrl\":\"https://bit.ly/x\"}")
+check "India rejects a shortened CTA URL (got $shortened)" \
+  "$([[ $shortened == 422 ]] && echo true || echo false)"
+
+registration=$(curl -s --max-time 10 -X POST "$API/v1/registrations" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"country":"IN","objectKey":"pe_rtm_entity","fields":{"legalName":"E2E Ltd","pan":"ABCDE1234F","entityType":"private_ltd","contactEmail":"c@e2e.test"}}')
+check "DLT principal entity registered" \
+  "$([[ $(echo "$registration" | jq -r .objectKey) == pe_rtm_entity ]] && echo true || echo false)"
+
+campaign_early=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/registrations" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"country":"US","objectKey":"tcr_campaign","fields":{"useCase":"2fa","description":"d","sampleMessage":"s"}}')
+check "US campaign blocked before its brand (got $campaign_early)" \
+  "$([[ $campaign_early == 422 ]] && echo true || echo false)"
+
+echo
+echo "== compliance data reaches the UI =="
+for page in /senders /templates /compliance; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -H "Cookie: $COOKIE=$token" "$UI$page")
+  check "GET $page -> 200 (got $code)" "$([[ $code == 200 ]] && echo true || echo false)"
+done
+senders_page=$(curl -s --max-time 30 -H "Cookie: $COOKIE=$token" "$UI/senders")
+check "the sender header we created renders on /senders" \
+  "$(grep -qF "E2EHDR" <<<"$senders_page" && echo true || echo false)"
+
+echo
 echo "== authorisation is real =="
 check "unauthenticated /v1/me is 401" \
   "$([[ $(curl -s -o /dev/null -w '%{http_code}' "$API/v1/me") == 401 ]] && echo true || echo false)"
