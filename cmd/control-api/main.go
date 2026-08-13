@@ -70,7 +70,32 @@ func run() error {
 	// ponytail: runs in-process on a ticker, which is correct for one replica.
 	// A second replica would double-sweep — harmless, since expiry is
 	// idempotent, but move this to the River queue before scaling out.
+	sandbox := connector.NewSandbox(0)
+
 	if clickhouse != nil {
+		// Applies the sandbox carrier's delivery reports. A real carrier POSTs
+		// these to our ingest endpoint; the sandbox queues them in-process, so
+		// without this a message would sit at "sent" forever and the delivered
+		// vs undelivered distinction — the whole product — would be invisible.
+		// Same settlement code either way, different trigger.
+		drainer := &sending.Service{DB: pool, ClickHouse: clickhouse, Connector: sandbox}
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if applied, err := drainer.DrainSandboxReports(ctx); err != nil {
+						logger.Error("drain sandbox reports", "error", err)
+					} else if applied > 0 {
+						logger.Info("applied delivery reports", "count", applied)
+					}
+				}
+			}
+		}()
+
 		reconciler := &sending.Service{DB: pool, ClickHouse: clickhouse}
 		go func() {
 			ticker := time.NewTicker(15 * time.Minute)
@@ -94,7 +119,7 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.ControlAPIAddr,
 		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
-			ClickHouse: clickhouse, Connector: connector.NewSandbox(0)}),
+			ClickHouse: clickhouse, Connector: sandbox}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

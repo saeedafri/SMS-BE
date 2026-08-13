@@ -20,22 +20,6 @@ func (Unimplemented) UpdateAlerts(ctx context.Context, request gen.UpdateAlertsR
 	return nil, errNotImplemented("UpdateAlerts")
 }
 
-func (Unimplemented) GetAnalytics(ctx context.Context, request gen.GetAnalyticsRequestObject) (gen.GetAnalyticsResponseObject, error) {
-	return nil, errNotImplemented("GetAnalytics")
-}
-
-func (Unimplemented) ListScheduledReports(ctx context.Context, request gen.ListScheduledReportsRequestObject) (gen.ListScheduledReportsResponseObject, error) {
-	return nil, errNotImplemented("ListScheduledReports")
-}
-
-func (Unimplemented) CreateScheduledReport(ctx context.Context, request gen.CreateScheduledReportRequestObject) (gen.CreateScheduledReportResponseObject, error) {
-	return nil, errNotImplemented("CreateScheduledReport")
-}
-
-func (Unimplemented) DeleteScheduledReport(ctx context.Context, request gen.DeleteScheduledReportRequestObject) (gen.DeleteScheduledReportResponseObject, error) {
-	return nil, errNotImplemented("DeleteScheduledReport")
-}
-
 func (Unimplemented) UpdateScheduledReport(ctx context.Context, request gen.UpdateScheduledReportRequestObject) (gen.UpdateScheduledReportResponseObject, error) {
 	return nil, errNotImplemented("UpdateScheduledReport")
 }
@@ -190,14 +174,6 @@ func (Unimplemented) ReopenConversation(ctx context.Context, request gen.ReopenC
 
 func (Unimplemented) ReplyToConversation(ctx context.Context, request gen.ReplyToConversationRequestObject) (gen.ReplyToConversationResponseObject, error) {
 	return nil, errNotImplemented("ReplyToConversation")
-}
-
-func (Unimplemented) GetDataRetention(ctx context.Context, request gen.GetDataRetentionRequestObject) (gen.GetDataRetentionResponseObject, error) {
-	return nil, errNotImplemented("GetDataRetention")
-}
-
-func (Unimplemented) UpdateDataRetention(ctx context.Context, request gen.UpdateDataRetentionRequestObject) (gen.UpdateDataRetentionResponseObject, error) {
-	return nil, errNotImplemented("UpdateDataRetention")
 }
 
 func (Unimplemented) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveIpAllowlistEntryRequestObject) (gen.RemoveIpAllowlistEntryResponseObject, error) {
@@ -394,14 +370,6 @@ func (Unimplemented) ListSessions(ctx context.Context, request gen.ListSessionsR
 
 func (Unimplemented) RevokeSession(ctx context.Context, request gen.RevokeSessionRequestObject) (gen.RevokeSessionResponseObject, error) {
 	return nil, errNotImplemented("RevokeSession")
-}
-
-func (Unimplemented) GetSso(ctx context.Context, request gen.GetSsoRequestObject) (gen.GetSsoResponseObject, error) {
-	return nil, errNotImplemented("GetSso")
-}
-
-func (Unimplemented) UpdateSso(ctx context.Context, request gen.UpdateSsoRequestObject) (gen.UpdateSsoResponseObject, error) {
-	return nil, errNotImplemented("UpdateSso")
 }
 
 func (Unimplemented) GetSupportTickets(ctx context.Context, request gen.GetSupportTicketsRequestObject) (gen.GetSupportTicketsResponseObject, error) {
