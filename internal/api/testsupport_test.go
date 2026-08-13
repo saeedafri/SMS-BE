@@ -285,3 +285,35 @@ func (h *harness) enableMfa(t *testing.T, acct account) string {
 	}
 	return enrollment.Secret
 }
+
+// doWithHeaders is do() plus extra request headers, for operations whose
+// contract puts meaning in a header — Idempotency-Key, notably.
+func (h *harness) doWithHeaders(method, path, token string, body any,
+	headers map[string]string) response {
+	h.t.Helper()
+
+	var reader *bytesReader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			h.t.Fatalf("marshal request: %v", err)
+		}
+		reader = newBytesReader(encoded)
+	}
+	var req *http.Request
+	if reader != nil {
+		req = httptest.NewRequest(method, path, reader)
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	return response{Code: rec.Code, Body: rec.Body.Bytes()}
+}

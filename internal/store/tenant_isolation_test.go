@@ -194,6 +194,21 @@ func TestEveryTenantScopedTableIsolates(t *testing.T) {
 		t.Fatalf("seed invoices: %v", err)
 	}
 
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO contact_lists (tenant_id, name) VALUES ($1, 'b-list')`, tenantB); err != nil {
+		t.Fatalf("seed contact_lists: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO contacts (tenant_id, msisdn, country) VALUES ($1, '+919999999999', 'IN')`,
+		tenantB); err != nil {
+		t.Fatalf("seed contacts: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO suppressions (tenant_id, identity, reason) VALUES ($1, '+918888888888', 'manual')`,
+		tenantB); err != nil {
+		t.Fatalf("seed suppressions: %v", err)
+	}
+
 	tables := []struct{ name, query string }{
 		{"tenants", `SELECT count(*) FROM tenants WHERE id = $1`},
 		{"tenant_users", `SELECT count(*) FROM tenant_users WHERE tenant_id = $1`},
@@ -206,6 +221,9 @@ func TestEveryTenantScopedTableIsolates(t *testing.T) {
 		{"payment_methods", `SELECT count(*) FROM payment_methods WHERE tenant_id = $1`},
 		{"auto_recharge_configs", `SELECT count(*) FROM auto_recharge_configs WHERE tenant_id = $1`},
 		{"invoices", `SELECT count(*) FROM invoices WHERE tenant_id = $1`},
+		{"contact_lists", `SELECT count(*) FROM contact_lists WHERE tenant_id = $1`},
+		{"contacts", `SELECT count(*) FROM contacts WHERE tenant_id = $1`},
+		{"suppressions", `SELECT count(*) FROM suppressions WHERE tenant_id = $1`},
 	}
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
