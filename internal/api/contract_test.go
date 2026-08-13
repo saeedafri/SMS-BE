@@ -398,6 +398,48 @@ func TestImplementedOperationsMatchTheContract(t *testing.T) {
 			token  string
 			body   any
 		}{"usage", http.MethodGet, "/v1/billing/usage?range=30d", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"contact lists", http.MethodGet, "/v1/contact-lists", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create contact list", http.MethodPost, "/v1/contact-lists", owner.Token, map[string]string{"name": "Contract list"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"create contact list blank", http.MethodPost, "/v1/contact-lists", owner.Token, map[string]string{"name": "  "}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"contacts", http.MethodGet, "/v1/contacts", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"suppressions", http.MethodGet, "/v1/suppressions", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"add suppressions", http.MethodPost, "/v1/suppressions", owner.Token, map[string]any{"msisdns": []string{"+919876500000"}, "reason": "manual"}},
 		// Logout goes last on purpose: it revokes the owner's session, so any
 		// case after it would 401 for a reason that has nothing to do with the
 		// operation under test.
@@ -426,7 +468,7 @@ func TestUnimplementedOperationsStillUseTheErrorEnvelope(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
-	for _, path := range []string{"/v1/campaigns", "/v1/contacts", "/v1/verify/services"} {
+	for _, path := range []string{"/v1/campaigns", "/v1/messages", "/v1/verify/services"} {
 		res := h.do(http.MethodGet, path, acct.Token, nil)
 		if res.Code != http.StatusNotImplemented {
 			t.Errorf("%s: status = %d, want 501", path, res.Code)
