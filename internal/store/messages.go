@@ -333,3 +333,20 @@ func CountCampaignMessages(ctx context.Context, conn driver.Conn, tenantID,
 	}
 	return counts, rows.Err()
 }
+
+// FindMessageTenant resolves which tenant owns a message.
+//
+// Delivery reports arrive carrying a carrier reference and our message id, but
+// no tenant — the carrier has no concept of one. Every settlement path needs
+// the tenant before it can scope anything, so this lookup deliberately runs
+// unscoped, and it returns ONLY the tenant id so a caller cannot use it to read
+// another tenant's message content.
+func FindMessageTenant(ctx context.Context, conn driver.Conn, messageID uuid.UUID) (uuid.UUID, error) {
+	var tenantID uuid.UUID
+	err := conn.QueryRow(ctx,
+		`SELECT tenant_id FROM messages WHERE id = ? LIMIT 1`, messageID).Scan(&tenantID)
+	if err != nil {
+		return uuid.Nil, ErrNotFound
+	}
+	return tenantID, nil
+}
