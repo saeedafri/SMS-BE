@@ -286,6 +286,118 @@ func TestImplementedOperationsMatchTheContract(t *testing.T) {
 			body   any
 		}{"create registration forbidden", http.MethodPost, "/v1/registrations", member.Token,
 			map[string]any{"country": "IN", "objectKey": "pe_rtm_entity", "fields": indiaEntityFields()}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"list pricing", http.MethodGet, "/v1/pricing", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"estimate", http.MethodPost, "/v1/billing/estimate", owner.Token, map[string]any{"country": "IN", "channel": "SMS", "recipientCount": 100, "primaryBody": "Hello"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"estimate unpriced", http.MethodPost, "/v1/billing/estimate", owner.Token, map[string]any{"country": "GB", "channel": "WHATSAPP", "recipientCount": 1, "primaryBody": "Hi"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"wallet balances", http.MethodGet, "/v1/wallet/balances", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"wallet ledger", http.MethodGet, "/v1/wallet/ledger", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"payment methods", http.MethodGet, "/v1/wallet/payment-methods", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"add payment method", http.MethodPost, "/v1/wallet/payment-methods", owner.Token, map[string]string{"brand": "visa", "last4": "4242"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"add payment method invalid", http.MethodPost, "/v1/wallet/payment-methods", owner.Token, map[string]string{"brand": "visa", "last4": "abc"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"auto recharge list", http.MethodGet, "/v1/wallet/auto-recharge", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"auto recharge disable", http.MethodPut, "/v1/wallet/auto-recharge", owner.Token, map[string]any{"currency": "INR", "enabled": false, "thresholdMinor": 0, "topUpMinor": 0, "paymentMethodId": nil}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"auto recharge invalid", http.MethodPut, "/v1/wallet/auto-recharge", owner.Token, map[string]any{"currency": "INR", "enabled": true, "thresholdMinor": 0, "topUpMinor": 0, "paymentMethodId": nil}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"topup invalid", http.MethodPost, "/v1/wallet/topup", owner.Token, map[string]any{"currency": "INR", "amountMinor": 0, "paymentMethodId": "00000000-0000-0000-0000-000000000000"}},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"invoices", http.MethodGet, "/v1/billing/invoices", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"invoice missing", http.MethodGet, "/v1/billing/invoices/00000000-0000-0000-0000-000000000000", owner.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"invoices forbidden", http.MethodGet, "/v1/billing/invoices", member.Token, nil},
+		struct {
+			name   string
+			method string
+			path   string
+			token  string
+			body   any
+		}{"usage", http.MethodGet, "/v1/billing/usage?range=30d", owner.Token, nil},
 		// Logout goes last on purpose: it revokes the owner's session, so any
 		// case after it would 401 for a reason that has nothing to do with the
 		// operation under test.

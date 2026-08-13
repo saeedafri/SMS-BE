@@ -187,6 +187,52 @@ check "the sender header we created renders on /senders" \
   "$(grep -qF "E2EHDR" <<<"$senders_page" && echo true || echo false)"
 
 echo
+echo "== money =="
+card=$(curl -s --max-time 10 -X POST "$API/v1/wallet/payment-methods" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"brand":"visa","last4":"4242"}')
+card_id=$(echo "$card" | jq -r '.id // empty')
+check "first card becomes the default" \
+  "$([[ $(echo "$card" | jq -r .isDefault) == true ]] && echo true || echo false)"
+
+entry=$(curl -s --max-time 10 -X POST "$API/v1/wallet/topup" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"currency\":\"INR\",\"amountMinor\":250000,\"paymentMethodId\":\"$card_id\"}")
+check "top-up credits the wallet" \
+  "$([[ $(echo "$entry" | jq -r .balanceAfterMinor) == 250000 ]] && echo true || echo false)"
+check "ledger amount stays positive (sign implied by type)" \
+  "$([[ $(echo "$entry" | jq -r .amountMinor) == 250000 && $(echo "$entry" | jq -r .type) == topup ]] && echo true || echo false)"
+
+balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r '.[0].balanceMinor')
+check "balance reads back as $balance" \
+  "$([[ $balance == 250000 ]] && echo true || echo false)"
+
+overdraw=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/wallet/topup" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"currency\":\"INR\",\"amountMinor\":-5000,\"paymentMethodId\":\"$card_id\"}")
+check "negative top-up rejected (got $overdraw)" \
+  "$([[ $overdraw == 422 ]] && echo true || echo false)"
+
+est=$(curl -s --max-time 10 -X POST "$API/v1/billing/estimate" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"country":"IN","channel":"SMS","recipientCount":1000,"primaryBody":"Your order has shipped."}')
+check "estimate is 1000 x 1 segment x 12 paise = 12000" \
+  "$([[ $(echo "$est" | jq -r .costMinorMin) == 12000 ]] && echo true || echo false)"
+
+long_body=$(printf 'a%.0s' $(seq 1 161))
+est2=$(curl -s --max-time 10 -X POST "$API/v1/billing/estimate" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"country\":\"IN\",\"channel\":\"SMS\",\"recipientCount\":1,\"primaryBody\":\"$long_body\"}")
+check "161 characters bills as 2 segments" \
+  "$([[ $(echo "$est2" | jq -r .segmentsPerMessage) == 2 ]] && echo true || echo false)"
+
+echo
+echo "== money reaches the UI =="
+billing_page=$(curl -s --max-time 30 -H "Cookie: $COOKIE=$token" "$UI/billing")
+check "the topped-up balance renders on /billing" \
+  "$(grep -qE "2,500|2500" <<<"$billing_page" && echo true || echo false)"
+
+echo
 echo "== authorisation is real =="
 check "unauthenticated /v1/me is 401" \
   "$([[ $(curl -s -o /dev/null -w '%{http_code}' "$API/v1/me") == 401 ]] && echo true || echo false)"
