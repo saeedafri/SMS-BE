@@ -233,6 +233,50 @@ check "the topped-up balance renders on /billing" \
   "$(grep -qE "2,500|2500" <<<"$billing_page" && echo true || echo false)"
 
 echo
+echo "== audience =="
+list=$(curl -s --max-time 10 -X POST "$API/v1/contact-lists" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"name\":\"E2E list ${stamp}\"}")
+list_id=$(echo "$list" | jq -r '.id // empty')
+check "contact list created" "$([[ -n $list_id ]] && echo true || echo false)"
+
+sup=$(curl -s --max-time 10 -X POST "$API/v1/suppressions" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"msisdns":["+919876543299"],"reason":"opted_out_keyword"}')
+check "opt-out recorded" \
+  "$([[ $(echo "$sup" | jq -r .created) == 1 ]] && echo true || echo false)"
+
+imp=$(curl -s --max-time 20 -X POST "$API/v1/contacts/import" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -H "Idempotency-Key: e2e-${stamp}" \
+  -d "{\"targetListId\":\"$list_id\",\"defaultCountry\":\"IN\",\"consentBasis\":{\"SMS\":\"opted_in\"},\"rows\":[{\"msisdn\":\"9876543210\",\"firstName\":\"Asha\",\"line\":2},{\"msisdn\":\"09876543211\",\"firstName\":\"Ravi\",\"line\":3},{\"msisdn\":\"9876543299\",\"line\":4},{\"msisdn\":\"junk\",\"line\":5}]}")
+check "import created 2, skipped the suppressed one, flagged 1 invalid" \
+  "$([[ $(echo "$imp" | jq -r '[.created,.skipped,.invalid]|join(",")') == "2,1,1" ]] && echo true || echo false)"
+check "conflict reports the real CSV line" \
+  "$([[ $(echo "$imp" | jq -r '.conflicts[]|select(.reason=="invalid_msisdn")|.line') == 5 ]] && echo true || echo false)"
+
+replay=$(curl -s --max-time 20 -X POST "$API/v1/contacts/import" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -H "Idempotency-Key: e2e-${stamp}" \
+  -d "{\"targetListId\":\"$list_id\",\"defaultCountry\":\"IN\",\"consentBasis\":{\"SMS\":\"opted_in\"},\"rows\":[{\"msisdn\":\"9876543210\",\"line\":2}]}")
+check "replayed import does not duplicate" \
+  "$([[ $(echo "$replay" | jq -r .created) == 2 ]] && echo true || echo false)"
+
+count=$(curl -s --max-time 10 "$API/v1/contact-lists/$list_id" -H "authorization: Bearer $token" | jq -r .contactCount)
+check "list holds 2 contacts (got $count)" \
+  "$([[ $count == 2 ]] && echo true || echo false)"
+
+echo
+echo "== audience reaches the UI =="
+for page in /audience /audience/suppressions; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -H "Cookie: $COOKIE=$token" "$UI$page")
+  check "GET $page -> 200 (got $code)" "$([[ $code == 200 ]] && echo true || echo false)"
+done
+aud=$(curl -s --max-time 30 -H "Cookie: $COOKIE=$token" "$UI/audience")
+check "the list we created renders on /audience" \
+  "$(grep -qF "E2E list ${stamp}" <<<"$aud" && echo true || echo false)"
+
+echo
 echo "== authorisation is real =="
 check "unauthenticated /v1/me is 401" \
   "$([[ $(curl -s -o /dev/null -w '%{http_code}' "$API/v1/me") == 401 ]] && echo true || echo false)"
