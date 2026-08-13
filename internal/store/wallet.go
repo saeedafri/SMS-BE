@@ -495,3 +495,172 @@ func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
 	}
 	return rate, nil
 }
+
+// Invoice is a billing period's statement.
+type Invoice struct {
+	ID             uuid.UUID
+	Currency       string
+	PeriodStart    time.Time
+	PeriodEnd      time.Time
+	Status         string
+	SubtotalMinor  int64
+	TaxRatePercent int
+	TaxMinor       int64
+	TotalMinor     int64
+	LineItems      []InvoiceLineItem
+}
+
+type InvoiceLineItem struct {
+	CampaignID   *string
+	CampaignName *string
+	JourneyID    *string
+	JourneyName  *string
+	Channel      string
+	AmountMinor  int64
+	CreatedAt    time.Time
+}
+
+// TaxRatePercentFor returns the tax applied to an invoice in a currency.
+// India charges 18% GST on INR; the contract states plainly that no other
+// country's tax rules are modelled, so everything else is zero rather than
+// guessed.
+func TaxRatePercentFor(currency string) int {
+	if currency == "INR" {
+		return 18
+	}
+	return 0
+}
+
+const invoiceColumns = `id, currency, period_start, period_end, status,
+	subtotal_minor, tax_rate_percent, tax_minor, total_minor, created_at`
+
+func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	cursor string, limit int) ([]Invoice, string, error) {
+
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var invoices []Invoice
+	var createdAts []time.Time
+	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT `+invoiceColumns+` FROM invoices
+			WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1, $2))
+			ORDER BY created_at DESC, id DESC
+			LIMIT $3`, cursorTime, cursorID, limit+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var invoice Invoice
+			var createdAt time.Time
+			if err := rows.Scan(&invoice.ID, &invoice.Currency, &invoice.PeriodStart,
+				&invoice.PeriodEnd, &invoice.Status, &invoice.SubtotalMinor,
+				&invoice.TaxRatePercent, &invoice.TaxMinor, &invoice.TotalMinor,
+				&createdAt); err != nil {
+				return err
+			}
+			invoice.LineItems = []InvoiceLineItem{}
+			invoices = append(invoices, invoice)
+			createdAts = append(createdAts, createdAt)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("store: list invoices: %w", err)
+	}
+
+	next := ""
+	if len(invoices) > limit {
+		next = encodeLedgerCursor(createdAts[limit-1], invoices[limit-1].ID)
+		invoices = invoices[:limit]
+	}
+	return invoices, next, nil
+}
+
+func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID uuid.UUID) (Invoice, error) {
+	var invoice Invoice
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var createdAt time.Time
+		if err := tx.QueryRow(ctx,
+			`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1`, invoiceID,
+		).Scan(&invoice.ID, &invoice.Currency, &invoice.PeriodStart, &invoice.PeriodEnd,
+			&invoice.Status, &invoice.SubtotalMinor, &invoice.TaxRatePercent,
+			&invoice.TaxMinor, &invoice.TotalMinor, &createdAt); err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(ctx, `
+			SELECT description, amount_minor FROM invoice_line_items
+			WHERE invoice_id = $1 ORDER BY id`, invoiceID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		invoice.LineItems = []InvoiceLineItem{}
+		for rows.Next() {
+			var item InvoiceLineItem
+			var description string
+			if err := rows.Scan(&description, &item.AmountMinor); err != nil {
+				return err
+			}
+			item.Channel = description
+			item.CreatedAt = invoice.PeriodEnd
+			invoice.LineItems = append(invoice.LineItems, item)
+		}
+		return rows.Err()
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Invoice{}, ErrNotFound
+	}
+	if err != nil {
+		return Invoice{}, fmt.Errorf("store: get invoice: %w", err)
+	}
+	return invoice, nil
+}
+
+// ChannelUsage is spend grouped by channel.
+type ChannelUsage struct {
+	Channel      string
+	Currency     string
+	MessageCount int
+	AmountMinor  int64
+}
+
+// UsageByChannel totals charges from the ledger. Per-channel attribution needs
+// message-level data, which arrives with the data plane in Stage 5; until then
+// charges carry no channel and this correctly returns nothing.
+func UsageByChannel(ctx context.Context, pool *pgxpool.Pool, id Identity, currency string) ([]ChannelUsage, error) {
+	var out []ChannelUsage
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT currency, count(*), coalesce(sum(amount_minor), 0)
+			FROM wallet_ledger
+			WHERE entry_type = 'charge' AND ($1 = '' OR currency = $1)
+			GROUP BY currency ORDER BY currency`, currency)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var usage ChannelUsage
+			if err := rows.Scan(&usage.Currency, &usage.MessageCount,
+				&usage.AmountMinor); err != nil {
+				return err
+			}
+			usage.Channel = "SMS"
+			out = append(out, usage)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: usage by channel: %w", err)
+	}
+	return out, nil
+}
