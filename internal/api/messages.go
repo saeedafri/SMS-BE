@@ -42,9 +42,21 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 		filter.Limit = *request.Params.Limit
 	}
 
-	records, total, next, err := store.QueryMessages(ctx, s.ClickHouse, identity.TenantID, filter)
+	page, err := s.messagePage(ctx, identity, filter)
 	if err != nil {
 		return nil, err
+	}
+	return gen.ListMessages200JSONResponse(page), nil
+}
+
+// messagePage renders a filtered page of message logs. Shared with the campaign
+// detail view so one message can never be described two different ways.
+func (s *Server) messagePage(ctx context.Context, identity store.Identity,
+	filter store.MessageFilter) (gen.MessageLogPage, error) {
+
+	records, total, next, err := store.QueryMessages(ctx, s.ClickHouse, identity.TenantID, filter)
+	if err != nil {
+		return gen.MessageLogPage{}, err
 	}
 
 	entries := make([]gen.MessageLogEntry, 0, len(records))
@@ -82,7 +94,7 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if next != "" {
 		page.NextCursor = &next
 	}
-	return gen.ListMessages200JSONResponse(page), nil
+	return page, nil
 }
 
 // contractStatusToState maps the contract's coarse filter value back to the

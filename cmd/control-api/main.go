@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/saeedafri/sms-be/internal/api"
+	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
 	"github.com/saeedafri/sms-be/internal/sending"
@@ -91,8 +92,9 @@ func run() error {
 	}
 
 	server := &http.Server{
-		Addr:              cfg.ControlAPIAddr,
-		Handler:           api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger, ClickHouse: clickhouse}),
+		Addr: cfg.ControlAPIAddr,
+		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
+			ClickHouse: clickhouse, Connector: connector.NewSandbox(0)}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
