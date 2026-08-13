@@ -206,6 +206,12 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 	}
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
+		// Bound user input here rather than trusting the store's ceiling: the
+		// store allows larger pages so internal fan-out can batch properly, and
+		// that headroom must not be reachable from a query string.
+		if limit > 200 {
+			limit = 200
+		}
 	}
 
 	contacts, total, next, err := store.ListContacts(ctx, s.DB, identity, listID, cursor, limit)
@@ -426,6 +432,12 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 	}
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
+		// Bound user input here rather than trusting the store's ceiling: the
+		// store allows larger pages so internal fan-out can batch properly, and
+		// that headroom must not be reachable from a query string.
+		if limit > 200 {
+			limit = 200
+		}
 	}
 
 	suppressions, next, err := store.ListSuppressions(ctx, s.DB, identity, cursor, limit)

@@ -65,15 +65,22 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	}, nil
 }
 
-// LaunchCampaign fans a campaign out to its list.
+// LaunchCampaign fans a campaign out to its list, one page at a time.
 //
-// Every recipient goes through Service.Send — the same gate, the same hold, the
-// same settlement as a single API send. Nothing here re-implements those rules,
-// because a campaign path that drifts from the single-send path is how a
-// suppressed contact eventually gets messaged.
+// Every recipient still passes the SAME gate with the same rules as a single
+// API send — the batching changes how many round trips that costs, never what
+// is checked. A campaign path that relaxed the rules is how a suppressed
+// contact eventually gets messaged.
 func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	campaign store.Campaign) (sent int, failed int, err error) {
 
+	// Everything identical across recipients is resolved ONCE here. Doing it
+	// per message cost eight Postgres round trips per recipient and capped
+	// throughput at roughly 68 messages/second on this machine.
+	sender, err := store.GetSenderID(ctx, s.DB, identity, campaign.SenderID)
+	if err != nil {
+		return 0, 0, err
+	}
 	template, err := store.GetTemplate(ctx, s.DB, identity, campaign.TemplateID)
 	if err != nil {
 		return 0, 0, err
@@ -82,37 +89,54 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if template.Body != nil {
 		body = *template.Body
 	}
+	rate, err := store.FindPricingRate(ctx, s.DB, sender.Country, sender.Channel, "")
+	if err != nil {
+		return 0, 0, fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
+	}
+	tenantStatus, err := store.TenantStatus(ctx, s.DB, identity)
+	if err != nil {
+		return 0, 0, err
+	}
+	balance := int64(0)
+	balances, err := store.ListWalletBalances(ctx, s.DB, identity)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, entry := range balances {
+		if entry.Currency == rate.Currency {
+			balance = entry.BalanceMinor
+		}
+	}
+
+	campaignID := campaign.ID
+	context := batchContext{
+		sender: sender, templateID: campaign.TemplateID,
+		templateStatus: template.Status, templateSender: template.SenderID.String(),
+		body: body, rate: rate, tenantStatus: tenantStatus,
+		balance: balance, campaignID: &campaignID,
+	}
 
 	if err := store.MarkCampaignSending(ctx, s.DB, identity, campaign.ID); err != nil {
 		return 0, 0, err
 	}
 
-	// Paged so a million-contact list does not have to fit in memory at once.
+	// Paged so a million-contact list never has to fit in memory at once.
 	cursor := ""
 	for {
-		contacts, _, next, err := store.ListContacts(ctx, s.DB, identity, campaign.ListID, cursor, 200)
+		contacts, _, next, err := store.ListContacts(ctx, s.DB, identity,
+			campaign.ListID, cursor, batchSize)
 		if err != nil {
 			return sent, failed, err
 		}
-		for _, contact := range contacts {
-			campaignID := campaign.ID
-			_, sendErr := s.Send(ctx, identity, SendRequest{
-				SenderID:   campaign.SenderID,
-				TemplateID: &campaign.TemplateID,
-				Msisdn:     contact.Msisdn,
-				Body:       personalise(body, contact),
-				CampaignID: &campaignID,
-			})
-			// A refused recipient is a failed recipient, not a failed campaign.
-			// One suppressed contact must not stop the other 999,999 — and the
-			// refusal is already recorded against the message, so the user can
-			// still see exactly why it did not go.
-			if sendErr != nil {
-				failed++
-				continue
-			}
-			sent++
+		pageSent, pageFailed, err := s.SendBatch(ctx, identity, context, contacts)
+		sent += pageSent
+		failed += pageFailed
+		if err != nil {
+			return sent, failed, err
 		}
+		// The running balance shrinks as the campaign spends, so a wallet that
+		// runs dry stops the rest of the campaign instead of overdrawing.
+		context.balance -= int64(pageSent) * rate.PerSegmentMinor
 		if next == "" {
 			break
 		}

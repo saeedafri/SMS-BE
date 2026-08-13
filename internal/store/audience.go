@@ -223,7 +223,12 @@ const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
 func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	listID *uuid.UUID, cursor string, limit int) ([]Contact, int, string, error) {
 
-	if limit <= 0 || limit > 200 {
+	// An out-of-range limit falls back to 50 rather than being clamped to the
+	// maximum, because a caller asking for something impossible has a bug and a
+	// small page makes that obvious instead of silently serving a huge one.
+	// The ceiling is high enough for the campaign fan-out to page in real
+	// batches; user-supplied limits are bounded at the API layer.
+	if limit <= 0 || limit > maxContactPage {
 		limit = 50
 	}
 	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
@@ -510,6 +515,45 @@ func IsSuppressed(ctx context.Context, pool *pgxpool.Pool, id Identity, identity
 	})
 	if err != nil {
 		return false, fmt.Errorf("store: is suppressed: %w", err)
+	}
+	return suppressed, nil
+}
+
+// maxContactPage bounds one page of contacts. The campaign fan-out pages at
+// batchSize; anything above this is a caller error rather than a big request.
+const maxContactPage = 1000
+
+// SuppressedSet returns which of the given identities are suppressed.
+//
+// The batched send path checks a whole page of recipients in one query rather
+// than one query per recipient. At campaign scale that is the difference
+// between 200 round trips and one, and the suppression check runs on every
+// single message so it is on the hottest path in the system.
+func SuppressedSet(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	identities []string) (map[string]bool, error) {
+
+	suppressed := make(map[string]bool, len(identities))
+	if len(identities) == 0 {
+		return suppressed, nil
+	}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT identity FROM suppressions WHERE identity = ANY($1)`, identities)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var identity string
+			if err := rows.Scan(&identity); err != nil {
+				return err
+			}
+			suppressed[identity] = true
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: suppressed set: %w", err)
 	}
 	return suppressed, nil
 }
