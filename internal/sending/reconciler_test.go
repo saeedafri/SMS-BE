@@ -40,6 +40,34 @@ func TestReconcilerExpiresSilentMessagesAndRefunds(t *testing.T) {
 		t.Fatalf("balance moved to %d during a no-op reconcile", held)
 	}
 
+	// Wait for the message to become visible to a RANGE scan. A point lookup by
+	// id sees a fresh ClickHouse insert immediately, but a scan filtering on
+	// updated_at takes a few hundred milliseconds to include it. That lag is
+	// irrelevant in production — the reconciler runs every 15 minutes against
+	// messages 48 hours old — so waiting here keeps the test honest about what
+	// it is asserting: the reconciler's behaviour, not ClickHouse's insert
+	// visibility. Without this the test measures the wrong thing and fails
+	// intermittently.
+	visible := false
+	for attempt := 0; attempt < 25 && !visible; attempt++ {
+		stale, err := store.FindStaleMessages(context.Background(),
+			f.service.ClickHouse, time.Now().UTC(), 200)
+		if err != nil {
+			t.Fatalf("find stale: %v", err)
+		}
+		for _, message := range stale {
+			if message.ID == result.MessageID {
+				visible = true
+			}
+		}
+		if !visible {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if !visible {
+		t.Fatal("the message never became visible to the reconciler's sweep")
+	}
+
 	// Now past the window.
 	if _, err := f.service.Reconcile(context.Background(), time.Nanosecond, 100); err != nil {
 		t.Fatalf("reconcile: %v", err)

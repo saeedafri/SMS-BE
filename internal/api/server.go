@@ -70,7 +70,18 @@ func NewRouter(s *Server) http.Handler {
 		},
 		ResponseErrorHandlerFunc: writeOperationError,
 	})
-	gen.HandlerFromMux(handler, r)
+	// ErrorHandlerFunc covers a different failure than the strict handler's
+	// RequestErrorHandlerFunc above: parameter binding happens in the router
+	// layer, BEFORE the strict handler runs. Without this, a missing or
+	// malformed query parameter returned 400 text/plain — not the contract's
+	// Error envelope — on all 151 operations, and the frontend's error states
+	// read error.code, so they would see an unparseable body.
+	gen.HandlerWithOptions(handler, gen.ChiServerOptions{
+		BaseRouter: r,
+		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
+		},
+	})
 	return r
 }
 

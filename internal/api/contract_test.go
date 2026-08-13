@@ -468,7 +468,7 @@ func TestUnimplementedOperationsStillUseTheErrorEnvelope(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
-	for _, path := range []string{"/v1/campaigns", "/v1/analytics", "/v1/verify/services"} {
+	for _, path := range []string{"/v1/analytics", "/v1/verify/services", "/v1/support/tickets"} {
 		res := h.do(http.MethodGet, path, acct.Token, nil)
 		if res.Code != http.StatusNotImplemented {
 			t.Errorf("%s: status = %d, want 501", path, res.Code)

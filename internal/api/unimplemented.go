@@ -200,72 +200,8 @@ func (Unimplemented) UpdateDataRetention(ctx context.Context, request gen.Update
 	return nil, errNotImplemented("UpdateDataRetention")
 }
 
-func (Unimplemented) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequestObject) (gen.ListApiKeysResponseObject, error) {
-	return nil, errNotImplemented("ListApiKeys")
-}
-
-func (Unimplemented) CreateApiKey(ctx context.Context, request gen.CreateApiKeyRequestObject) (gen.CreateApiKeyResponseObject, error) {
-	return nil, errNotImplemented("CreateApiKey")
-}
-
-func (Unimplemented) RevokeApiKey(ctx context.Context, request gen.RevokeApiKeyRequestObject) (gen.RevokeApiKeyResponseObject, error) {
-	return nil, errNotImplemented("RevokeApiKey")
-}
-
-func (Unimplemented) RotateApiKey(ctx context.Context, request gen.RotateApiKeyRequestObject) (gen.RotateApiKeyResponseObject, error) {
-	return nil, errNotImplemented("RotateApiKey")
-}
-
-func (Unimplemented) ListIpAllowlist(ctx context.Context, request gen.ListIpAllowlistRequestObject) (gen.ListIpAllowlistResponseObject, error) {
-	return nil, errNotImplemented("ListIpAllowlist")
-}
-
-func (Unimplemented) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllowlistEntryRequestObject) (gen.AddIpAllowlistEntryResponseObject, error) {
-	return nil, errNotImplemented("AddIpAllowlistEntry")
-}
-
 func (Unimplemented) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveIpAllowlistEntryRequestObject) (gen.RemoveIpAllowlistEntryResponseObject, error) {
 	return nil, errNotImplemented("RemoveIpAllowlistEntry")
-}
-
-func (Unimplemented) GetRateLimit(ctx context.Context, request gen.GetRateLimitRequestObject) (gen.GetRateLimitResponseObject, error) {
-	return nil, errNotImplemented("GetRateLimit")
-}
-
-func (Unimplemented) ListApiScopes(ctx context.Context, request gen.ListApiScopesRequestObject) (gen.ListApiScopesResponseObject, error) {
-	return nil, errNotImplemented("ListApiScopes")
-}
-
-func (Unimplemented) ListWebhookEndpoints(ctx context.Context, request gen.ListWebhookEndpointsRequestObject) (gen.ListWebhookEndpointsResponseObject, error) {
-	return nil, errNotImplemented("ListWebhookEndpoints")
-}
-
-func (Unimplemented) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWebhookEndpointRequestObject) (gen.CreateWebhookEndpointResponseObject, error) {
-	return nil, errNotImplemented("CreateWebhookEndpoint")
-}
-
-func (Unimplemented) DeleteWebhookEndpoint(ctx context.Context, request gen.DeleteWebhookEndpointRequestObject) (gen.DeleteWebhookEndpointResponseObject, error) {
-	return nil, errNotImplemented("DeleteWebhookEndpoint")
-}
-
-func (Unimplemented) GetWebhookEndpoint(ctx context.Context, request gen.GetWebhookEndpointRequestObject) (gen.GetWebhookEndpointResponseObject, error) {
-	return nil, errNotImplemented("GetWebhookEndpoint")
-}
-
-func (Unimplemented) UpdateWebhookEndpoint(ctx context.Context, request gen.UpdateWebhookEndpointRequestObject) (gen.UpdateWebhookEndpointResponseObject, error) {
-	return nil, errNotImplemented("UpdateWebhookEndpoint")
-}
-
-func (Unimplemented) ListWebhookEvents(ctx context.Context, request gen.ListWebhookEventsRequestObject) (gen.ListWebhookEventsResponseObject, error) {
-	return nil, errNotImplemented("ListWebhookEvents")
-}
-
-func (Unimplemented) ResendWebhookEvent(ctx context.Context, request gen.ResendWebhookEventRequestObject) (gen.ResendWebhookEventResponseObject, error) {
-	return nil, errNotImplemented("ResendWebhookEvent")
-}
-
-func (Unimplemented) SendWebhookTestEvent(ctx context.Context, request gen.SendWebhookTestEventRequestObject) (gen.SendWebhookTestEventResponseObject, error) {
-	return nil, errNotImplemented("SendWebhookTestEvent")
 }
 
 func (Unimplemented) GetMe(ctx context.Context, request gen.GetMeRequestObject) (gen.GetMeResponseObject, error) {
