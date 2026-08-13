@@ -1,0 +1,12 @@
+# Generates our HTTP surface from the frontend team's contract.
+# Output is generated — never hand-edit internal/gen/. Regenerate with `make generate`
+# whenever ../SMS-UI/openapi.json changes.
+package: gen
+output: internal/gen/api/control.gen.go
+generate:
+  models: true
+  chi-server: true
+  strict-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: true
