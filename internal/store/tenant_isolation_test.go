@@ -151,10 +151,30 @@ func TestEveryTenantScopedTableIsolates(t *testing.T) {
 	// Counting all visible rows would be wrong: tenant A legitimately sees its
 	// own. Each query below counts only rows owned by tenant B, so any non-zero
 	// result is a genuine cross-tenant leak.
+	senderID := uuid.New()
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO sender_ids (id, tenant_id, header, channel, country)
+		 VALUES ($1, $2, 'BTENANT', 'SMS', 'IN')`, senderID, tenantB); err != nil {
+		t.Fatalf("seed sender_ids: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO templates (tenant_id, sender_id, name, channel, country, body)
+		 VALUES ($1, $2, 'b-template', 'SMS', 'IN', 'hello')`, tenantB, senderID); err != nil {
+		t.Fatalf("seed templates: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO registrations (tenant_id, country, object_key)
+		 VALUES ($1, 'IN', 'pe_rtm_entity')`, tenantB); err != nil {
+		t.Fatalf("seed registrations: %v", err)
+	}
+
 	tables := []struct{ name, query string }{
 		{"tenants", `SELECT count(*) FROM tenants WHERE id = $1`},
 		{"tenant_users", `SELECT count(*) FROM tenant_users WHERE tenant_id = $1`},
 		{"sessions", `SELECT count(*) FROM sessions WHERE tenant_id = $1`},
+		{"sender_ids", `SELECT count(*) FROM sender_ids WHERE tenant_id = $1`},
+		{"templates", `SELECT count(*) FROM templates WHERE tenant_id = $1`},
+		{"registrations", `SELECT count(*) FROM registrations WHERE tenant_id = $1`},
 	}
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
