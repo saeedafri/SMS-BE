@@ -392,36 +392,8 @@ func (Unimplemented) UpdateTenant(ctx context.Context, request gen.UpdateTenantR
 	return nil, errNotImplemented("UpdateTenant")
 }
 
-func (Unimplemented) ListVerifyServices(ctx context.Context, request gen.ListVerifyServicesRequestObject) (gen.ListVerifyServicesResponseObject, error) {
-	return nil, errNotImplemented("ListVerifyServices")
-}
-
-func (Unimplemented) CreateVerifyService(ctx context.Context, request gen.CreateVerifyServiceRequestObject) (gen.CreateVerifyServiceResponseObject, error) {
-	return nil, errNotImplemented("CreateVerifyService")
-}
-
-func (Unimplemented) GetVerifyService(ctx context.Context, request gen.GetVerifyServiceRequestObject) (gen.GetVerifyServiceResponseObject, error) {
-	return nil, errNotImplemented("GetVerifyService")
-}
-
 func (Unimplemented) UpdateVerifyService(ctx context.Context, request gen.UpdateVerifyServiceRequestObject) (gen.UpdateVerifyServiceResponseObject, error) {
 	return nil, errNotImplemented("UpdateVerifyService")
-}
-
-func (Unimplemented) GetVerifyAnalytics(ctx context.Context, request gen.GetVerifyAnalyticsRequestObject) (gen.GetVerifyAnalyticsResponseObject, error) {
-	return nil, errNotImplemented("GetVerifyAnalytics")
-}
-
-func (Unimplemented) ListVerificationAttempts(ctx context.Context, request gen.ListVerificationAttemptsRequestObject) (gen.ListVerificationAttemptsResponseObject, error) {
-	return nil, errNotImplemented("ListVerificationAttempts")
-}
-
-func (Unimplemented) CreateVerification(ctx context.Context, request gen.CreateVerificationRequestObject) (gen.CreateVerificationResponseObject, error) {
-	return nil, errNotImplemented("CreateVerification")
-}
-
-func (Unimplemented) CheckVerification(ctx context.Context, request gen.CheckVerificationRequestObject) (gen.CheckVerificationResponseObject, error) {
-	return nil, errNotImplemented("CheckVerification")
 }
 
 func (Unimplemented) ListAutoRecharge(ctx context.Context, request gen.ListAutoRechargeRequestObject) (gen.ListAutoRechargeResponseObject, error) {
