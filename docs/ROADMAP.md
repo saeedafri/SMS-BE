@@ -14,7 +14,7 @@ backend, the stage isn't done — regardless of what our own tests say.
 | 2 | ✅ Compliance spine | 11 | sender IDs, templates, registrations | `2026-08-13-stage-2-compliance.md` |
 | 3 | ✅ Money | 14 | wallet, ledger, top-up, invoices, pricing | `2026-08-13-stage-3-money.md` |
 | 4 | ✅ Audience | 11 | contacts, lists, CSV import, suppressions | (built inline) |
-| 5 | **Data plane** | +public spec | message logs; first real delivered message | — |
+| 5 | 🟡 **Data plane** | 1 + pipeline | message logs render live from ClickHouse | (built inline) |
 | 6 | Campaigns | 5 | campaign list, wizard, live monitoring | — |
 | 7 | Developer surface | 17 | API keys, webhooks, IP allowlist, rate limits | — |
 | 8 | Analytics | 7 | analytics dashboards, reports, alerts, retention | — |
@@ -48,7 +48,25 @@ before campaigns, data plane before campaigns can mean anything.
   request/response pairs, 54/54 end-to-end checks against the real UI. SMS-UI's own 2037
   tests and typecheck still green.
 
-## Ready for Stage 5
+## Stage 5 status — core built, remainder scoped
+
+**Done**: message state machine, send gate, sandbox connector, send pipeline with
+hold/submit/settle, delivery-report application, ClickHouse schema (daily partitions +
+permanent rollups), and `GET /v1/messages` serving live from ClickHouse.
+
+Proven end to end: delivered charges once; undelivered refunds automatically; a carrier
+rejection releases the hold immediately; a replayed receipt cannot refund twice; a gate refusal
+moves no money; a report for an unknown message is dropped.
+
+**Remaining for Stage 5**:
+- `openapi.public.json` — the send API, DLR/MO ingest and signed webhook payloads. The pipeline
+  they drive exists and is tested; what is missing is the public HTTP surface and its spec.
+- The reconciler that expires messages stuck in `submitted`/`accepted` past their DLR window.
+  The sandbox already produces that case on demand (numbers ending `003`).
+- Batched worker + River job queue for campaign-scale fan-out. Single sends work today;
+  Stage 6 needs the batch path.
+
+## Original Stage 5 readiness notes
 
 The data plane is the next stage and the biggest one. Everything it depends on now exists:
 suppression checks (`store.IsSuppressed`), balance and overdraft refusal
