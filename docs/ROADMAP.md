@@ -13,7 +13,7 @@ backend, the stage isn't done — regardless of what our own tests say.
 | 1 | ✅ Identity & tenancy | 21 | login, signup, MFA, /me, team, sessions, profile | `2026-08-13-stage-1-identity.md` |
 | 2 | ✅ Compliance spine | 11 | sender IDs, templates, registrations | `2026-08-13-stage-2-compliance.md` |
 | 3 | ✅ Money | 14 | wallet, ledger, top-up, invoices, pricing | `2026-08-13-stage-3-money.md` |
-| 4 | Audience | 11 | contacts, lists, CSV import, suppressions | — |
+| 4 | ✅ Audience | 11 | contacts, lists, CSV import, suppressions | (built inline) |
 | 5 | **Data plane** | +public spec | message logs; first real delivered message | — |
 | 6 | Campaigns | 5 | campaign list, wizard, live monitoring | — |
 | 7 | Developer surface | 17 | API keys, webhooks, IP allowlist, rate limits | — |
@@ -42,9 +42,19 @@ before campaigns, data plane before campaigns can mean anything.
   regime adapters; GB/AE stubs prove the pattern.
 - **Stage 3** complete: 14/14 contract operations. Append-only ledger, balance invariant
   proven under concurrency, GSM-7/UCS-2 segment arithmetic.
-- **Totals**: 49 of 151 contract operations live. 200+ backend tests, 59 contract-validated
-  request/response pairs, 45/45 end-to-end checks against the real UI. SMS-UI's own 2037
+- **Stage 4** complete: 11/11 contract operations. Idempotent CSV import, global suppression
+  honoured at import time, phone normalisation matching the UI exactly.
+- **Totals**: 60 of 151 contract operations live. 230+ backend tests, 65 contract-validated
+  request/response pairs, 54/54 end-to-end checks against the real UI. SMS-UI's own 2037
   tests and typecheck still green.
+
+## Ready for Stage 5
+
+The data plane is the next stage and the biggest one. Everything it depends on now exists:
+suppression checks (`store.IsSuppressed`), balance and overdraft refusal
+(`store.AppendLedgerEntry`), segment costing (`billing.SegmentCount`), approved senders and
+templates, and ClickHouse running locally. Stage 5 also authors `openapi.public.json` — the
+send API, DLR ingest and webhook payloads the frontend contract does not cover.
 
 ## Open decisions carried forward
 
