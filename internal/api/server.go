@@ -90,8 +90,22 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 // envelope is part of the contract even for failures we consider internal.
 func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 	var notImpl notImplementedError
-	if errors.As(err, &notImpl) {
+	switch {
+	case errors.As(err, &notImpl):
 		writeError(w, http.StatusNotImplemented, "not_implemented", notImpl.Error())
+		return
+	// Some operations are declared with only a 200 response even though the
+	// contract marks them as requiring a bearer token — the security scheme
+	// implies 401/403 rather than listing them. Handlers signal those cases
+	// with these sentinels so they still get the right status and the standard
+	// envelope, instead of collapsing into a 500.
+	case errors.Is(err, errUnauthenticated):
+		writeError(w, http.StatusUnauthorized, codeUnauthenticated,
+			"Missing or invalid bearer token")
+		return
+	case errors.Is(err, errForbidden):
+		writeError(w, http.StatusForbidden, codeForbidden,
+			"Your role does not have access to this.")
 		return
 	}
 	// Deliberately not err.Error(): internal failure detail belongs in logs,
