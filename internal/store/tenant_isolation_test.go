@@ -168,6 +168,32 @@ func TestEveryTenantScopedTableIsolates(t *testing.T) {
 		t.Fatalf("seed registrations: %v", err)
 	}
 
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO wallet_balances (tenant_id, currency, balance_minor)
+		 VALUES ($1, 'INR', 5000)`, tenantB); err != nil {
+		t.Fatalf("seed wallet_balances: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO wallet_ledger (tenant_id, currency, entry_type, amount_minor, balance_after_minor)
+		 VALUES ($1, 'INR', 'topup', 5000, 5000)`, tenantB); err != nil {
+		t.Fatalf("seed wallet_ledger: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO payment_methods (tenant_id, brand, last4) VALUES ($1, 'visa', '4242')`,
+		tenantB); err != nil {
+		t.Fatalf("seed payment_methods: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO auto_recharge_configs (tenant_id, currency) VALUES ($1, 'INR')`,
+		tenantB); err != nil {
+		t.Fatalf("seed auto_recharge_configs: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO invoices (tenant_id, currency, period_start, period_end)
+		 VALUES ($1, 'INR', now() - interval '30 days', now())`, tenantB); err != nil {
+		t.Fatalf("seed invoices: %v", err)
+	}
+
 	tables := []struct{ name, query string }{
 		{"tenants", `SELECT count(*) FROM tenants WHERE id = $1`},
 		{"tenant_users", `SELECT count(*) FROM tenant_users WHERE tenant_id = $1`},
@@ -175,6 +201,11 @@ func TestEveryTenantScopedTableIsolates(t *testing.T) {
 		{"sender_ids", `SELECT count(*) FROM sender_ids WHERE tenant_id = $1`},
 		{"templates", `SELECT count(*) FROM templates WHERE tenant_id = $1`},
 		{"registrations", `SELECT count(*) FROM registrations WHERE tenant_id = $1`},
+		{"wallet_balances", `SELECT count(*) FROM wallet_balances WHERE tenant_id = $1`},
+		{"wallet_ledger", `SELECT count(*) FROM wallet_ledger WHERE tenant_id = $1`},
+		{"payment_methods", `SELECT count(*) FROM payment_methods WHERE tenant_id = $1`},
+		{"auto_recharge_configs", `SELECT count(*) FROM auto_recharge_configs WHERE tenant_id = $1`},
+		{"invoices", `SELECT count(*) FROM invoices WHERE tenant_id = $1`},
 	}
 	for _, table := range tables {
 		t.Run(table.name, func(t *testing.T) {
