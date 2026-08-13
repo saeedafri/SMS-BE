@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/platform/config"
+	"github.com/saeedafri/sms-be/internal/platform/resilience"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -38,17 +40,29 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := store.Open(ctx, cfg.DatabaseURL)
-	if err != nil {
+	// Retry the database at startup rather than exiting. On a restart the
+	// process often comes up before Postgres is accepting connections, and
+	// crash-looping until an orchestrator gives up is worse than waiting.
+	var pool *pgxpool.Pool
+	if err := resilience.Retry(ctx, 5, 500*time.Millisecond, logger, "connect postgres",
+		func() error {
+			var openErr error
+			pool, openErr = store.Open(ctx, cfg.DatabaseURL)
+			return openErr
+		}); err != nil {
 		return err
 	}
 	defer pool.Close()
 
 	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
 	if err != nil {
-		return err
+		// Redis backs rate limiting only. Refusing to boot without it would
+		// take down messaging, billing and compliance to protect a counter.
+		logger.Warn("redis unavailable; rate limiting degraded", "error", err)
 	}
-	defer rdb.Close()
+	if rdb != nil {
+		defer rdb.Close()
+	}
 
 	// ClickHouse is optional at startup: the control plane serves every domain
 	// except message logs without it, and refusing to boot would take the whole
@@ -71,55 +85,43 @@ func run() error {
 	// A second replica would double-sweep — harmless, since expiry is
 	// idempotent, but move this to the River queue before scaling out.
 	sandbox := connector.NewSandbox(0)
+	metrics := api.NewMetrics()
 
 	if clickhouse != nil {
 		// Applies the sandbox carrier's delivery reports. A real carrier POSTs
-		// these to our ingest endpoint; the sandbox queues them in-process, so
-		// without this a message would sit at "sent" forever and the delivered
-		// vs undelivered distinction — the whole product — would be invisible.
-		// Same settlement code either way, different trigger.
+		// these to an ingest endpoint; the sandbox queues them in-process, so
+		// without this a message sits at "sent" forever and the delivered vs
+		// undelivered distinction — the whole product — stays invisible.
 		drainer := &sending.Service{DB: pool, ClickHouse: clickhouse, Connector: sandbox}
-		go func() {
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if applied, err := drainer.DrainSandboxReports(ctx); err != nil {
-						logger.Error("drain sandbox reports", "error", err)
-					} else if applied > 0 {
-						logger.Info("applied delivery reports", "count", applied)
-					}
+		go resilience.Supervise(ctx, "delivery-drainer", 2*time.Second, logger,
+			func(name string) { metrics.RecordIncident("worker_panic", name) },
+			func(ctx context.Context) error {
+				applied, err := drainer.DrainSandboxReports(ctx)
+				if err == nil && applied > 0 {
+					logger.Info("applied delivery reports", "count", applied)
 				}
-			}
-		}()
+				return err
+			})
 
+		// Releases money held against messages a carrier accepted and never
+		// reported on. Without it a lost report means a tenant is charged
+		// forever for a message nobody can prove arrived.
 		reconciler := &sending.Service{DB: pool, ClickHouse: clickhouse}
-		go func() {
-			ticker := time.NewTicker(15 * time.Minute)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
-					if err != nil {
-						logger.Error("reconcile", "expired", expired, "error", err)
-					} else if expired > 0 {
-						logger.Info("reconciled stale messages", "expired", expired)
-					}
+		go resilience.Supervise(ctx, "reconciler", 15*time.Minute, logger,
+			func(name string) { metrics.RecordIncident("worker_panic", name) },
+			func(ctx context.Context) error {
+				expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
+				if expired > 0 {
+					logger.Info("reconciled stale messages", "expired", expired)
 				}
-			}
-		}()
+				return err
+			})
 	}
 
 	server := &http.Server{
 		Addr: cfg.ControlAPIAddr,
 		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
-			ClickHouse: clickhouse, Connector: sandbox}),
+			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
