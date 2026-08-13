@@ -28,6 +28,7 @@ type Server struct {
 func NewRouter(s *Server) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	r.Use(requestLogger(s.Logger))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
