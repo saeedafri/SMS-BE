@@ -47,8 +47,6 @@ before campaigns, data plane before campaigns can mean anything.
 ## Open decisions carried forward
 
 - **VPS specs** (blocks production sizing, not local development)
-- **ClickHouse install route** — the macOS brew cask is Gatekeeper-quarantined; needed before
-  Stage 5. Options in `LOCAL_DEV.md`.
 - **Launch countries** — Stage 2 shipped IN + US as working regimes and GB + AE as stubs,
   per the PRD's reference-adapter plan. If your launch set differs, say so and the stubs
   become real adapters (a file each, no handler changes).
@@ -61,5 +59,8 @@ before campaigns, data plane before campaigns can mean anything.
 
 - ~~`src/lib/api/me.ts` client-side fetch has no auth header~~ — fixed in Stage 1: added
   `src/app/api/me/route.ts` and pointed the hook at it.
+- ~~ClickHouse install route~~ — resolved: the official curl installer sets no quarantine
+  attribute, so Gatekeeper never blocks it and nothing is bypassed. Running locally, both
+  databases created. See `LOCAL_DEV.md`.
 - ~~Email delivery for verification/reset tokens~~ — tokens are logged; real delivery is
   Stage 3's payment/notification work. Tokens are deliberately never returned in a response.
