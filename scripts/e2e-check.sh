@@ -96,6 +96,53 @@ check "owner row from our database appears on /settings/team" \
   "$(grep -qF "$email" <<<"$team" && echo true || echo false)"
 
 echo
+echo "== capability endpoint the browser polls =="
+me_via_ui=$(curl -s --max-time 20 -H "Cookie: $COOKIE=$token" "$UI/api/me")
+check "UI /api/me proxies our backend with credentials" \
+  "$([[ $(echo "$me_via_ui" | jq -r .tenantName) == "$org" ]] && echo true || echo false)"
+
+echo
+echo "== team management =="
+invite=$(curl -s --max-time 10 -X POST "$API/v1/team/invite" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d "{\"email\":\"mate-${stamp}@example.test\",\"role\":\"member\"}")
+check "invite creates a pending member" \
+  "$([[ $(echo "$invite" | jq -r .status) == invited ]] && echo true || echo false)"
+check "invited member has no name yet (contract: null)" \
+  "$([[ $(echo "$invite" | jq -r .name) == null ]] && echo true || echo false)"
+team_count=$(curl -s --max-time 10 "$API/v1/team" -H "authorization: Bearer $token" | jq '.members | length')
+check "team now lists 2 members (got $team_count)" \
+  "$([[ $team_count == 2 ]] && echo true || echo false)"
+
+owner_id=$(echo "$me" | jq -r .userId)
+demote=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X PATCH "$API/v1/team/$owner_id" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' -d '{"role":"member"}')
+check "cannot demote the last owner (got $demote)" \
+  "$([[ $demote == 422 ]] && echo true || echo false)"
+
+echo
+echo "== account security flows =="
+change=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PATCH "$API/v1/auth/password" \
+  -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  -d '{"currentPassword":"wrong-password","newPassword":"another-password"}')
+check "changing a password needs the current one (got $change)" \
+  "$([[ $change == 403 ]] && echo true || echo false)"
+
+forgot_known=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/auth/password/forgot" \
+  -H 'content-type: application/json' -d "{\"email\":\"$email\"}")
+forgot_unknown=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/auth/password/forgot" \
+  -H 'content-type: application/json' -d '{"email":"nobody-at-all@example.test"}')
+check "password/forgot does not reveal account existence ($forgot_known vs $forgot_unknown)" \
+  "$([[ $forgot_known == 204 && $forgot_unknown == 204 ]] && echo true || echo false)"
+
+enroll=$(curl -s --max-time 10 -X POST "$API/v1/auth/mfa/enroll" -H "authorization: Bearer $token")
+check "MFA enrolment returns a secret and a scannable QR" \
+  "$([[ -n $(echo "$enroll" | jq -r '.secret // empty') && $(echo "$enroll" | jq -r .qrSvg) == *"<svg"* ]] && echo true || echo false)"
+mfa_still_off=$(curl -s --max-time 10 "$API/v1/me" -H "authorization: Bearer $token" | jq -r .mfaEnabled)
+check "MFA is not enabled until the code is confirmed" \
+  "$([[ $mfa_still_off == false ]] && echo true || echo false)"
+
+echo
 echo "== authorisation is real =="
 check "unauthenticated /v1/me is 401" \
   "$([[ $(curl -s -o /dev/null -w '%{http_code}' "$API/v1/me") == 401 ]] && echo true || echo false)"

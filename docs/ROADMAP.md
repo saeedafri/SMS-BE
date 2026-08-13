@@ -9,8 +9,8 @@ backend, the stage isn't done — regardless of what our own tests say.
 
 | # | Stage | Contract ops | UI screens that must work live | Plan |
 |---|---|---|---|---|
-| **0** | **Foundation** | 0 (+`/healthz`) | none — infra only | `2026-08-13-stage-0-foundation.md` |
-| 1 | Identity & tenancy | 21 | login, signup, MFA, /me, team, sessions, profile | — |
+| **0** | ✅ **Foundation** | 0 (+`/healthz`) | none — infra only | `2026-08-13-stage-0-foundation.md` |
+| 1 | ✅ Identity & tenancy | 21 | login, signup, MFA, /me, team, sessions, profile | `2026-08-13-stage-1-identity.md` |
 | 2 | Compliance spine | 11 | sender IDs, templates, registrations | — |
 | 3 | Money | 15 | wallet, ledger, top-up, invoices, pricing | — |
 | 4 | Audience | 11 | contacts, lists, CSV import, suppressions | — |
@@ -34,11 +34,27 @@ before campaigns, data plane before campaigns can mean anything.
 4. `make check` is green: build, vet, lint, unit, contract, integration.
 5. Diagrams in `ARCHITECTURE.md` updated if the stage changed a flow.
 
+## Status
+
+- **Stage 0** complete: 8/8 tasks, RLS proven, contract surface generated.
+- **Stage 1** complete: 21/21 contract operations + 3 dashboard-layout endpoints.
+  114 backend tests, 28/28 end-to-end checks against the real UI, SMS-UI's own
+  2037 tests and typecheck still green.
+
 ## Open decisions carried forward
 
-- VPS specs (blocks production sizing, not local development)
+- **VPS specs** (blocks production sizing, not local development)
+- **ClickHouse install route** — the macOS brew cask is Gatekeeper-quarantined; needed before
+  Stage 5. Options in `LOCAL_DEV.md`.
 - Launch countries/currencies → shapes Stage 2
 - Payment gateway → shapes Stage 3
-- `/v1/dev/*` endpoints: implement for sandbox, or gate off in UI → decide by Stage 1
-- `src/lib/api/me.ts` client-side fetch has no auth header → must be fixed before Stage 1's
-  UI acceptance test can pass
+- `/v1/dev/*` endpoints: ten endpoints the UI's dev tooling calls that are absent from
+  `openapi.json`. Implement for sandbox with a production kill-switch, or gate the tooling off.
+  Not yet blocking anything.
+
+## Resolved
+
+- ~~`src/lib/api/me.ts` client-side fetch has no auth header~~ — fixed in Stage 1: added
+  `src/app/api/me/route.ts` and pointed the hook at it.
+- ~~Email delivery for verification/reset tokens~~ — tokens are logged; real delivery is
+  Stage 3's payment/notification work. Tokens are deliberately never returned in a response.
