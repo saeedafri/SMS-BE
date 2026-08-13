@@ -32,3 +32,7 @@ services-up:
 services-down:
 	brew services stop postgresql@16
 	brew services stop redis
+
+clickhouse-migrate:
+	python3 scripts/clickhouse_migrate.py sms_dev
+	python3 scripts/clickhouse_migrate.py sms_test
