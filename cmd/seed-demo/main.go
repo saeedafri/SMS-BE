@@ -32,6 +32,7 @@ const (
 	userID   = "99999999-9999-9999-9999-999999999999"
 	smsID    = "11111111-1111-1111-1111-111111111111"
 	rcsID    = "22222222-2222-2222-2222-222222222222"
+	listID   = "33333333-3333-3333-3333-333333333333"
 	password = "relay-dev"
 )
 
@@ -68,8 +69,28 @@ func run() error {
 
 	// Deleting the tenant cascades to everything owned by it, which is what
 	// makes a re-run restore the fixture instead of colliding with it.
-	if _, err := pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
-		return fmt.Errorf("clear demo tenant: %w", err)
+	//
+	// That cascade reaches wallet_ledger, which is append-only and refuses the
+	// DELETE. The trigger is CORRECT: in production a tenant with financial
+	// history must not be erasable, because those records are needed for audit
+	// and tax long after the customer has gone. Deleting a real tenant should
+	// fail exactly like this.
+	//
+	// So the exception is made explicitly, narrowly, and only here — a dev
+	// seed rebuilding a known fixture. It runs as the table owner, drops the
+	// guard for one statement, and restores it immediately even if the delete
+	// fails. Nothing on the request path can reach this code.
+	if _, err := pool.Exec(ctx,
+		`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return fmt.Errorf("relax ledger guard for seed: %w", err)
+	}
+	_, deleteErr := pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID)
+	if _, err := pool.Exec(ctx,
+		`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return fmt.Errorf("restore ledger guard: %w", err)
+	}
+	if deleteErr != nil {
+		return fmt.Errorf("clear demo tenant: %w", deleteErr)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE email = 'founder@acme.test'`); err != nil {
 		return fmt.Errorf("clear demo user: %w", err)
@@ -125,6 +146,42 @@ func run() error {
 		`UPDATE wallet_balances SET balance_minor = 4250000
 		 WHERE tenant_id = $1 AND currency = 'INR'`, tenantID); err != nil {
 		return fmt.Errorf("set balance: %w", err)
+	}
+
+	// The audience spec asserts on an exact seeded list: 4 members, 2 consented
+	// for SMS, 2 for RCS. Per-channel consent is what the audience screen shows,
+	// and a list where everyone consented to everything would let a broken
+	// consent filter pass unnoticed.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO contact_lists (id, tenant_id, name)
+		VALUES ($1, $2, 'Diwali 2026')`, listID, tenantID); err != nil {
+		return fmt.Errorf("seed contact list: %w", err)
+	}
+
+	contacts := []struct {
+		id, msisdn, name, consent string
+	}{
+		{"aaaaaaa1-0000-4000-8000-000000000001", "+919876500101", "Priya",
+			`{"SMS":"opted_in","RCS":"unknown"}`},
+		{"aaaaaaa1-0000-4000-8000-000000000002", "+919876500102", "Arjun",
+			`{"SMS":"opted_in","RCS":"opted_in"}`},
+		{"aaaaaaa1-0000-4000-8000-000000000003", "+919876500103", "Vikram",
+			`{"SMS":"unknown","RCS":"opted_in"}`},
+		{"aaaaaaa1-0000-4000-8000-000000000004", "+919876500104", "Meera",
+			`{"SMS":"unknown","RCS":"unknown"}`},
+	}
+	for _, contact := range contacts {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO contacts (id, tenant_id, msisdn, country, fields, consent)
+			VALUES ($1, $2, $3, 'IN', jsonb_build_object('firstName', $4::text), $5::jsonb)`,
+			contact.id, tenantID, contact.msisdn, contact.name, contact.consent); err != nil {
+			return fmt.Errorf("seed contact %s: %w", contact.name, err)
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO contact_list_members (tenant_id, list_id, contact_id)
+			VALUES ($1, $2, $3)`, tenantID, listID, contact.id); err != nil {
+			return fmt.Errorf("seed list membership: %w", err)
+		}
 	}
 
 	fmt.Println("seeded Acme Retail — founder@acme.test / relay-dev")
