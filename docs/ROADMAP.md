@@ -12,7 +12,7 @@ backend, the stage isn't done — regardless of what our own tests say.
 | **0** | ✅ **Foundation** | 0 (+`/healthz`) | none — infra only | `2026-08-13-stage-0-foundation.md` |
 | 1 | ✅ Identity & tenancy | 21 | login, signup, MFA, /me, team, sessions, profile | `2026-08-13-stage-1-identity.md` |
 | 2 | ✅ Compliance spine | 11 | sender IDs, templates, registrations | `2026-08-13-stage-2-compliance.md` |
-| 3 | Money | 15 | wallet, ledger, top-up, invoices, pricing | — |
+| 3 | ✅ Money | 14 | wallet, ledger, top-up, invoices, pricing | `2026-08-13-stage-3-money.md` |
 | 4 | Audience | 11 | contacts, lists, CSV import, suppressions | — |
 | 5 | **Data plane** | +public spec | message logs; first real delivered message | — |
 | 6 | Campaigns | 5 | campaign list, wizard, live monitoring | — |
@@ -40,8 +40,10 @@ before campaigns, data plane before campaigns can mean anything.
 - **Stage 1** complete: 21/21 contract operations + 3 dashboard-layout endpoints.
 - **Stage 2** complete: 11/11 contract operations. India/DLT and US/10DLC are working
   regime adapters; GB/AE stubs prove the pattern.
-- **Totals**: 35 of 151 contract operations live. 154 backend tests, 43 contract-validated
-  request/response pairs, 37/37 end-to-end checks against the real UI. SMS-UI's own 2037
+- **Stage 3** complete: 14/14 contract operations. Append-only ledger, balance invariant
+  proven under concurrency, GSM-7/UCS-2 segment arithmetic.
+- **Totals**: 49 of 151 contract operations live. 200+ backend tests, 59 contract-validated
+  request/response pairs, 45/45 end-to-end checks against the real UI. SMS-UI's own 2037
   tests and typecheck still green.
 
 ## Open decisions carried forward
@@ -50,7 +52,10 @@ before campaigns, data plane before campaigns can mean anything.
 - **Launch countries** — Stage 2 shipped IN + US as working regimes and GB + AE as stubs,
   per the PRD's reference-adapter plan. If your launch set differs, say so and the stubs
   become real adapters (a file each, no handler changes).
-- Payment gateway → shapes Stage 3
+- **Payment gateway** — Stage 3 shipped a `PaymentGateway` interface whose only implementation
+  records a manual capture (correct for bank-transfer and invoice-paid customers). Adding
+  Razorpay/Stripe is one new file implementing `Capture` plus a config switch. Tell me which
+  provider when you want cards.
 - `/v1/dev/*` endpoints: ten endpoints the UI's dev tooling calls that are absent from
   `openapi.json`. Implement for sandbox with a production kill-switch, or gate the tooling off.
   Not yet blocking anything.
