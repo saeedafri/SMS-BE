@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,10 @@ type Server struct {
 	// capture without contacting anyone — correct for bank-transfer and
 	// invoice-paid customers, and the seam a real provider slots into.
 	Gateway billing.PaymentGateway
+
+	// ClickHouse holds message logs. Nil means the logs explorer fails loudly
+	// rather than reporting an empty history.
+	ClickHouse driver.Conn
 }
 
 func NewRouter(s *Server) http.Handler {

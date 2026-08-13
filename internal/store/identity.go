@@ -105,3 +105,17 @@ func UpdateTenantName(ctx context.Context, pool *pgxpool.Pool, id Identity, name
 		return nil
 	})
 }
+
+// TenantStatus reports whether a tenant is active, suspended or throttled. The
+// send gate reads it on every message so an operator suspension takes effect
+// immediately rather than at the next campaign.
+func TenantStatus(ctx context.Context, pool *pgxpool.Pool, id Identity) (string, error) {
+	var status string
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT status FROM tenants WHERE id = $1`, id.TenantID).Scan(&status)
+	})
+	if err != nil {
+		return "", fmt.Errorf("store: tenant status: %w", err)
+	}
+	return status, nil
+}
