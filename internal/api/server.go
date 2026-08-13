@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -26,6 +27,11 @@ type Server struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
 	Logger *slog.Logger
+
+	// Connector is the carrier the send path submits to. Nil means no data
+	// plane, so campaign and send endpoints refuse rather than silently
+	// accepting messages nothing will ever deliver.
+	Connector connector.Connector
 
 	// Gateway captures payments. Nil means the manual gateway, which records a
 	// capture without contacting anyone — correct for bank-transfer and
@@ -120,8 +126,11 @@ func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 			"Your role does not have access to this.")
 		return
 	}
-	// Deliberately not err.Error(): internal failure detail belongs in logs,
-	// not in a response body a tenant can read.
+	// Deliberately not err.Error() in the body: internal failure detail belongs
+	// in logs, not in a response a tenant can read. It must still reach the
+	// logs though — an unexplained 500 is unactionable, and this envelope was
+	// hiding the cause of every internal failure.
+	slog.Error("unhandled operation error", "error", err)
 	writeError(w, http.StatusInternalServerError, "internal_error",
 		"an unexpected error occurred")
 }

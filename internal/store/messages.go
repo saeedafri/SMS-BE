@@ -283,3 +283,53 @@ func FindStaleMessages(ctx context.Context, conn driver.Conn,
 	}
 	return out, rows.Err()
 }
+
+// CampaignCounts is the delivery breakdown shown on a campaign's detail page.
+type CampaignCounts struct {
+	Queued    int
+	Sent      int
+	Delivered int
+	Failed    int
+	Read      int
+}
+
+// CountCampaignMessages groups a campaign's messages by contract status.
+//
+// It reads the raw messages table rather than the hourly rollup because the
+// rollup is keyed by the hour a transition happened: a message that went
+// queued then delivered contributes a row to both, so summing the rollup would
+// count it twice. FINAL on the message rows gives one row per message.
+func CountCampaignMessages(ctx context.Context, conn driver.Conn, tenantID,
+	campaignID uuid.UUID) (CampaignCounts, error) {
+
+	rows, err := conn.Query(ctx, `
+		SELECT status, count() FROM messages FINAL
+		WHERE tenant_id = ? AND campaign_id = ?
+		GROUP BY status`, tenantID, campaignID)
+	if err != nil {
+		return CampaignCounts{}, fmt.Errorf("store: count campaign messages: %w", err)
+	}
+	defer rows.Close()
+
+	var counts CampaignCounts
+	for rows.Next() {
+		var status string
+		var total uint64
+		if err := rows.Scan(&status, &total); err != nil {
+			return CampaignCounts{}, fmt.Errorf("store: scan campaign count: %w", err)
+		}
+		// Mapped through the same collapse the logs use, so the campaign page
+		// and the message list can never disagree about one message.
+		switch status {
+		case "queued", "submitting":
+			counts.Queued += int(total)
+		case "submitted", "accepted":
+			counts.Sent += int(total)
+		case "delivered":
+			counts.Delivered += int(total)
+		case "undelivered", "rejected", "expired":
+			counts.Failed += int(total)
+		}
+	}
+	return counts, rows.Err()
+}

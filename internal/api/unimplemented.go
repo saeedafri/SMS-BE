@@ -136,26 +136,6 @@ func (Unimplemented) GetUsage(ctx context.Context, request gen.GetUsageRequestOb
 	return nil, errNotImplemented("GetUsage")
 }
 
-func (Unimplemented) ListCampaigns(ctx context.Context, request gen.ListCampaignsRequestObject) (gen.ListCampaignsResponseObject, error) {
-	return nil, errNotImplemented("ListCampaigns")
-}
-
-func (Unimplemented) CreateCampaign(ctx context.Context, request gen.CreateCampaignRequestObject) (gen.CreateCampaignResponseObject, error) {
-	return nil, errNotImplemented("CreateCampaign")
-}
-
-func (Unimplemented) EstimateCampaign(ctx context.Context, request gen.EstimateCampaignRequestObject) (gen.EstimateCampaignResponseObject, error) {
-	return nil, errNotImplemented("EstimateCampaign")
-}
-
-func (Unimplemented) GetCampaign(ctx context.Context, request gen.GetCampaignRequestObject) (gen.GetCampaignResponseObject, error) {
-	return nil, errNotImplemented("GetCampaign")
-}
-
-func (Unimplemented) ListCampaignMessages(ctx context.Context, request gen.ListCampaignMessagesRequestObject) (gen.ListCampaignMessagesResponseObject, error) {
-	return nil, errNotImplemented("ListCampaignMessages")
-}
-
 func (Unimplemented) ListContactLists(ctx context.Context, request gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {
 	return nil, errNotImplemented("ListContactLists")
 }
