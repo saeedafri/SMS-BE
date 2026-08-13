@@ -13,6 +13,7 @@ set -uo pipefail
 
 API=${API:-http://localhost:8080}
 UI=${UI:-http://localhost:3000}
+UI_DIR=${UI_DIR:-../SMS-UI}
 COOKIE=relay_session
 
 pass=0
@@ -275,6 +276,37 @@ done
 aud=$(curl -s --max-time 30 -H "Cookie: $COOKIE=$token" "$UI/audience")
 check "the list we created renders on /audience" \
   "$(grep -qF "E2E list ${stamp}" <<<"$aud" && echo true || echo false)"
+
+echo
+echo "== every page renders, or fails for a known reason =="
+# Status codes cannot answer this. Next.js renders its error boundary with
+# HTTP 200, so a page whose data failed to load is indistinguishable from a
+# working one by status alone. The boundary prints the underlying error, so
+# that string is the only honest signal — and it is matched with a pattern
+# that survives RSC splitting text across nodes.
+#
+# PENDING lists pages awaiting an endpoint from a later stage. They are
+# expected to be broken; the check is that the list is EXACTLY right, so a
+# page that breaks for a new reason fails the suite, and a page fixed by a
+# new stage must be promoted out of this list.
+PENDING="/analytics /automation /campaigns /developer/verify /settings/data /settings/security /support"
+
+pages=$(cd "$UI_DIR" && find "src/app/(dashboard)" -name page.tsx \
+  | sed 's|src/app/(dashboard)||; s|/page.tsx||' | grep -v '\[' | sort)
+
+for page in $pages; do
+  [[ -z $page ]] && page=/
+  html=$(curl -s --max-time 30 -H "Cookie: $COOKIE=$token" "$UI$page")
+  failure=$(grep -o 'GET /v1/[^ "\\]* failed: [0-9]*' <<<"$html" | head -1)
+  if [[ " $PENDING " == *" $page "* ]]; then
+    check "$page is pending a later stage ($failure)" \
+      "$([[ -n $failure ]] && echo true || echo false)"
+  else
+    check "$page renders with real data" \
+      "$([[ -z $failure ]] && echo true || echo false)"
+    [[ -n $failure ]] && echo "    $failure"
+  fi
+done
 
 echo
 echo "== authorisation is real =="
