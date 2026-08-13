@@ -116,6 +116,63 @@ func TestUnscopedConnectionSeesNothing(t *testing.T) {
 	}
 }
 
+// Isolation must hold for every tenant-scoped table, not just the one it was
+// first proven on. Each new table added in a later stage gets a row here — a
+// table missing from this list is a table nobody has proven isolates.
+func TestEveryTenantScopedTableIsolates(t *testing.T) {
+	ctx := context.Background()
+	tenantA, tenantB := uuid.New(), uuid.New()
+	admin := seedTenants(t, ctx, tenantA, tenantB)
+	pool := appPool(t, ctx)
+
+	userID := uuid.New()
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO users (id, email, name, password_hash)
+		 VALUES ($1, $2, 'B User', 'x')`, userID, "b-"+userID.String()+"@example.test"); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	// Every row below belongs to tenant B.
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO tenant_users (tenant_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		tenantB, userID); err != nil {
+		t.Fatalf("seed tenant_users: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		`INSERT INTO sessions (tenant_id, user_id, token_hash, expires_at)
+		 VALUES ($1, $2, $3, now() + interval '1 hour')`,
+		tenantB, userID, []byte("hash-for-isolation-test")); err != nil {
+		t.Fatalf("seed sessions: %v", err)
+	}
+
+	// Counting all visible rows would be wrong: tenant A legitimately sees its
+	// own. Each query below counts only rows owned by tenant B, so any non-zero
+	// result is a genuine cross-tenant leak.
+	tables := []struct{ name, query string }{
+		{"tenants", `SELECT count(*) FROM tenants WHERE id = $1`},
+		{"tenant_users", `SELECT count(*) FROM tenant_users WHERE tenant_id = $1`},
+		{"sessions", `SELECT count(*) FROM sessions WHERE tenant_id = $1`},
+	}
+	for _, table := range tables {
+		t.Run(table.name, func(t *testing.T) {
+			var found int
+			err := store.WithTenant(ctx, pool, tenantA, func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx, table.query, tenantB).Scan(&found)
+			})
+			if err != nil {
+				t.Fatalf("WithTenant: %v", err)
+			}
+			if found != 0 {
+				t.Fatalf("scoped to tenant A, %s exposed %d of tenant B's rows, want 0",
+					table.name, found)
+			}
+		})
+	}
+}
+
 // The scoping must not survive its transaction. SET LOCAL ties the setting to
 // the transaction, so the next user of this pooled connection starts clean —
 // otherwise tenant A's scope would leak onto tenant B's request.
