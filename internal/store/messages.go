@@ -249,3 +249,37 @@ func InsertRollups(ctx context.Context, conn driver.Conn, rows []RollupRow) erro
 	}
 	return nil
 }
+
+// FindStaleMessages returns messages that a carrier accepted but never reported
+// on, older than the validity window. It deliberately runs unscoped across every
+// tenant: the reconciler is a system process, not a request, and a tenant whose
+// carrier went silent is precisely the tenant who cannot ask for their money
+// back themselves.
+func FindStaleMessages(ctx context.Context, conn driver.Conn,
+	olderThan time.Time, limit int) ([]MessageRecord, error) {
+
+	rows, err := conn.Query(ctx, `
+		SELECT tenant_id, id, status, segments, cost_minor, currency, campaign_id,
+		       channel, country, sender_header, msisdn, created_at, version
+		FROM messages FINAL
+		WHERE status IN ('submitted', 'accepted') AND updated_at < ?
+		ORDER BY updated_at ASC
+		LIMIT ?`, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: find stale messages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []MessageRecord
+	for rows.Next() {
+		var record MessageRecord
+		if err := rows.Scan(&record.TenantID, &record.ID, &record.Status,
+			&record.Segments, &record.CostMinor, &record.Currency, &record.CampaignID,
+			&record.Channel, &record.Country, &record.SenderHeader, &record.Msisdn,
+			&record.CreatedAt, &record.Version); err != nil {
+			return nil, fmt.Errorf("store: scan stale message: %w", err)
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}

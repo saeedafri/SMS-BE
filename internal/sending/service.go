@@ -234,6 +234,21 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 func (s *Service) ApplyDeliveryReport(ctx context.Context, identity store.Identity,
 	report connector.DeliveryReport) error {
 
+	to := messaging.StateUndelivered
+	if report.Delivered {
+		to = messaging.StateDelivered
+	}
+	return s.settle(ctx, identity, report, to)
+}
+
+// settle applies a terminal outcome to a message. The target state is a
+// parameter because the reconciler lands messages in `expired` rather than
+// `undelivered` — "the carrier said it failed" and "the carrier never said
+// anything" are different facts, and a tenant debugging a route needs to tell
+// them apart. Both release the hold; only the label differs.
+func (s *Service) settle(ctx context.Context, identity store.Identity,
+	report connector.DeliveryReport, to messaging.State) error {
+
 	messageID, err := uuid.Parse(report.MessageID)
 	if err != nil {
 		return fmt.Errorf("sending: bad message id in report: %w", err)
@@ -248,10 +263,6 @@ func (s *Service) ApplyDeliveryReport(ctx context.Context, identity store.Identi
 	}
 
 	from := messaging.State(current.Status)
-	to := messaging.StateUndelivered
-	if report.Delivered {
-		to = messaging.StateDelivered
-	}
 
 	// Replayed receipts are common: carriers retry, and a terminal message must
 	// not move again. Refusing the transition here is what makes the ingest
