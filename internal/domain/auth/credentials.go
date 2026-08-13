@@ -107,3 +107,26 @@ func HashToken(raw string) []byte {
 	sum := sha256.Sum256([]byte(raw))
 	return sum[:]
 }
+
+// DummyHash is a valid argon2id hash of a random value. Login verifies against
+// it when the email is unknown, so an absent account costs the same work as a
+// present one with a wrong password — without it, response timing alone tells
+// an attacker which addresses are registered here.
+//
+// It is computed at startup rather than hard-coded because a hard-coded
+// constant that failed to decode would make VerifyPassword return early
+// without doing any argon2 work, silently removing the very timing defence
+// this exists to provide.
+var DummyHash = mustDummyHash()
+
+func mustDummyHash() string {
+	filler := make([]byte, 32)
+	if _, err := rand.Read(filler); err != nil {
+		panic("auth: cannot generate dummy hash: " + err.Error())
+	}
+	hash, err := HashPassword(base64.RawURLEncoding.EncodeToString(filler))
+	if err != nil {
+		panic("auth: cannot generate dummy hash: " + err.Error())
+	}
+	return hash
+}

@@ -42,8 +42,13 @@ func NewRouter(s *Server) http.Handler {
 	r.Get("/healthz", s.healthz)
 
 	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
+		// A request the generated binder rejects — bad JSON, a malformed
+		// parameter, a field failing its format — is reported as 422
+		// validation_failed rather than 400. The contract declares 400 on
+		// exactly one of its 151 operations but 422 on 57, so 422 is the code
+		// the frontend's error states are actually written against.
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
 		},
 		ResponseErrorHandlerFunc: writeOperationError,
 	})
