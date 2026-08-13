@@ -289,7 +289,7 @@ echo "== every page renders, or fails for a known reason =="
 # expected to be broken; the check is that the list is EXACTLY right, so a
 # page that breaks for a new reason fails the suite, and a page fixed by a
 # new stage must be promoted out of this list.
-PENDING="/automation /developer/verify /support"
+PENDING="/automation /developer/verify"
 
 pages=$(cd "$UI_DIR" && find "src/app/(dashboard)" -name page.tsx \
   | sed 's|src/app/(dashboard)||; s|/page.tsx||' | grep -v '\[' | sort)
