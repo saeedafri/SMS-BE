@@ -29,7 +29,12 @@ const listWithCounts = `
 	       coalesce(m.consented, '{}'::jsonb)
 	FROM contact_lists l
 	LEFT JOIN LATERAL (
-	    SELECT count(*) AS total,
+	    -- count(DISTINCT c.id), NOT count(*). The lateral jsonb_each_text below
+	    -- expands each contact into one row PER opted-in channel, so a contact
+	    -- consented to both SMS and RCS produces two rows. Counting rows
+	    -- reported 5 members for a 4-contact list, and the error scales with
+	    -- how many channels a contact has opted into.
+	    SELECT count(DISTINCT id) AS total,
 	           jsonb_object_agg(channel, tally) FILTER (WHERE channel IS NOT NULL) AS consented
 	    FROM (
 	        SELECT c.id,
