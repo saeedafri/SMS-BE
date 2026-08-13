@@ -240,3 +240,203 @@ func LedgerSum(ctx context.Context, pool *pgxpool.Pool, id Identity, currency st
 	}
 	return total, nil
 }
+
+// PaymentMethod is a stored card. Only the brand and last four digits are
+// kept — full card data never touches this system, which is the entire point
+// of delegating capture to a gateway.
+type PaymentMethod struct {
+	ID        uuid.UUID
+	Brand     string
+	Last4     string
+	IsDefault bool
+}
+
+func ListPaymentMethods(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]PaymentMethod, error) {
+	var out []PaymentMethod
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, brand, last4, is_default FROM payment_methods
+			 ORDER BY is_default DESC, created_at`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var method PaymentMethod
+			if err := rows.Scan(&method.ID, &method.Brand, &method.Last4,
+				&method.IsDefault); err != nil {
+				return err
+			}
+			out = append(out, method)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list payment methods: %w", err)
+	}
+	return out, nil
+}
+
+// AddPaymentMethod makes the first card the default automatically — a tenant
+// with cards but no default would break auto-recharge in a way nobody notices
+// until a wallet runs dry.
+func AddPaymentMethod(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	brand, last4 string) (PaymentMethod, error) {
+
+	var created PaymentMethod
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var existing int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM payment_methods`).Scan(&existing); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx,
+			`INSERT INTO payment_methods (tenant_id, brand, last4, is_default)
+			 VALUES ($1, $2, $3, $4)
+			 RETURNING id, brand, last4, is_default`,
+			id.TenantID, brand, last4, existing == 0,
+		).Scan(&created.ID, &created.Brand, &created.Last4, &created.IsDefault)
+	})
+	if err != nil {
+		return PaymentMethod{}, fmt.Errorf("store: add payment method: %w", err)
+	}
+	return created, nil
+}
+
+// SetDefaultPaymentMethod clears the previous default first: a partial unique
+// index enforces at most one, so setting a second without clearing would fail.
+func SetDefaultPaymentMethod(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	methodID uuid.UUID) (PaymentMethod, error) {
+
+	var updated PaymentMethod
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE payment_methods SET is_default = false WHERE is_default`); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx,
+			`UPDATE payment_methods SET is_default = true WHERE id = $1
+			 RETURNING id, brand, last4, is_default`, methodID,
+		).Scan(&updated.ID, &updated.Brand, &updated.Last4, &updated.IsDefault)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	if errors.Is(err, ErrNotFound) {
+		return PaymentMethod{}, ErrNotFound
+	}
+	if err != nil {
+		return PaymentMethod{}, fmt.Errorf("store: set default payment method: %w", err)
+	}
+	return updated, nil
+}
+
+// RemovePaymentMethod deletes a card and promotes another to default if the
+// one removed held that role, so "has cards but no default" never occurs.
+func RemovePaymentMethod(ctx context.Context, pool *pgxpool.Pool, id Identity, methodID uuid.UUID) error {
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var wasDefault bool
+		err := tx.QueryRow(ctx,
+			`DELETE FROM payment_methods WHERE id = $1 RETURNING is_default`,
+			methodID).Scan(&wasDefault)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !wasDefault {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE payment_methods SET is_default = true
+			WHERE id = (SELECT id FROM payment_methods ORDER BY created_at LIMIT 1)`)
+		return err
+	})
+	if errors.Is(err, ErrNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("store: remove payment method: %w", err)
+	}
+	return nil
+}
+
+func PaymentMethodExists(ctx context.Context, pool *pgxpool.Pool, id Identity, methodID uuid.UUID) (bool, error) {
+	var exists bool
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT exists(SELECT 1 FROM payment_methods WHERE id = $1)`, methodID).Scan(&exists)
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: payment method exists: %w", err)
+	}
+	return exists, nil
+}
+
+// AutoRecharge tops a wallet up automatically when it falls below a threshold.
+type AutoRecharge struct {
+	Currency          string
+	Enabled           bool
+	ThresholdMinor    int64
+	TopUpMinor        int64
+	PaymentMethodID   *uuid.UUID
+	LastFailureAt     *time.Time
+	LastFailureReason *string
+}
+
+func ListAutoRecharge(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]AutoRecharge, error) {
+	var out []AutoRecharge
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT currency, enabled, threshold_minor, topup_minor, payment_method_id,
+			       last_failure_at, last_failure_reason
+			FROM auto_recharge_configs ORDER BY currency`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var config AutoRecharge
+			if err := rows.Scan(&config.Currency, &config.Enabled, &config.ThresholdMinor,
+				&config.TopUpMinor, &config.PaymentMethodID,
+				&config.LastFailureAt, &config.LastFailureReason); err != nil {
+				return err
+			}
+			out = append(out, config)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: list auto-recharge: %w", err)
+	}
+	return out, nil
+}
+
+func UpsertAutoRecharge(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	config AutoRecharge) (AutoRecharge, error) {
+
+	var saved AutoRecharge
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO auto_recharge_configs
+			    (tenant_id, currency, enabled, threshold_minor, topup_minor, payment_method_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (tenant_id, currency) DO UPDATE SET
+			    enabled = excluded.enabled,
+			    threshold_minor = excluded.threshold_minor,
+			    topup_minor = excluded.topup_minor,
+			    payment_method_id = excluded.payment_method_id
+			RETURNING currency, enabled, threshold_minor, topup_minor, payment_method_id,
+			          last_failure_at, last_failure_reason`,
+			id.TenantID, config.Currency, config.Enabled, config.ThresholdMinor,
+			config.TopUpMinor, config.PaymentMethodID,
+		).Scan(&saved.Currency, &saved.Enabled, &saved.ThresholdMinor, &saved.TopUpMinor,
+			&saved.PaymentMethodID, &saved.LastFailureAt, &saved.LastFailureReason)
+	})
+	if err != nil {
+		return AutoRecharge{}, fmt.Errorf("store: upsert auto-recharge: %w", err)
+	}
+	return saved, nil
+}

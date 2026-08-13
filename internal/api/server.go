@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/saeedafri/sms-be/internal/domain/billing"
+
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
 
@@ -23,6 +25,11 @@ type Server struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
 	Logger *slog.Logger
+
+	// Gateway captures payments. Nil means the manual gateway, which records a
+	// capture without contacting anyone — correct for bank-transfer and
+	// invoice-paid customers, and the seam a real provider slots into.
+	Gateway billing.PaymentGateway
 }
 
 func NewRouter(s *Server) http.Handler {

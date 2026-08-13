@@ -6,22 +6,11 @@ import (
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
 
-// The dashboard layout fetches these three on every render and throws on any
-// non-2xx, so no screen renders until all three answer. They belong to later
-// stages — Wallet is Stage 3, Alerts Stage 8, Inbox Stage 11 — but a new tenant
-// genuinely has no wallet, no alert history and no conversations, so returning
-// that empty state now is the truth rather than a placeholder. Each is replaced
-// by its real implementation when its stage lands.
-
-func (s *Server) ListWalletBalances(ctx context.Context, _ gen.ListWalletBalancesRequestObject) (gen.ListWalletBalancesResponseObject, error) {
-	if _, ok := identityFrom(ctx); !ok {
-		return gen.ListWalletBalances401JSONResponse(
-			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
-	}
-	// A tenant with no wallet holds no balances. Not zero INR — no currencies
-	// at all, which is what drives the dashboard's "add funds" empty state.
-	return gen.ListWalletBalances200JSONResponse([]gen.WalletBalance{}), nil
-}
+// The dashboard layout fetches these on every render and throws on any non-2xx,
+// so no screen renders until they answer. Wallet moved to its real
+// implementation in Stage 3; Alerts (Stage 8) and Inbox (Stage 11) still return
+// the genuine empty state of a new tenant, which is the truth rather than a
+// placeholder.
 
 func (s *Server) GetAlerts(ctx context.Context, _ gen.GetAlertsRequestObject) (gen.GetAlertsResponseObject, error) {
 	if _, ok := identityFrom(ctx); !ok {
