@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
@@ -46,9 +48,22 @@ func run() error {
 	}
 	defer rdb.Close()
 
+	// ClickHouse is optional at startup: the control plane serves every domain
+	// except message logs without it, and refusing to boot would take the whole
+	// dashboard down over one screen.
+	var clickhouse driver.Conn
+	if cfg.ClickHouseURL != "" {
+		clickhouse, err = store.OpenClickHouse(ctx, cfg.ClickHouseURL)
+		if err != nil {
+			logger.Warn("clickhouse unavailable; message logs will error", "error", err)
+		} else {
+			defer clickhouse.Close()
+		}
+	}
+
 	server := &http.Server{
 		Addr:              cfg.ControlAPIAddr,
-		Handler:           api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger}),
+		Handler:           api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger, ClickHouse: clickhouse}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
