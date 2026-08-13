@@ -1,17 +1,21 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
@@ -23,11 +27,13 @@ import (
 // that RLS, the SECURITY DEFINER resolution functions, and the handlers agree
 // with each other, and a mocked store would prove none of that.
 type harness struct {
-	t       *testing.T
-	router  http.Handler
-	pool    *pgxpool.Pool
-	admin   *pgxpool.Pool
-	cleanup []func()
+	t      *testing.T
+	router http.Handler
+	pool   *pgxpool.Pool
+	admin  *pgxpool.Pool
+	// logs captures the server's structured output so tests can read tokens
+	// the API deliberately never returns in a response.
+	logs *bytes.Buffer
 }
 
 func newHarness(t *testing.T) *harness {
@@ -51,8 +57,12 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(admin.Close)
 
-	h := &harness{t: t, pool: pool, admin: admin}
-	h.router = api.NewRouter(&api.Server{DB: pool})
+	logs := &bytes.Buffer{}
+	h := &harness{t: t, pool: pool, admin: admin, logs: logs}
+	h.router = api.NewRouter(&api.Server{
+		DB:     pool,
+		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
 	return h
 }
 
@@ -206,4 +216,72 @@ func (r *bytesReader) Read(p []byte) (int, error) {
 	n := copy(p, r.data[r.pos:])
 	r.pos += n
 	return n, nil
+}
+
+// setEmailVerified flips the flag directly, so a test can start from an
+// unverified account without going through signup.
+func (h *harness) setEmailVerified(userID uuid.UUID, verified bool) {
+	h.t.Helper()
+	if _, err := h.admin.Exec(context.Background(),
+		`UPDATE users SET email_verified = $1 WHERE id = $2`, verified, userID); err != nil {
+		h.t.Fatalf("set email_verified: %v", err)
+	}
+}
+
+// lastIssuedToken pulls a token out of the server's own log. Email delivery is
+// not wired up yet, and the token is deliberately never returned in a response
+// — so reading the log is how a test completes the flow, and it exercises the
+// real code path rather than a test-only escape hatch.
+func (h *harness) lastIssuedToken(t *testing.T, kind string) string {
+	t.Helper()
+
+	var found string
+	for _, line := range strings.Split(h.logs.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry struct {
+			Msg   string `json:"msg"`
+			Kind  string `json:"kind"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry.Msg == "account token issued" && entry.Kind == kind {
+			found = entry.Token
+		}
+	}
+	if found == "" {
+		t.Fatalf("no %s token found in the server log:\n%s", kind, h.logs.String())
+	}
+	return found
+}
+
+// enableMfa takes an account all the way through enrolment and returns the
+// secret, for tests that need MFA already on.
+func (h *harness) enableMfa(t *testing.T, acct account) string {
+	t.Helper()
+
+	res := h.do(http.MethodPost, "/v1/auth/mfa/enroll", acct.Token, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("enroll: status = %d; body = %s", res.Code, res.Body)
+	}
+	var enrollment struct {
+		Secret string `json:"secret"`
+	}
+	res.decode(t, &enrollment)
+
+	code, err := totp.GenerateCodeCustom(enrollment.Secret, time.Now().UTC(), totp.ValidateOpts{
+		Period: 30, Skew: 1, Digits: 6,
+	})
+	if err != nil {
+		t.Fatalf("generate totp: %v", err)
+	}
+	confirm := h.do(http.MethodPost, "/v1/auth/mfa/enroll/confirm", acct.Token,
+		map[string]string{"code": code})
+	if confirm.Code != http.StatusOK {
+		t.Fatalf("confirm enrolment: status = %d; body = %s", confirm.Code, confirm.Body)
+	}
+	return enrollment.Secret
 }
