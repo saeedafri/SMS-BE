@@ -16,6 +16,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -59,6 +60,34 @@ func run() error {
 		} else {
 			defer clickhouse.Close()
 		}
+	}
+
+	// The reconciler releases money held against messages a carrier accepted
+	// and then never reported on. Without it a lost delivery report means a
+	// tenant is charged forever for a message nobody can prove arrived.
+	//
+	// ponytail: runs in-process on a ticker, which is correct for one replica.
+	// A second replica would double-sweep — harmless, since expiry is
+	// idempotent, but move this to the River queue before scaling out.
+	if clickhouse != nil {
+		reconciler := &sending.Service{DB: pool, ClickHouse: clickhouse}
+		go func() {
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
+					if err != nil {
+						logger.Error("reconcile", "expired", expired, "error", err)
+					} else if expired > 0 {
+						logger.Info("reconciled stale messages", "expired", expired)
+					}
+				}
+			}
+		}()
 	}
 
 	server := &http.Server{

@@ -31,6 +31,21 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{host + ":9000"},
 		Auth: clickhouse.Auth{Database: database},
+		Settings: clickhouse.Settings{
+			// ClickHouse 26.x defaults async_insert to 1, which buffers an
+			// insert server-side for up to async_insert_busy_timeout_ms before
+			// it becomes readable. That breaks read-after-write, and on this
+			// codepath read-after-write is a money problem: a delivery report
+			// arriving within that window finds no message, is dropped as
+			// untrusted, and the hold against an undelivered message is never
+			// released. The tenant is then charged forever for a message that
+			// never arrived — the exact billing behaviour this product exists
+			// to replace.
+			//
+			// We already batch inserts explicitly in the send path, so async
+			// insert buys us nothing and costs correctness.
+			"async_insert": 0,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: open clickhouse: %w", err)

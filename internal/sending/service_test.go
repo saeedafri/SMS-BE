@@ -62,6 +62,11 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+		// ClickHouse rows must go too. The reconciler sweeps every tenant, so a
+		// test tenant left behind in ClickHouse but deleted from Postgres is an
+		// orphan that fails to settle forever and pollutes every later run.
+		_ = ch.Exec(context.Background(),
+			"ALTER TABLE messages DELETE WHERE tenant_id = ?", tenantID)
 	})
 
 	identity := store.Identity{TenantID: tenantID}
