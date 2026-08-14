@@ -63,6 +63,10 @@ func identityFrom(ctx context.Context) (store.Identity, bool) {
 var (
 	errUnauthenticated = errors.New("unauthenticated")
 	errForbidden       = errors.New("forbidden")
+	// errInvalidFilter covers a bad enum on an operation whose contract
+	// declares only a 200. Returning 200 with unfiltered results instead would
+	// answer a different question than the one asked.
+	errInvalidFilter = errors.New("invalid filter value")
 )
 
 // canManageSettings reports whether a role may change account, billing,

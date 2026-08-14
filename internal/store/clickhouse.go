@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -46,6 +48,18 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 			// insert buys us nothing and costs correctness.
 			"async_insert": 0,
 		},
+		// Connections are recycled rather than held forever. Without a
+		// lifetime the pool keeps handles to a server that has since restarted
+		// — after a ClickHouse deploy or OOM the API kept 500ing on message
+		// logs and analytics until someone restarted it BY HAND, because every
+		// pooled connection was dead and none were ever replaced.
+		//
+		// A short lifetime means a restarted ClickHouse is picked up on its own
+		// within a minute, with no operator involved.
+		ConnMaxLifetime: 30 * time.Second,
+		MaxOpenConns:    16,
+		MaxIdleConns:    4,
+		DialTimeout:     5 * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: open clickhouse: %w", err)
@@ -56,3 +70,7 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 	}
 	return conn, nil
 }
+
+// errClickHouseNotConfigured distinguishes "no URL supplied" from "the server
+// is down". Conflating them hides an incident behind a deployment choice.
+var errClickHouseNotConfigured = errors.New("store: clickhouse is not configured")

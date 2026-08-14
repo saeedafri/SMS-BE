@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -16,20 +17,37 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	if s.ClickHouse == nil {
-		// Message logs need ClickHouse. Saying so plainly beats returning an
-		// empty page that reads as "you have never sent anything".
-		return nil, errClickHouseUnavailable
+	// Message logs need ClickHouse. Saying so plainly beats returning an empty
+	// page that reads as "you have never sent anything".
+	if _, err := s.clickhouse(ctx); err != nil {
+		return nil, err
 	}
 
+	// Enum query parameters are validated explicitly. The generated binder
+	// checks TYPES but not enum membership on query params, so an unknown
+	// value like ?status=nonsense used to fall through and return the
+	// UNFILTERED list with a 200 — a typo in a filter silently answering a
+	// different question than the one asked.
 	filter := store.MessageFilter{Limit: 50}
 	if request.Params.Status != nil {
+		if !request.Params.Status.Valid() {
+			return nil, fmt.Errorf("%w: %q is not a valid message status",
+				errInvalidFilter, string(*request.Params.Status))
+		}
 		filter.Status = contractStatusToState(string(*request.Params.Status))
 	}
 	if request.Params.Channel != nil {
+		if !request.Params.Channel.Valid() {
+			return nil, fmt.Errorf("%w: %q is not a valid channel",
+				errInvalidFilter, string(*request.Params.Channel))
+		}
 		filter.Channel = string(*request.Params.Channel)
 	}
 	if request.Params.ErrorClass != nil {
+		if !request.Params.ErrorClass.Valid() {
+			return nil, fmt.Errorf("%w: %q is not a valid error class",
+				errInvalidFilter, string(*request.Params.ErrorClass))
+		}
 		filter.ErrorClass = string(*request.Params.ErrorClass)
 	}
 	if request.Params.CampaignId != nil {
@@ -54,9 +72,13 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 	filter store.MessageFilter) (gen.MessageLogPage, error) {
 
-	records, total, next, err := store.QueryMessages(ctx, s.ClickHouse, identity.TenantID, filter)
+	clickhouse, err := s.clickhouse(ctx)
 	if err != nil {
 		return gen.MessageLogPage{}, err
+	}
+	records, total, next, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
+	if err != nil {
+		return gen.MessageLogPage{}, s.clickhouseFailed(err)
 	}
 
 	entries := make([]gen.MessageLogEntry, 0, len(records))

@@ -40,10 +40,10 @@ type Metrics struct {
 }
 
 type routeStat struct {
-	Count     int64
-	TotalMs   float64
-	MaxMs     float64
-	Errors    int64
+	Count      int64
+	TotalMs    float64
+	MaxMs      float64
+	Errors     int64
 	LastCalled time.Time
 }
 
@@ -189,18 +189,18 @@ func (m *Metrics) Snapshot() map[string]any {
 	return map[string]any{
 		"uptimeSeconds": int(time.Since(m.StartedAt).Seconds()),
 		"requests": map[string]any{
-			"total": requests,
-			"4xx":   m.errors4xx.Load(),
-			"5xx":   errors5xx,
-			"slow":  m.slow.Load(),
+			"total":     requests,
+			"4xx":       m.errors4xx.Load(),
+			"5xx":       errors5xx,
+			"slow":      m.slow.Load(),
 			"errorRate": errorRate,
 		},
 		"runtime": map[string]any{
-			"goroutines":   runtime.NumGoroutine(),
-			"heapMB":       float64(mem.HeapAlloc) / 1024 / 1024,
-			"sysMB":        float64(mem.Sys) / 1024 / 1024,
-			"gcRuns":       mem.NumGC,
-			"cpuCount":     runtime.NumCPU(),
+			"goroutines": runtime.NumGoroutine(),
+			"heapMB":     float64(mem.HeapAlloc) / 1024 / 1024,
+			"sysMB":      float64(mem.Sys) / 1024 / 1024,
+			"gcRuns":     mem.NumGC,
+			"cpuCount":   runtime.NumCPU(),
 		},
 		"routes":    routes,
 		"incidents": incidents,

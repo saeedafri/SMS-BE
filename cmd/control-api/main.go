@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/api"
@@ -64,39 +63,37 @@ func run() error {
 		defer rdb.Close()
 	}
 
-	// ClickHouse is optional at startup: the control plane serves every domain
-	// except message logs without it, and refusing to boot would take the whole
-	// dashboard down over one screen.
-	var clickhouse driver.Conn
-	if cfg.ClickHouseURL != "" {
-		clickhouse, err = store.OpenClickHouse(ctx, cfg.ClickHouseURL)
-		if err != nil {
-			logger.Warn("clickhouse unavailable; message logs will error", "error", err)
-		} else {
-			defer clickhouse.Close()
-		}
-	}
+	// ClickHouse is a SELF-HEALING handle, not a connection made once here.
+	// Dialling at startup meant a ClickHouse that was slow to become ready on a
+	// server reboot left the API permanently without message logs, and a
+	// ClickHouse restarted later left dead connections nobody replaced. Both
+	// needed a human to fix a dependency whose absence is supposed to be a
+	// degraded screen.
+	clickhouse := store.NewClickHousePool(cfg.ClickHouseURL, logger)
+	defer clickhouse.Close()
 
-	// The reconciler releases money held against messages a carrier accepted
-	// and then never reported on. Without it a lost delivery report means a
-	// tenant is charged forever for a message nobody can prove arrived.
-	//
-	// ponytail: runs in-process on a ticker, which is correct for one replica.
-	// A second replica would double-sweep — harmless, since expiry is
-	// idempotent, but move this to the River queue before scaling out.
 	sandbox := connector.NewSandbox(0)
 	metrics := api.NewMetrics()
 
-	if clickhouse != nil {
+	if clickhouse.Configured() {
 		// Applies the sandbox carrier's delivery reports. A real carrier POSTs
 		// these to an ingest endpoint; the sandbox queues them in-process, so
 		// without this a message sits at "sent" forever and the delivered vs
 		// undelivered distinction — the whole product — stays invisible.
-		drainer := &sending.Service{DB: pool, ClickHouse: clickhouse, Connector: sandbox}
 		go resilience.Supervise(ctx, "delivery-drainer", 2*time.Second, logger,
 			func(name string) { metrics.RecordIncident("worker_panic", name) },
 			func(ctx context.Context) error {
+				// Resolved per tick, so a ClickHouse restart is picked up by
+				// the next tick rather than killing the worker for good.
+				conn, err := clickhouse.Conn(ctx)
+				if err != nil {
+					return nil // nothing to drain while it is unreachable
+				}
+				drainer := &sending.Service{DB: pool, ClickHouse: conn, Connector: sandbox}
 				applied, err := drainer.DrainSandboxReports(ctx)
+				if err != nil {
+					clickhouse.Drop()
+				}
 				if err == nil && applied > 0 {
 					logger.Info("applied delivery reports", "count", applied)
 				}
@@ -106,11 +103,18 @@ func run() error {
 		// Releases money held against messages a carrier accepted and never
 		// reported on. Without it a lost report means a tenant is charged
 		// forever for a message nobody can prove arrived.
-		reconciler := &sending.Service{DB: pool, ClickHouse: clickhouse}
 		go resilience.Supervise(ctx, "reconciler", 15*time.Minute, logger,
 			func(name string) { metrics.RecordIncident("worker_panic", name) },
 			func(ctx context.Context) error {
+				conn, err := clickhouse.Conn(ctx)
+				if err != nil {
+					return nil
+				}
+				reconciler := &sending.Service{DB: pool, ClickHouse: conn}
 				expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
+				if err != nil {
+					clickhouse.Drop()
+				}
 				if expired > 0 {
 					logger.Info("reconciled stale messages", "expired", expired)
 				}
