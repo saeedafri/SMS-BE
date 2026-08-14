@@ -1,0 +1,46 @@
+[Unit]
+Description=Relay control-api
+# Wants= not Requires=: if a database is briefly down the API should start and
+# retry, not refuse to boot. The binary retries Postgres with backoff and
+# degrades gracefully without ClickHouse or Redis.
+After=network-online.target postgresql.service redis-server.service clickhouse-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=relay
+Group=relay
+WorkingDirectory=/opt/relay
+EnvironmentFile=/opt/relay/.env
+ExecStart=/opt/relay/control-api
+
+# Always restart, with a floor so a crash-loop backs off instead of hammering
+# the databases it is probably failing to reach.
+Restart=always
+RestartSec=5s
+
+# Graceful shutdown: the binary drains in-flight requests on SIGTERM. 30s is
+# comfortably above the 10s HTTP read timeout.
+KillSignal=SIGTERM
+TimeoutStopSec=30s
+
+# Hardening. The API needs a network socket and nothing else on this machine.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/relay
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Logs go to the journal, which already rotates. The binary writes structured
+# JSON, so `journalctl -u relay-api -o cat | jq` is the query interface.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=relay-api
+
+[Install]
+WantedBy=multi-user.target
