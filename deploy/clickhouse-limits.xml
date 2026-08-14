@@ -1,0 +1,42 @@
+<clickhouse>
+    <!-- ClickHouse assumes it owns the machine. On a shared VPS it does not.
+         Without these it will happily allocate until the kernel OOM-kills
+         something — and the kernel picks the biggest process, which may well be
+         your production app rather than the one that misbehaved. -->
+
+    <!-- Hard ceiling for the whole server. Kept just under the container's 1 GB
+         limit so ClickHouse refuses a query itself rather than being killed:
+         a failed query returns an error, an OOM kill loses the process. -->
+    <max_server_memory_usage>900000000</max_server_memory_usage>
+
+    <!-- Ignore the host's total RAM. Inside a limited container the ratio-based
+         default reads the HOST's memory and computes a ceiling far above what
+         the container may actually use. -->
+    <max_server_memory_usage_to_ram_ratio>0</max_server_memory_usage_to_ram_ratio>
+
+    <profiles>
+        <default>
+            <!-- One runaway analytics query cannot take the server with it. -->
+            <max_memory_usage>500000000</max_memory_usage>
+            <max_execution_time>30</max_execution_time>
+            <!-- Spill to disk rather than failing on a large GROUP BY. -->
+            <max_bytes_before_external_group_by>250000000</max_bytes_before_external_group_by>
+            <!-- We batch explicitly; async insert breaks read-after-write and
+                 silently drops delivery reports. -->
+            <async_insert>0</async_insert>
+        </default>
+    </profiles>
+
+    <!-- Background merges compete with queries for RAM and CPU. Two threads is
+         plenty at this volume and leaves the box responsive. -->
+    <background_pool_size>2</background_pool_size>
+    <mark_cache_size>268435456</mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+
+    <!-- Rotate: unrotated ClickHouse logs are a classic way a VPS fills up. -->
+    <logger>
+        <level>information</level>
+        <size>100M</size>
+        <count>3</count>
+    </logger>
+</clickhouse>
