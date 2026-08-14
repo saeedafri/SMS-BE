@@ -29,8 +29,9 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	if s.ClickHouse == nil {
-		return nil, errClickHouseUnavailable
+	clickhouse, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	filter := store.AnalyticsFilter{Since: rangeSince("30d")}
@@ -45,9 +46,9 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 	}
 
 	summary, buckets, deliverability, err := store.QueryAnalytics(
-		ctx, s.ClickHouse, identity.TenantID, filter)
+		ctx, clickhouse, identity.TenantID, filter)
 	if err != nil {
-		return nil, err
+		return nil, s.clickhouseFailed(err)
 	}
 
 	// A delivery rate with no traffic behind it is 0, not NaN or 1. Dividing by

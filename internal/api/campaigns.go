@@ -61,8 +61,11 @@ func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
 		out.Fallback = &fallback
 	}
 
-	if s.ClickHouse != nil {
-		if counts, err := store.CountCampaignMessages(ctx, s.ClickHouse,
+	// Counts are best-effort: if ClickHouse is unreachable the campaign row
+	// still renders, just without its delivery breakdown. A 500 here would
+	// hide the campaign entirely over a missing number.
+	if clickhouse, err := s.clickhouse(ctx); err == nil {
+		if counts, err := store.CountCampaignMessages(ctx, clickhouse,
 			identity.TenantID, campaign.ID); err == nil {
 			out.Counts = gen.CampaignCounts{
 				Queued: counts.Queued, Sent: counts.Sent,
@@ -172,7 +175,7 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 
 	// Freeze the estimate at creation: the user approved this number, and a
 	// rate change afterwards must not rewrite what they agreed to.
-	service := s.sendingService()
+	service := s.sendingService(ctx)
 	if service != nil {
 		template, err := store.GetTemplate(ctx, s.DB, identity, templateID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -220,7 +223,7 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	service := s.sendingService()
+	service := s.sendingService(ctx)
 	if service == nil {
 		return nil, errClickHouseUnavailable
 	}
@@ -266,8 +269,9 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	if s.ClickHouse == nil {
-		return nil, errClickHouseUnavailable
+	clickhouse, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	campaignID := request.Id
@@ -282,7 +286,7 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 		filter.Status = contractStatusToState(string(*request.Params.Status))
 	}
 
-	records, total, next, err := store.QueryMessages(ctx, s.ClickHouse, identity.TenantID, filter)
+	records, total, next, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -325,9 +329,10 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 
 // sendingService builds the data-plane service. Campaigns need ClickHouse for
 // message rows, so a missing one means no send path rather than a partial one.
-func (s *Server) sendingService() *sending.Service {
-	if s.ClickHouse == nil || s.Connector == nil {
+func (s *Server) sendingService(ctx context.Context) *sending.Service {
+	clickhouse, err := s.clickhouse(ctx)
+	if err != nil || s.Connector == nil {
 		return nil
 	}
-	return &sending.Service{DB: s.DB, ClickHouse: s.ClickHouse, Connector: s.Connector}
+	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector}
 }

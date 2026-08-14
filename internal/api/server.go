@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
@@ -38,13 +40,36 @@ type Server struct {
 	// invoice-paid customers, and the seam a real provider slots into.
 	Gateway billing.PaymentGateway
 
-	// ClickHouse holds message logs. Nil means the logs explorer fails loudly
-	// rather than reporting an empty history.
-	ClickHouse driver.Conn
+	// ClickHouse holds message logs. It is a self-healing pool rather than a
+	// fixed connection: a dependency whose absence is meant to be a degraded
+	// screen must not become a permanent outage because it was down at boot or
+	// restarted later.
+	ClickHouse *store.ClickHousePool
 
 	// Metrics is the live picture of this process. Nil disables collection
 	// entirely, which keeps tests from accumulating state between cases.
 	Metrics *Metrics
+}
+
+// clickhouse dials on demand, so a restarted ClickHouse is picked up without
+// restarting this process.
+func (s *Server) clickhouse(ctx context.Context) (driver.Conn, error) {
+	conn, err := s.ClickHouse.Conn(ctx)
+	if err != nil {
+		return nil, errClickHouseUnavailable
+	}
+	return conn, nil
+}
+
+// clickhouseFailed is called when a query errors. The driver pools connections
+// internally, so a handle that already believes it is connected will keep
+// handing out dead ones after the server restarts — dropping it here is what
+// makes the NEXT request redial instead of failing forever.
+func (s *Server) clickhouseFailed(err error) error {
+	if err != nil {
+		s.ClickHouse.Drop()
+	}
+	return err
 }
 
 func NewRouter(s *Server) http.Handler {
@@ -122,14 +147,14 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	// health check would make a load balancer pull a node that can still serve
 	// authentication, campaigns, billing and compliance — a worse outage than
 	// the one being reported.
-	if s.ClickHouse != nil {
-		if err := s.ClickHouse.Ping(r.Context()); err != nil {
-			checks["clickhouse"] = "down"
-		} else {
-			checks["clickhouse"] = "up"
-		}
-	} else {
+	// Healthy() repairs the handle as a side effect, so the health endpoint is
+	// also what NOTICES recovery — no operator action, no restart.
+	if !s.ClickHouse.Configured() {
 		checks["clickhouse"] = "not_configured"
+	} else if s.ClickHouse.Healthy(r.Context()) {
+		checks["clickhouse"] = "up"
+	} else {
+		checks["clickhouse"] = "down"
 	}
 	if s.Connector != nil {
 		if health := s.Connector.Health(r.Context()); health.Healthy {
@@ -167,6 +192,9 @@ func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 	case errors.Is(err, errForbidden):
 		writeError(w, http.StatusForbidden, codeForbidden,
 			"Your role does not have access to this.")
+		return
+	case errors.Is(err, errInvalidFilter):
+		writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
 		return
 	}
 	// Deliberately not err.Error() in the body: internal failure detail belongs
