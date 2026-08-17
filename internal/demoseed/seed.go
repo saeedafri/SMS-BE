@@ -693,7 +693,14 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		INSERT INTO conversation_messages (tenant_id, conversation_id, direction, body)
 		VALUES ($1, $2, 'inbound',  'Is the festive offer still on?'),
 		       ($1, $2, 'outbound', 'Yes — it runs until Sunday.'),
-		       ($1, $3, 'inbound',  'One more question!'),
+		       -- NOT "One more question!". e2e/inbox.spec.ts posts exactly that
+		       -- string as its probe for reopen-on-reply and then asserts the
+		       -- text is on screen; seeding the identical body gave it two
+		       -- matches and a strict-mode violation. The spec is right — a
+		       -- fixture must not occupy the string a test needs to be unique.
+		       -- The MSW mock always used distinct wording here, which is why
+		       -- this only ever surfaced against a real backend.
+		       ($1, $3, 'inbound',  'One more question — do you ship internationally?'),
 		       ($1, $4, 'inbound',  'Where is my order?'),
 		       ($1, $4, 'outbound', 'It is out for delivery today.')`,
 		tenantID, conversationOne, conversationTwo, conversationThree); err != nil {
@@ -1100,7 +1107,28 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		-- TemplateCategory and PROMOTIONAL is not one of its four members; the
 		-- frontend threw on it and blanked the whole rate card, taking the valid
 		-- rows down with it. db/migrations/00026 now makes that unstorable.
-		VALUES ('IN','EMAIL','TRANSACTIONAL',  8,'INR'),
+		-- The CHANNEL-LEVEL rows are restored here too, not just the category
+		-- ones, and they have to be.
+		--
+		-- pricing_rates is global — it has no tenant_id — so the tenant delete
+		-- that rebuilds everything else does not touch it. These rows came from
+		-- migration 00009 and were never re-seeded, so the first spec that
+		-- edited a rate in the operator console changed the rate card FOREVER:
+		-- reset restored nothing, and every later run of every spec saw the
+		-- edited number as its "default". IN/SMS drifted from 12 to 99 that way
+		-- and stayed there, which then broke an assertion three specs later
+		-- with no visible connection to the spec that had moved it.
+		--
+		-- Values kept identical to 00009 so the reset restores the real
+		-- baseline rather than inventing a second one.
+		VALUES ('IN','SMS','',      12,'INR'),
+		       ('IN','RCS','',      35,'INR'),
+		       ('IN','WHATSAPP','', 80,'INR'),
+		       ('US','SMS','',      75,'USD'),
+		       ('US','RCS','',     200,'USD'),
+		       ('GB','SMS','',      35,'GBP'),
+		       ('AE','SMS','',      12,'AED'),
+		       ('IN','EMAIL','TRANSACTIONAL',  8,'INR'),
 		       ('IN','EMAIL','MARKETING',     12,'INR'),
 		       ('IN','VOICE','TRANSACTIONAL', 45,'INR'),
 		       ('IN','VOICE','MARKETING',     60,'INR'),

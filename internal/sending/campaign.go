@@ -36,7 +36,7 @@ var ErrNoRate = errors.New("sending: no rate for corridor")
 func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	listID *uuid.UUID, country, channel, body, category string) (CampaignEstimate, error) {
 
-	rate, err := store.FindPricingRate(ctx, s.DB, country, channel, category)
+	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, country, channel, category)
 	if err != nil {
 		// Wrapped so the caller can tell "we have no price for this corridor"
 		// — a real, explainable answer — from a database failure. It used to
@@ -102,7 +102,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if template.Body != nil {
 		body = *template.Body
 	}
-	rate, err := store.FindPricingRate(ctx, s.DB, sender.Country, sender.Channel, "")
+	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, sender.Country, sender.Channel, "")
 	if err != nil {
 		return 0, 0, fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
 	}

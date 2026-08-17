@@ -42,7 +42,8 @@ func (s *Server) ListPricing(ctx context.Context, _ gen.ListPricingRequestObject
 // charge will — an estimate that disagrees with the invoice is the "opaque
 // billing" complaint the product exists to fix.
 func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostRequestObject) (gen.EstimateCostResponseObject, error) {
-	if _, ok := identityFrom(ctx); !ok {
+	identity, ok := identityFrom(ctx)
+	if !ok {
 		return gen.EstimateCost401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
@@ -60,7 +61,7 @@ func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostReque
 		}
 	}
 
-	rate, err := store.FindPricingRate(ctx, s.DB,
+	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID,
 		string(request.Body.Country), string(request.Body.Channel), category)
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.EstimateCost422JSONResponse(errorBody(codeValidation,
@@ -86,7 +87,7 @@ func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostReque
 				fallbackCategory = string(decoded)
 			}
 		}
-		fallbackRate, err := store.FindPricingRate(ctx, s.DB,
+		fallbackRate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID,
 			string(request.Body.Country), string(request.Body.Fallback.Channel), fallbackCategory)
 		if errors.Is(err, store.ErrNotFound) {
 			return gen.EstimateCost422JSONResponse(errorBody(codeValidation,

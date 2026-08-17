@@ -477,13 +477,48 @@ func CreateRegistration(ctx context.Context, pool *pgxpool.Pool, id Identity, re
 	var created Registration
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		var err error
+		// A REJECTED registration is resubmittable; anything else is a conflict.
+		//
+		// This was a plain INSERT, so the UNIQUE (tenant_id, country,
+		// object_key) turned every resubmission into a 409 — including the
+		// legitimate one. The console showed the rejection reason, showed the
+		// remediation telling the customer exactly what to correct, offered a
+		// "Resubmit registration" button, and then refused with "already
+		// registered for India (DLT)". A rejection was a dead end: the only way
+		// out was for an operator to edit the database.
+		//
+		// The regulator holds one record per tenant per object, so correcting
+		// it is an UPDATE of that record — not a second application. The
+		// rejection reason is cleared with it, otherwise the screen keeps
+		// showing why the PREVIOUS attempt failed next to a submission that has
+		// not been judged yet.
+		//
+		// WHERE status = 'rejected' is what keeps this from being a way to
+		// silently overwrite an approved registration, or to reset one that is
+		// mid-review: those still raise the unique violation below.
 		created, err = scanRegistration(tx.QueryRow(ctx, `
 			INSERT INTO registrations (tenant_id, country, object_key, fields)
 			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (tenant_id, country, object_key) DO UPDATE
+			   SET fields           = EXCLUDED.fields,
+			       status           = 'pending_review',
+			       rejection_reason = NULL,
+			       updated_at       = now()
+			   WHERE registrations.status = 'rejected'
 			RETURNING `+registrationColumns,
 			id.TenantID, registration.Country, registration.ObjectKey, encoded))
+		// A DO UPDATE whose WHERE excludes the row returns NO rows rather than
+		// raising — so without this, resubmitting over a pending or approved
+		// registration would surface as a scan error instead of the conflict it
+		// actually is.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
 		return err
 	})
+	if errors.Is(err, ErrConflict) {
+		return Registration{}, ErrConflict
+	}
 	if isUniqueViolation(err) {
 		return Registration{}, ErrConflict
 	}

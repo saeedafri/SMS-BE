@@ -15,6 +15,44 @@ real server at all.
 
 ---
 
+## Changes from running against the real backend
+
+Everything above was found against MSW. Running the same suite against a live
+API surfaced five more, and they split cleanly into one product bug and four
+tests that were only ever passing by luck.
+
+### `admin/rates/add-override-form.tsx` + `lib/operator/actions.ts` — product bug
+
+Adding a tenant rate override saved, returned 201, and the table went on showing
+the default rate.
+
+`createOverride` ended with `redirect("/admin/rates?tenantId=…")` — which is the
+URL the operator is **already on**, because the page's own tenant picker put
+them there. That is the same App Router behaviour as the filter links: the
+payload is fetched and discarded. The action now returns `{status:"done"}` and
+the form reloads with `location.assign`, matching `environment-toggle.tsx`.
+
+`assign()`, not `reload()` — `reload()` re-submits the POST and would file the
+override twice.
+
+### Four specs that could not survive real latency
+
+None of these are product bugs. They are assumptions that only hold when the API
+answers in the same process.
+
+| Spec | What it assumed | Why it only failed for real |
+|---|---|---|
+| `billing.spec.ts` | Clicking **Save** finishes before the next line runs | It is a server action; the dev hook won the race and charged the wallet while auto-recharge was still unconfigured. Now waits for the response. |
+| `operator-audit.spec.ts` | `locator.count()` waits | It is one of the few Playwright calls that does **not**. It counted the loading skeleton's zero rows. Now waits for a row first. |
+| `operator-support.spec.ts` | A customer session already exists | Nothing in that file signs the customer in — it relied on whatever spec ran before. Alone, it hung on a sign-in page waiting for a "Subject" field. Now signs in explicitly. |
+| `operator-support.spec.ts` | 30s is enough | Two sign-ins, ~12 navigations and a reload — roughly 3× any other test. Raised to 120s rather than split, because the point is that the whole loop holds together. |
+
+The `inbox.spec.ts` duplicate-message failure was **ours, not yours**: the
+backend seed used the exact string the spec posts as its probe, so the locator
+matched two elements. Fixed in the seed; the spec was right.
+
+---
+
 ## Pointing the app at the live backend
 
 The backend is deployed. Only `.env.local` changes — and it is gitignored, so

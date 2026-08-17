@@ -396,7 +396,23 @@ func (s *Server) GetRateCard(ctx context.Context, _ gen.GetRateCardRequestObject
 	if err != nil {
 		return nil, err
 	}
-	overrides, err := store.ListRateOverrides(ctx, s.DB)
+	// The OPERATOR pool, not s.DB.
+	//
+	// rate_overrides itself has no row-level security, so this looked safe — but
+	// the query JOINs tenants to get the customer's name, and tenants is
+	// ENABLE + FORCE ROW LEVEL SECURITY. On the tenant pool, with no
+	// app.tenant_id set, tenants matches nothing and the join silently returns
+	// zero rows.
+	//
+	// The effect was that every tenant rate override was invisible: creating one
+	// answered 201 and stored the row, the rate card then reported
+	// "overrides": [], and the console showed the customer still on the default
+	// price. An operator could set a negotiated rate, see no error, and have it
+	// never appear — while the estimator quietly billed the default.
+	//
+	// ListPricingRates above is fine on s.DB precisely because pricing_rates has
+	// no RLS AND no join to a table that does.
+	overrides, err := store.ListRateOverrides(ctx, s.operatorPool())
 	if err != nil {
 		return nil, err
 	}
@@ -715,7 +731,10 @@ func toTenantRateOverride(override store.RateOverride) gen.TenantRateOverride {
 // the tenant NAME, which the overrides table does not carry — it comes from the
 // join, so the row has to be read back rather than assembled in memory.
 func (s *Server) findOverride(ctx context.Context, id uuid.UUID) (store.RateOverride, error) {
-	overrides, err := store.ListRateOverrides(ctx, s.DB)
+	// Operator pool, for the same reason GetRateCard uses it: the join to
+	// tenants is invisible to the tenant pool, so this returned ErrNotFound for
+	// an override that had just been written successfully.
+	overrides, err := store.ListRateOverrides(ctx, s.operatorPool())
 	if err != nil {
 		return store.RateOverride{}, err
 	}
