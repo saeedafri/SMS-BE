@@ -1,0 +1,160 @@
+name: Deploy to Hostinger
+
+# Push to main -> build, verify, deploy to the Hostinger VPS.
+#
+# Relay is a GUEST on that box: Rentocloud and EMS were there first and share
+# its 8 GB. Every step below is scoped to Relay's own unit, its own containers
+# and its own database. Nothing here restarts docker, touches nginx, installs a
+# package, or changes a firewall rule — the three things that would take the
+# neighbours down with us.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never two deploys at once: they would race on the same binary path and the
+# same migration lock. cancel-in-progress is deliberately OFF — killing a
+# half-finished deploy is worse than queueing behind it.
+concurrency:
+  group: deploy-hostinger
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # Fail here, before anything is uploaded. A deploy that ships a binary
+      # that does not compile is worse than no deploy at all.
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  deploy:
+    name: Deploy
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # Static binaries: the VPS needs no Go toolchain and no libc version to
+      # match. goose travels with them for the same reason.
+      - name: Cross-compile
+        run: |
+          mkdir -p out
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/control-api ./cmd/control-api
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/seed-demo   ./cmd/seed-demo
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/goose github.com/pressly/goose/v3/cmd/goose \
+            || GOBIN="$PWD/out" go install github.com/pressly/goose/v3/cmd/goose@v3.22.1
+          ls -lh out/
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.HOSTINGER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Best-effort known_hosts seed; never fatal, since a transient keyscan
+          # blip must not abort a deploy. accept-new below is the fallback.
+          ssh-keyscan -T 15 -H "${{ secrets.HOSTINGER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Upload
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          SCP="scp -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+          $SCP out/control-api "$USER@$HOST:/opt/relay/control-api.new"
+          $SCP out/seed-demo   "$USER@$HOST:/opt/relay/seed-demo.new"
+          $SCP out/goose       "$USER@$HOST:/usr/local/bin/goose.new"
+          $SCP -r db scripts   "$USER@$HOST:/opt/relay/"
+          $SCP deploy/relay-api.service "$USER@$HOST:/etc/systemd/system/relay-api.service"
+
+      - name: Migrate, swap, verify, roll back on failure
+        env:
+          HOST: ${{ secrets.HOSTINGER_HOST }}
+          USER: ${{ secrets.HOSTINGER_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              -o ConnectTimeout=20 -o ServerAliveInterval=30 "$USER@$HOST" 'bash -se' <<'EOSSH'
+          set -euo pipefail
+          cd /opt/relay
+          chmod 755 /usr/local/bin/goose.new && mv /usr/local/bin/goose.new /usr/local/bin/goose
+
+          # .env supplies the URLs. MAIL_FROM is quoted in that file precisely so
+          # this `.` cannot choke on its angle brackets.
+          set -a; . /opt/relay/.env; set +a
+
+          echo "::group::backup"
+          # Relay's OWN database only. ems-postgres hosts both; naming the
+          # database is what keeps this from dumping the neighbour's data.
+          mkdir -p /opt/relay/backups
+          docker exec ems-postgres pg_dump -U ems_user -d sms \
+            | gzip > "/opt/relay/backups/sms_predeploy_$(date +%Y%m%d_%H%M%S).sql.gz"
+          ls -t /opt/relay/backups/sms_predeploy_*.sql.gz | tail -n +15 | xargs -r rm -f
+          echo "::endgroup::"
+
+          echo "::group::migrate"
+          # BEFORE the swap: a failed migration leaves the old binary serving,
+          # which is a working system rather than a new binary against a schema
+          # it does not understand.
+          goose -dir db/migrations postgres "$DATABASE_ADMIN_URL" up
+          CLICKHOUSE_HTTP=http://127.0.0.1:8123 CLICKHOUSE_USER=relay \
+          CLICKHOUSE_PASSWORD="$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /opt/relay/.secrets)" \
+            python3 scripts/clickhouse_migrate.py sms
+          echo "::endgroup::"
+
+          echo "::group::swap"
+          # Keep the outgoing binary. Without it there is nothing to roll back
+          # TO, and "redeploy the previous commit" is a slow answer at 3am.
+          cp -a /opt/relay/control-api /opt/relay/control-api.prev 2>/dev/null || true
+          chown relay:relay /opt/relay/control-api.new /opt/relay/seed-demo.new
+          chmod 755 /opt/relay/control-api.new /opt/relay/seed-demo.new
+          mv /opt/relay/control-api.new /opt/relay/control-api
+          mv /opt/relay/seed-demo.new  /opt/relay/seed-demo
+          systemctl daemon-reload
+          systemctl restart relay-api
+          echo "::endgroup::"
+
+          echo "::group::verify"
+          for i in $(seq 1 20); do
+            if curl -sf --max-time 3 http://127.0.0.1:8080/healthz | grep -q '"status":"ok"'; then
+              echo "healthy after ${i} attempt(s)"
+              curl -s http://127.0.0.1:8080/healthz; echo
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "NEW BINARY DID NOT BECOME HEALTHY — rolling back" >&2
+          journalctl -u relay-api -n 40 --no-pager >&2 || true
+          if [ -f /opt/relay/control-api.prev ]; then
+            mv /opt/relay/control-api.prev /opt/relay/control-api
+            systemctl restart relay-api
+            sleep 5
+            curl -s http://127.0.0.1:8080/healthz >&2 || true
+            echo "rolled back to the previous binary" >&2
+          fi
+          exit 1
+          EOSSH
+
+      - name: Confirm public endpoint
+        # Through nginx and TLS, not just loopback — the loopback check above
+        # would still pass if the public route were broken.
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://sms-api.saqibsaeed.cloud/healthz)
+          echo "https://sms-api.saqibsaeed.cloud/healthz -> $code"
+          [ "$code" = "200" ]
+          # The test hooks must never become publicly reachable by accident.
+          dev=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST https://sms-api.saqibsaeed.cloud/v1/dev/reset-mock-state)
+          echo "/v1/dev/reset-mock-state -> $dev (expect 403)"
+          [ "$dev" = "403" ]
