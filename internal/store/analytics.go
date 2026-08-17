@@ -475,8 +475,20 @@ func UsageByJourney(ctx context.Context, conn driver.Conn, tenantID uuid.UUID) (
 func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	idColumn, nameColumn string) ([]AttributedSpend, error) {
 
+	// max(name), not any(name).
+	//
+	// any() returns an ARBITRARY row from the group, and these groups are mixed:
+	// a campaign's messages can carry the name on some rows and an empty string
+	// on others, depending on which path recorded them. any() then picked the
+	// empty one often enough to matter, and the usage report rendered a row with
+	// a real amount and a blank label — which the frontend turns into a link
+	// with no text, so a screen reader announces nothing at all. That is how it
+	// was found: an axe check on /billing/usage, not a billing complaint.
+	//
+	// The empty string sorts below every real name, so max() returns a genuine
+	// name whenever the group holds one.
 	rows, err := conn.Query(ctx, fmt.Sprintf(`
-		SELECT toString(%s) AS id, any(%s) AS name, channel, currency,
+		SELECT toString(%s) AS id, max(%s) AS name, channel, currency,
 		       sumIf(cost_minor, status = 'delivered') AS amount
 		FROM messages
 		WHERE tenant_id = ? AND %s IS NOT NULL

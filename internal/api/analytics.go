@@ -290,6 +290,10 @@ func (s *Server) UpdateSso(ctx context.Context, request gen.UpdateSsoRequestObje
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	if !canManageSettings(identity.Role) {
+		return gen.UpdateSso403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change SSO settings.")), nil
+	}
 	// Enabling SSO without an identity provider would lock every user out of
 	// the tenant at the next sign-in, so the details are required to turn it on
 	// rather than validated later.
@@ -305,6 +309,22 @@ func (s *Server) UpdateSso(ctx context.Context, request gen.UpdateSsoRequestObje
 	}
 	if request.Body.Provider != nil {
 		provider := string(*request.Body.Provider)
+		// Check the value BEFORE the database does.
+		//
+		// The contract types this as an enum, but oapi-codegen renders enums as
+		// plain Go string aliases — so an unknown provider decodes cleanly, gets
+		// as far as the INSERT, and fails the sso_provider CHECK constraint
+		// there. That surfaced as a 500: the caller sent bad input and was told
+		// the server was broken, and an operator reading the log saw
+		// SQLSTATE 23514 rather than "someone typed okta".
+		//
+		// The list is duplicated from the constraint in 00013 deliberately: the
+		// database is the authority, and this exists only so the failure arrives
+		// as a 422 that names the accepted values.
+		if provider != "saml" && provider != "oidc" {
+			return gen.UpdateSso422JSONResponse(errorBody(codeValidation,
+				"Provider must be saml or oidc.")), nil
+		}
 		settings.SSOProvider = &provider
 	}
 	updated, err := store.UpdateSSO(ctx, s.DB, identity, settings)
@@ -335,6 +355,10 @@ func (s *Server) UpdateDataRetention(ctx context.Context, request gen.UpdateData
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.UpdateDataRetention403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change data retention.")), nil
 	}
 	days := int(request.Body.MessageLogRetentionDays)
 	switch days {
