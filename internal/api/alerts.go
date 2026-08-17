@@ -133,6 +133,10 @@ func (s *Server) UpdateAlerts(ctx context.Context, request gen.UpdateAlertsReque
 		return gen.UpdateAlerts401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
+	if !canManageSettings(identity.Role) {
+		return gen.UpdateAlerts403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change alert settings.")), nil
+	}
 
 	rules, err := s.loadAlertRules(ctx, identity)
 	if err != nil {
