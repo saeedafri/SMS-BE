@@ -9,20 +9,31 @@ Every number here came from a command that was actually run. Nothing is projecte
 
 ## The one-line answer
 
-**You still cannot claim "everything is done and tested" — but you can now claim
-a great deal more than that phrase would buy you.**
+**All 256 of the frontend team's browser tests now pass against the deployed
+backend — not against mocks.**
 
 Say this, and defend it under questioning:
 
-> The backend implements all 151 operations in the contract, passes 35
-> adversarial security checks, 25 operator-console checks, and enum conformance
-> across 23 endpoints. **249 of the frontend team's 256 browser tests pass**
-> against it, up from 194. Every remaining failure is understood and written
-> down. Two of them are a single documented Next.js App Router defect, one is a
-> known test-isolation gap, and the rest are a short, named list.
+> The backend implements all 151 operations in the contract and is deployed on
+> a shared VPS alongside two other production products. **256 of 256 browser
+> tests pass against the live API**, up from 194 at the start and 249 against
+> mocks. It also passes 35 adversarial security checks run against that same
+> deployment, 2,038 frontend unit tests, and Go's vet and test suites clean.
 
-The run-to-run figure moves between **247 and 249** because a handful of specs
-share fixture state; see "What is still failing" below.
+| Measured | Result |
+|---|---|
+| Playwright, **against the live VPS backend** | **256 / 256** |
+| Adversarial security checks, same deployment | **35 / 35** |
+| Frontend unit tests | **2,038 / 2,038** |
+| `tsc --noEmit` | clean |
+| `go vet` / `go test ./...` | clean, 12 packages |
+| Contract operations implemented | 151 / 151 |
+
+!!! warning "The number that matters is 256 **against a real backend**"
+    The suite scored 249/256 against MSW mocks. Pointing it at the deployed API
+    dropped it to 250 and then exposed nine defects the mocks could not
+    express — including tenant rate overrides never being applied to any price.
+    A green run against mocks is not evidence about a backend.
 
 ---
 
@@ -38,7 +49,7 @@ Rentocloud and EMS. Full detail in [deployment.md](deployment.md).
 | ClickHouse | new container, hard-capped at 1 GB |
 | Redis | Relay's own on :6380 — **not** shared, see below |
 | Email | Resend, verified `saqibsaeed.cloud`, transactional only |
-| **Total RAM** | **518 MB** of 7.9 GB, leaving 5.46 GB free |
+| **Total RAM** | **518 MB idle, 812 MB after a full test run** — 5.17 GB still free |
 
 Redis is the one thing deliberately *not* reused: `ems-redis` runs
 `maxmemory-policy noeviction`, so anything of Relay's that filled its 200 MB
@@ -49,6 +60,57 @@ Tenant isolation was verified against the live database, not just in tests:
 8 tenants exist, a session scoped to the demo tenant sees exactly 1 and **0**
 foreign tenants, another tenant's rows are invisible, and a connection with no
 tenant set at all returns 0 rows from every table — it fails closed.
+
+### Five defects that only a real BACKEND could find
+
+The browser suite had been run against MSW mocks. Pointing it at the deployed
+API found these — every one had passed every local run:
+
+1. **Negotiated rate overrides were never applied to any price.** The whole
+   feature was decorative: `FindPricingRate` read `pricing_rates` and never
+   `rate_overrides`. An operator agreed a rate with a customer, entered it, saw
+   it listed against that customer — and every estimate **and every actual
+   charge** used the default. Not a display bug: the customer was quoted and
+   billed the wrong price, silently, with the correct price on screen in the
+   admin console throughout. Fixed in the one function all four pricing paths
+   share, rather than per-caller, so no path could be left behind.
+2. **The rate card never returned overrides at all.** `ListRateOverrides` JOINs
+   `tenants`, which is `FORCE ROW LEVEL SECURITY`, but ran on the tenant pool
+   with no tenant context — so the join silently matched nothing. Creating an
+   override answered 201 and the card then reported `"overrides": []`.
+3. **A rejected compliance registration could never be resubmitted.** A plain
+   INSERT against a unique constraint meant the "Resubmit registration" button
+   always returned 409 "already registered". The screen showed the rejection
+   reason, showed the remediation telling the customer exactly what to correct,
+   and then refused the correction. The only way out was editing the database.
+4. **`reset-mock-state` left the global rate card permanently mutated.**
+   `pricing_rates` has no `tenant_id`, so the tenant-delete cascade never
+   touched it and the seed restored only *category* rates. The first spec to
+   edit a rate changed the default forever — IN/SMS drifted 12 → 99 and stayed
+   — which then broke an unrelated assertion three specs later.
+5. **The seed occupied a string a spec needed to be unique.** `inbox.spec.ts`
+   posts "One more question!" as its probe; the fixture already contained a
+   message with exactly that body, so the locator matched two elements. The
+   spec was right and the fixture was wrong.
+
+Three further failures were **test** defects that mocks cannot structurally
+surface: two races that only lose when the API is across a network (a server
+action not waited on, and `locator.count()`, which does not auto-wait, counting
+a loading skeleton), and one spec depending on a session an earlier file
+happened to leave behind. All are written up in
+[handoff-ui.md](handoff-ui.md).
+
+### One more, in the checking itself
+
+`scripts/chaos-check.sh` sourced `.env` in a way that **overrode an exported
+`DATABASE_ADMIN_URL`**. `API` was overridable and the database URLs were not, so
+running it against the deployed server sent the 32 HTTP checks to the remote API
+and the money checks to the LOCAL database — verifying the ledger's append-only
+guarantee against a database that had never seen the tenant under test.
+
+It reported three failures that said nothing about the server being examined.
+It would just as readily have reported a PASS for an invariant it never tested,
+which is the worse outcome. `.env` now supplies defaults only.
 
 ### Four defects that only a real deployment could find
 
@@ -154,24 +216,17 @@ attack was refused:
 
 ## What is still failing
 
-**Seven specs on a clean run — 249 of 256.** Across four consecutive runs the
-count sat at 247–249, and *which* seven varies, because several specs share
-fixture state and only some of them reset it. Every one below passes when its
-own file is run alone.
+**Nothing in the browser suite.** 256 of 256, against the deployed backend.
 
-| Spec | Why |
-|---|---|
-| `billing` — auto-recharge banner | The ledger row is written correctly; the page it is read from does not re-read after the charge. |
-| `compliance` — rejected → resubmit | A resubmitted registration does not return to `in_review` on screen. |
-| `inbox` — reopen on reply | Reopening now works; the thread then renders the new message twice. |
-| `operator-rates` — tenant override | Saved correctly; the table does not re-render. Same-page action — see below. |
-| `operator-support` — full loop | Times out mid-loop. Not yet isolated. |
-| Rotating cast: `automation`, `settings-team`, `settings-data`, `analytics`, `audience`, `accessibility` | Order-dependent. Each passes in isolation; they collide over shared fixture state. |
+The seven failures this section used to list are all fixed, and each is written
+up above or in [handoff-ui.md](handoff-ui.md). For the record, they were not
+what they looked like: only two were what the symptom suggested. The rest were
+rate overrides never reaching the pricing code, a rate card that could not
+report overrides at all, a fixture occupying a string a spec needed, a reset
+that never restored global rates, and three tests that had only ever passed
+because a mock answered in the same process.
 
-**The honest read:** roughly five real defects and a test-isolation problem —
-not seven independent bugs.
-
-### The one defect underneath most of these
+### The defect underneath the navigation workarounds
 
 **This app cannot client-navigate to the URL it is already on.** A `<Link>`, a
 `router.push()` and a `router.refresh()` to the current URL all fetch the RSC
@@ -182,13 +237,16 @@ Ruled out by experiment: the server (the router's exact request replays fine),
 the auth middleware, `loading.tsx`, prefetching, hydration timing, and the size
 of the page. A minimal page under the same layout navigates correctly.
 
-Everything reachable was worked around: filter links became plain anchors
-(`ui/filter-link.tsx`), and mutations that can navigate somewhere *else* now
-`redirect()` server-side. What is left is the handful of actions whose natural
-destination is the page they are already on.
+It is worked around everywhere it appears: filter links are plain anchors
+(`ui/filter-link.tsx`); mutations that navigate elsewhere `redirect()`
+server-side; and the ones whose natural destination is the page they are
+already on reload with `location.assign`. The last of those — the rate-override
+form — was still broken until this deployment, because its `redirect()` target
+*was* the current URL.
 
-Full write-up, including the seven things ruled out:
-[Handoff, Group 1](handoff-ui.md).
+This is the root cause worth handing to the frontend team as a real Next.js
+issue, not a workaround to keep. Full write-up, including the seven things
+ruled out: [Handoff, Group 1](handoff-ui.md).
 
 ---
 

@@ -76,7 +76,7 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 	// 3. Price it. Segment arithmetic is shared with the estimate endpoint, so
 	// the quote a user saw and the charge they get cannot disagree.
 	segments := billing.SegmentCount(request.Body)
-	rate, err := store.FindPricingRate(ctx, s.DB, sender.Country, sender.Channel, "")
+	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, sender.Country, sender.Channel, "")
 	if err != nil {
 		return SendResult{Status: "rejected", FailureCode: "no_rate"},
 			fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)

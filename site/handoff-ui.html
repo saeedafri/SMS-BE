@@ -643,6 +643,56 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#changes-from-running-against-the-real-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes from running against the real backend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Changes from running against the real backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adminratesadd-override-formtsx-liboperatoractionsts-product-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        admin/rates/add-override-form.tsx + lib/operator/actions.ts — product bug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#four-specs-that-could-not-survive-real-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Four specs that could not survive real latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pointing-the-app-at-the-live-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pointing the app at the live backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-1-a-real-product-bug-filter-links-did-not-navigate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -977,6 +1027,56 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#changes-from-running-against-the-real-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes from running against the real backend
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Changes from running against the real backend">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#adminratesadd-override-formtsx-liboperatoractionsts-product-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        admin/rates/add-override-form.tsx + lib/operator/actions.ts — product bug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#four-specs-that-could-not-survive-real-latency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Four specs that could not survive real latency
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pointing-the-app-at-the-live-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pointing the app at the live backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#group-1-a-real-product-bug-filter-links-did-not-navigate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1304,6 +1404,87 @@ fixes</strong> (tests that could not pass against any real backend), <strong>two
 gates that were too narrow</strong>, and <strong>the dev bridge</strong> that lets the suite drive a
 real server at all.</p>
 <hr />
+<h2 id="changes-from-running-against-the-real-backend">Changes from running against the real backend<a class="headerlink" href="#changes-from-running-against-the-real-backend" title="Permanent link">&para;</a></h2>
+<p>Everything above was found against MSW. Running the same suite against a live
+API surfaced five more, and they split cleanly into one product bug and four
+tests that were only ever passing by luck.</p>
+<h3 id="adminratesadd-override-formtsx-liboperatoractionsts-product-bug"><code>admin/rates/add-override-form.tsx</code> + <code>lib/operator/actions.ts</code> — product bug<a class="headerlink" href="#adminratesadd-override-formtsx-liboperatoractionsts-product-bug" title="Permanent link">&para;</a></h3>
+<p>Adding a tenant rate override saved, returned 201, and the table went on showing
+the default rate.</p>
+<p><code>createOverride</code> ended with <code>redirect("/admin/rates?tenantId=…")</code> — which is the
+URL the operator is <strong>already on</strong>, because the page's own tenant picker put
+them there. That is the same App Router behaviour as the filter links: the
+payload is fetched and discarded. The action now returns <code>{status:"done"}</code> and
+the form reloads with <code>location.assign</code>, matching <code>environment-toggle.tsx</code>.</p>
+<p><code>assign()</code>, not <code>reload()</code> — <code>reload()</code> re-submits the POST and would file the
+override twice.</p>
+<h3 id="four-specs-that-could-not-survive-real-latency">Four specs that could not survive real latency<a class="headerlink" href="#four-specs-that-could-not-survive-real-latency" title="Permanent link">&para;</a></h3>
+<p>None of these are product bugs. They are assumptions that only hold when the API
+answers in the same process.</p>
+<table>
+<thead>
+<tr>
+<th>Spec</th>
+<th>What it assumed</th>
+<th>Why it only failed for real</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>billing.spec.ts</code></td>
+<td>Clicking <strong>Save</strong> finishes before the next line runs</td>
+<td>It is a server action; the dev hook won the race and charged the wallet while auto-recharge was still unconfigured. Now waits for the response.</td>
+</tr>
+<tr>
+<td><code>operator-audit.spec.ts</code></td>
+<td><code>locator.count()</code> waits</td>
+<td>It is one of the few Playwright calls that does <strong>not</strong>. It counted the loading skeleton's zero rows. Now waits for a row first.</td>
+</tr>
+<tr>
+<td><code>operator-support.spec.ts</code></td>
+<td>A customer session already exists</td>
+<td>Nothing in that file signs the customer in — it relied on whatever spec ran before. Alone, it hung on a sign-in page waiting for a "Subject" field. Now signs in explicitly.</td>
+</tr>
+<tr>
+<td><code>operator-support.spec.ts</code></td>
+<td>30s is enough</td>
+<td>Two sign-ins, ~12 navigations and a reload — roughly 3× any other test. Raised to 120s rather than split, because the point is that the whole loop holds together.</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>inbox.spec.ts</code> duplicate-message failure was <strong>ours, not yours</strong>: the
+backend seed used the exact string the spec posts as its probe, so the locator
+matched two elements. Fixed in the seed; the spec was right.</p>
+<hr />
+<h2 id="pointing-the-app-at-the-live-backend">Pointing the app at the live backend<a class="headerlink" href="#pointing-the-app-at-the-live-backend" title="Permanent link">&para;</a></h2>
+<p>The backend is deployed. Only <code>.env.local</code> changes — and it is gitignored, so
+this is a local switch, not a commit.</p>
+<p>Every backend call in this app is made <strong>server-side</strong> by Next.js, with the
+session token attached from an httpOnly cookie (<code>src/lib/api/fetchers.ts</code>,
+<code>src/lib/operator/fetchers.ts</code>). The browser never talks to the API directly —
+<code>useMe</code> and <code>useWalletBalance</code> go through same-origin <code>/api/*</code> route handlers
+for exactly that reason. So switching backends needs <strong>no CORS work and no
+cookie changes</strong>: one URL.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># a tunnel to the VPS&#39;s loopback :8080</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>ssh<span class="w"> </span>-i<span class="w"> </span>~/.ssh/id_ed25519<span class="w"> </span>-f<span class="w"> </span>-N<span class="w"> </span>-L<span class="w"> </span><span class="m">127</span>.0.0.1:18080:127.0.0.1:8080<span class="w"> </span>root@31.97.186.223
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># SMS-UI/.env.local</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="na">NEXT_PUBLIC_USE_MOCKS</span><span class="o">=</span><span class="s">false</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="na">NEXT_PUBLIC_API_BASE_URL</span><span class="o">=</span><span class="s">http://127.0.0.1:18080</span>
+</code></pre></div>
+<p>The tunnel rather than <code>https://sms-api.saqibsaeed.cloud</code>, deliberately: nginx
+returns <strong>403</strong> for <code>/v1/dev/*</code> on the public hostname, and the browser suite
+needs those hooks to force states a real carrier would take hours to produce.
+The tunnel bypasses nginx, so the suite gets them and the internet does not.</p>
+<p>For a demo — where you want the real URL and no tunnel — use the public
+hostname instead. Everything except the <code>/v1/dev/*</code> hooks works identically.</p>
+<div class="admonition note">
+<p class="admonition-title"><code>NEXT_PUBLIC_*</code> is inlined at build time</p>
+<p><code>next dev</code> re-reads it on restart, but a built app freezes whatever was set
+when <code>next build</code> ran. A production build for the demo must have the public
+hostname set at build time, not at start time.</p>
+</div>
+<hr />
 <h2 id="group-1-a-real-product-bug-filter-links-did-not-navigate">Group 1 — A real product bug: filter links did not navigate<a class="headerlink" href="#group-1-a-real-product-bug-filter-links-did-not-navigate" title="Permanent link">&para;</a></h2>
 <p><strong>This is the one to read even if you skip the rest.</strong> It is a genuine defect in
 the shipped product, not a test problem, and it affected every filtered screen
@@ -1317,7 +1498,7 @@ is exactly why it read as broken pages rather than broken links.</p>
 <h3 id="what-we-found-in-the-order-we-found-it">What we found, in the order we found it<a class="headerlink" href="#what-we-found-in-the-order-we-found-it" title="Permanent link">&para;</a></h3>
 <p><strong>First, a real bug in the hrefs.</strong> Every filtered view built its links as a
 bare query string:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">return</span><span class="w"> </span><span class="nx">qs</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="sb">`?</span><span class="si">${</span><span class="nx">qs</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;?&quot;</span><span class="p">;</span><span class="w">        </span><span class="c1">// ← wrong</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">return</span><span class="w"> </span><span class="nx">qs</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="sb">`?</span><span class="si">${</span><span class="nx">qs</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;?&quot;</span><span class="p">;</span><span class="w">        </span><span class="c1">// ← wrong</span>
 </code></pre></div>
 <p><code>next/link</code> does not resolve a query-only href against the current route; it
 resolves it against the app root. Each view now builds an absolute path from a
@@ -1382,9 +1563,9 @@ refusing the navigation, not <code>Link</code>'s click handling.</p>
 fetch, navigates perfectly. The large real views never do.</p>
 <h3 id="the-fix">The fix<a class="headerlink" href="#the-fix" title="Permanent link">&para;</a></h3>
 <p>A new <code>src/ui/filter-link.tsx</code> — a plain <code>&lt;a&gt;</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">FilterLink</span><span class="p">({</span><span class="w"> </span><span class="nx">href</span><span class="p">,</span><span class="w"> </span><span class="nx">className</span><span class="p">,</span><span class="w"> </span><span class="nx">children</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">&lt;</span><span class="nt">a</span><span class="w"> </span><span class="na">href</span><span class="o">=</span><span class="p">{</span><span class="nx">href</span><span class="p">}</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="p">{</span><span class="nx">className</span><span class="p">}&gt;{</span><span class="nx">children</span><span class="p">}&lt;/</span><span class="nt">a</span><span class="p">&gt;;</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">FilterLink</span><span class="p">({</span><span class="w"> </span><span class="nx">href</span><span class="p">,</span><span class="w"> </span><span class="nx">className</span><span class="p">,</span><span class="w"> </span><span class="nx">children</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">&lt;</span><span class="nt">a</span><span class="w"> </span><span class="na">href</span><span class="o">=</span><span class="p">{</span><span class="nx">href</span><span class="p">}</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="p">{</span><span class="nx">className</span><span class="p">}&gt;{</span><span class="nx">children</span><span class="p">}&lt;/</span><span class="nt">a</span><span class="p">&gt;;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">}</span>
 </code></pre></div>
 <p>Every filter chip, "Clear" link and pagination link across ten view files now
 uses it. <strong>Verified on all six affected screens</strong>, 3/3 at every timing.</p>
@@ -1441,8 +1622,8 @@ lands authenticated as Acme Retail. Against a real backend that is an
 authentication bypass: anyone typing the URL would be handed a live session for a
 real customer's account.</p>
 <p><strong>Change:</strong> rewritten to assert the redirect, which is what the backend does:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">await</span><span class="w"> </span><span class="nx">page</span><span class="p">.</span><span class="kr">goto</span><span class="p">(</span><span class="s2">&quot;/overview&quot;</span><span class="p">);</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">await</span><span class="w"> </span><span class="nx">expect</span><span class="p">(</span><span class="nx">page</span><span class="p">).</span><span class="nx">toHaveURL</span><span class="p">(</span><span class="sr">/\/login/</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">await</span><span class="w"> </span><span class="nx">page</span><span class="p">.</span><span class="kr">goto</span><span class="p">(</span><span class="s2">&quot;/overview&quot;</span><span class="p">);</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">await</span><span class="w"> </span><span class="nx">expect</span><span class="p">(</span><span class="nx">page</span><span class="p">).</span><span class="nx">toHaveURL</span><span class="p">(</span><span class="sr">/\/login/</span><span class="p">);</span>
 </code></pre></div>
 <h3 id="2c-rbac-enforcementspects-one-assertion-inverted-deliberately">2c. <code>rbac-enforcement.spec.ts</code> — one assertion inverted, deliberately<a class="headerlink" href="#2c-rbac-enforcementspects-one-assertion-inverted-deliberately" title="Permanent link">&para;</a></h3>
 <p>The "cookieless request" test asserted that a bare <code>request</code> fixture <strong>does</strong>
@@ -1450,7 +1631,7 @@ receive a <code>relay_session</code> cookie, because the middleware's seed branc
 one to any cookieless caller. We removed that branch (see 4a), so it now asserts
 the fixture stays cookieless.</p>
 <p>The assertion the test exists for is unchanged and still passes:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">expect</span><span class="p">(</span><span class="nx">body</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="nx">SECRET_MARKER</span><span class="p">);</span><span class="w">   </span><span class="c1">// no key material to an anonymous caller</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nx">expect</span><span class="p">(</span><span class="nx">body</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="nx">SECRET_MARKER</span><span class="p">);</span><span class="w">   </span><span class="c1">// no key material to an anonymous caller</span>
 </code></pre></div>
 <p>The follow-up <code>expect(body).toContain("Restricted")</code> became
 <code>expect(res.url()).toMatch(/\/login/)</code> — a real backend redirects rather than
@@ -1479,12 +1660,12 @@ secrets: an API that returned them would let anyone verify any number or pass an
 MFA challenge without seeing the handset. Our backend logs them and returns
 nothing.</p>
 <p><strong>Change:</strong> a new module widens the gate to a second explicit flag.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">showDevCodes</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_USE_MOCKS</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="o">||</span>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="p">);</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">showDevCodes</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_USE_MOCKS</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="o">||</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="p">);</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="p">}</span>
 </code></pre></div>
 <p>A <strong>function</strong>, not a const — <code>NEXT_PUBLIC_*</code> is inlined at build time either
 way, so the bundle is identical, but a module-level const is evaluated once on
@@ -1501,8 +1682,8 @@ verification loop could not complete. It now calls <code>showDevCodes()</code> t
 <p class="admonition-title">These need a rebuild</p>
 <p><code>NEXT_PUBLIC_*</code> values are inlined at build time, so the flag has no effect
 until the app is rebuilt with it set:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>build
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>start<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>build
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>start<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>
 </code></pre></div>
 <p>It is set in <code>.env.local</code> in this working copy. Both flags default to off,
 so production ships without either.</p>
@@ -1588,10 +1769,10 @@ as a bearer token.</p>
 </ul>
 <hr />
 <h2 id="what-we-verified-before-handing-this-over">What we verified before handing this over<a class="headerlink" href="#what-we-verified-before-handing-this-over" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2038 tests, all passing</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># 249 / 256</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2038 tests, all passing</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># 249 / 256</span>
 </code></pre></div>
 <p>The browser suite was 194/256 when we started this pass.</p>
 <hr />
@@ -1625,22 +1806,22 @@ union, so a stricter consumer would reject it.</p>
 touched <code>openapi.json</code> — that is yours.</p>
 <hr />
 <h2 id="reviewing-the-diff">Reviewing the diff<a class="headerlink" href="#reviewing-the-diff" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>git<span class="w"> </span>diff<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/analytics<span class="w"> </span>src/app/<span class="se">\(</span>admin<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/developer/logs<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/billing<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/campaigns<span class="w">          </span><span class="c1"># group 1 — the navigation fix</span>
-<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>git<span class="w"> </span>diff<span class="w"> </span>e2e/<span class="w">                                     </span><span class="c1"># group 2 — spec fixes</span>
-<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>git<span class="w"> </span>diff<span class="w"> </span>src/lib/dev-codes.ts<span class="w"> </span>src/app/<span class="se">\(</span>auth<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/_components<span class="w">         </span><span class="c1"># group 3 — dev-code gates</span>
-<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>git<span class="w"> </span>diff<span class="w"> </span>src/middleware.ts<span class="w"> </span>src/app/api/dev/<span class="w">       </span><span class="c1"># group 4 — dev bridge</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>git<span class="w"> </span>diff<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/analytics<span class="w"> </span>src/app/<span class="se">\(</span>admin<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/developer/logs<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/billing<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/campaigns<span class="w">          </span><span class="c1"># group 1 — the navigation fix</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>git<span class="w"> </span>diff<span class="w"> </span>e2e/<span class="w">                                     </span><span class="c1"># group 2 — spec fixes</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>git<span class="w"> </span>diff<span class="w"> </span>src/lib/dev-codes.ts<span class="w"> </span>src/app/<span class="se">\(</span>auth<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/_components<span class="w">         </span><span class="c1"># group 3 — dev-code gates</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>git<span class="w"> </span>diff<span class="w"> </span>src/middleware.ts<span class="w"> </span>src/app/api/dev/<span class="w">       </span><span class="c1"># group 4 — dev bridge</span>
 </code></pre></div>
 <p>Every edit carries a comment explaining why it is there, so the diff should read
 without this page next to it. If you disagree with any of them, revert that file
 — none depends on another, except that the dev bridge is what makes the suite
 able to run at all.</p>
 <p><strong>Verification we ran on your repo before handing this over:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
-<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2037 tests, all passing</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2037 tests, all passing</span>
 </code></pre></div>
 
 

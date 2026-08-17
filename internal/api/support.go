@@ -338,7 +338,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	// carrier rejected would charge the customer for nothing — the same
 	// distinction between accepted and delivered that the rest of this system
 	// is built around.
-	if rate, err := store.FindPricingRate(ctx, s.DB,
+	if rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID,
 		conversation.Country, conversation.Channel, ""); status != "failed" &&
 		err == nil && rate.PerSegmentMinor > 0 {
 		amount := rate.PerSegmentMinor * int64(segments)

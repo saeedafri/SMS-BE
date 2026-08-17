@@ -517,10 +517,46 @@ func ListPricingRates(ctx context.Context, pool *pgxpool.Pool) ([]PricingRate, e
 	return out, rows.Err()
 }
 
-// FindPricingRate resolves the rate for a country/channel, preferring a
-// category-specific line and falling back to the catch-all.
-func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
+// FindPricingRate resolves the rate for a tenant on a country/channel: the
+// tenant's negotiated override if one exists, otherwise the default rate card.
+// Within each, a category-specific line is preferred over the catch-all.
+func FindPricingRate(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID,
 	country, channel, category string) (PricingRate, error) {
+
+	// A NEGOTIATED RATE WINS. This function used to read pricing_rates and
+	// nothing else, so rate_overrides was a table the operator console wrote to
+	// and no pricing code ever read.
+	//
+	// The effect: an operator agreed a rate with a customer, entered it, saw it
+	// listed against that customer — and every estimate and every charge still
+	// used the default. Not a display bug. The customer was QUOTED and BILLED
+	// the wrong price, silently, with the correct price on screen in the admin
+	// console the whole time.
+	//
+	// It belongs here rather than in each caller because every path that prices
+	// anything comes through this one function — the estimator, campaign
+	// pricing, single sends and inbox replies. Fixing it per-caller would have
+	// left whichever one was forgotten quietly billing the old rate.
+	//
+	// rate_overrides carries no row-level security, so this is safe on the
+	// tenant pool; the tenant_id predicate is the scope.
+	override, err := scanPricingRate(pool.QueryRow(ctx, `
+		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
+		FROM rate_overrides
+		WHERE tenant_id = $1 AND country = $2 AND channel = $3
+		ORDER BY CASE
+		             WHEN coalesce(category, '') = $4 THEN 0
+		             WHEN coalesce(category, '') = ''  THEN 1
+		             ELSE 2
+		         END,
+		         per_segment_minor
+		LIMIT 1`, tenantID, country, channel, category))
+	if err == nil {
+		return override, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return PricingRate{}, fmt.Errorf("store: find rate override: %w", err)
+	}
 
 	// Preference order: the exact category, then the channel-level rate, then
 	// the cheapest category on that channel.
@@ -537,8 +573,7 @@ func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
 	// lower bound, and quoting the dearest rate would over-quote a customer who
 	// then picks a cheaper category. The estimate is a range for exactly this
 	// reason, and the returned rate carries the category it actually used.
-	var rate PricingRate
-	err := pool.QueryRow(ctx, `
+	rate, err := scanPricingRate(pool.QueryRow(ctx, `
 		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
 		FROM pricing_rates
 		WHERE country = $1 AND channel = $2
@@ -548,9 +583,7 @@ func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
 		             ELSE 2
 		         END,
 		         per_segment_minor
-		LIMIT 1`, country, channel, category,
-	).Scan(&rate.Country, &rate.Channel, &rate.Category,
-		&rate.PerSegmentMinor, &rate.Currency)
+		LIMIT 1`, country, channel, category))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PricingRate{}, ErrNotFound
 	}
@@ -558,6 +591,17 @@ func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
 		return PricingRate{}, fmt.Errorf("store: find pricing rate: %w", err)
 	}
 	return rate, nil
+}
+
+// scanPricingRate reads the five columns both lookups above select, in the same
+// order. Shared so the override query and the default query cannot drift apart
+// in what they read — which would show up as a rate silently attached to the
+// wrong currency.
+func scanPricingRate(row pgx.Row) (PricingRate, error) {
+	var rate PricingRate
+	err := row.Scan(&rate.Country, &rate.Channel, &rate.Category,
+		&rate.PerSegmentMinor, &rate.Currency)
+	return rate, err
 }
 
 // Invoice is a billing period's statement.

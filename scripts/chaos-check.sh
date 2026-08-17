@@ -7,7 +7,23 @@
 # not that it succeeded.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-set -a; . ./.env; set +a
+
+# .env supplies DEFAULTS; anything already exported wins.
+#
+# This used to be a bare `set -a; . ./.env; set +a`, which clobbered an exported
+# DATABASE_ADMIN_URL with the local development one. API was overridable and the
+# database URLs were not, so running this against a deployed server — the one
+# time you most want it — pointed the 32 HTTP checks at the remote API and the
+# money checks at the LOCAL database. Those are the most important checks in
+# this file: the ledger's append-only guarantee, verified against a database
+# that had never seen the tenant under test. It reported three failures that
+# said nothing about the server being examined, and it would just as happily
+# have reported a PASS for an invariant it never tested.
+_env_admin=${DATABASE_ADMIN_URL:-}
+_env_db=${DATABASE_URL:-}
+set -a; [ -f ./.env ] && . ./.env; set +a
+[ -n "$_env_admin" ] && DATABASE_ADMIN_URL=$_env_admin
+[ -n "$_env_db" ] && DATABASE_URL=$_env_db
 
 API=${API:-http://localhost:8080}
 pass=0; fail=0

@@ -30,14 +30,16 @@ whole stack up:
 | Used | 1 969 MB | 2 487 MB |
 | Available | 5 977 MB | 5 460 MB |
 
-**Total: 518 MB.**
+**Total: 518 MB idle.** After a full 256-test browser run it settles at
+**812 MB** — almost all of that ClickHouse growing its caches and merge buffers,
+which is expected and is exactly what the cap below exists to bound.
 
-| Component | Resident | Hard limit |
+| Component | Resident (idle → after load) | Hard limit |
 |---|---|---|
-| ClickHouse | 334 MB | 1 GB (cgroup) + 900 MB (its own `max_server_memory_usage`) |
-| `relay-api` | 150 MB | 512 MB (`MemoryMax`) with `GOMEMLIMIT=400MiB` |
-| Redis | 12 MB | 128 MB (cgroup) + 96 MB `maxmemory`, `allkeys-lru` |
-| Postgres delta | +9 MB | unchanged — reuses the existing container |
+| ClickHouse | 334 MB → 712 MB | 1 GB (cgroup) + 900 MB (its own `max_server_memory_usage`) |
+| `relay-api` | 150 MB → 159 MB | 512 MB (`MemoryMax`) with `GOMEMLIMIT=400MiB` |
+| Redis | 12 MB → 12 MB | 128 MB (cgroup) + 96 MB `maxmemory`, `allkeys-lru` |
+| Postgres delta | +9 MB → +90 MB | unchanged — reuses the existing container |
 
 Every one of those limits exists for the same reason: when a box runs out of
 memory the kernel kills the **biggest** process, not the guilty one. An
@@ -123,8 +125,20 @@ failed migration leaves the old binary serving.
 
 ## Publishing
 
+**Live at `https://sms-api.saqibsaeed.cloud`.** HTTP 301-redirects to HTTPS;
+the certificate expires 2026-11-15 and certbot installed its own renewal timer.
+
 `deploy/nginx-sms-api.conf` → `/etc/nginx/sites-available/`, symlinked into
-`sites-enabled`, then `certbot --nginx -d sms-api.saqibsaeed.cloud`.
+`sites-enabled`, then `certbot --nginx -d sms-api.saqibsaeed.cloud --redirect`.
+
+!!! warning "The DNS record must go in **Cloudflare**, not the Hostinger panel"
+    `saqibsaeed.cloud` delegates to `alan.ns.cloudflare.com` /
+    `carioca.ns.cloudflare.com`. Hostinger's DNS panel still accepts records for
+    this domain and shows them saved, but nothing on the internet ever asks
+    Hostinger for it — a record added there resolves nowhere. Add the A record
+    in Cloudflare with the proxy **off** (grey cloud): with it on, Cloudflare
+    answers with its own IPs and certbot's HTTP-01 challenge cannot reach the
+    box.
 
 The config does one thing beyond proxying:
 
