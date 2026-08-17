@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
+
+	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/store"
 
@@ -31,12 +34,21 @@ func toTicketDetail(ticket store.SupportTicket, messages []store.SupportMessage)
 	}
 }
 
-func (s *Server) GetSupportTickets(ctx context.Context, _ gen.GetSupportTicketsRequestObject) (gen.GetSupportTicketsResponseObject, error) {
+func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTicketsRequestObject) (gen.GetSupportTicketsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	tickets, err := store.ListSupportTickets(ctx, s.DB, identity)
+	var status, category *string
+	if request.Params.Status != nil {
+		value := string(*request.Params.Status)
+		status = &value
+	}
+	if request.Params.Category != nil {
+		value := string(*request.Params.Category)
+		category = &value
+	}
+	tickets, err := store.ListSupportTickets(ctx, s.DB, identity, status, category)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +174,21 @@ func toConversationDetail(conversation store.Conversation,
 	return out
 }
 
-func (s *Server) ListConversations(ctx context.Context, _ gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {
+func (s *Server) ListConversations(ctx context.Context, request gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	conversations, err := store.ListConversations(ctx, s.DB, identity)
+	filter := store.ConversationFilter{Unread: request.Params.Unread}
+	if request.Params.Channel != nil {
+		value := string(*request.Params.Channel)
+		filter.Channel = &value
+	}
+	if request.Params.Status != nil {
+		value := string(*request.Params.Status)
+		filter.Status = &value
+	}
+	conversations, err := store.ListConversations(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -247,12 +268,90 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	}
 
 	segments := billing.SegmentCount(request.Body.Body)
+
+	// Submit the reply to the carrier, exactly as a campaign message is.
+	//
+	// A reply used to be written straight to the thread as "queued" and left
+	// there forever — no carrier ever saw it, and no delivery report ever came
+	// back, so the agent watched a message sit in limbo with no way to tell a
+	// stuck send from a delivered one. It was, in effect, not sent at all.
+	//
+	// The sandbox connector resolves deterministically from the recipient's
+	// number, so the same thread always behaves the same way and a failing case
+	// is reproducible rather than a coin toss.
 	status := "queued"
+	messageID := uuid.NewString()
+	if s.Connector != nil {
+		receipts, err := s.Connector.Submit(ctx, []connector.Submission{{
+			MessageID: messageID, Msisdn: conversation.Identity,
+			Body: request.Body.Body, Channel: conversation.Channel,
+			Country: conversation.Country,
+		}})
+		if err != nil || len(receipts) == 0 {
+			// The carrier being unreachable is not the customer's mistake, and
+			// losing their typing is the worst possible response to it.
+			s.Logger.Warn("conversation reply not submitted to carrier",
+				"conversation", conversationID, "error", err)
+		} else if !receipts[0].Accepted {
+			status = "failed"
+		} else {
+			status = "sent"
+			// The sandbox posts its delivery reports to an internal queue
+			// rather than calling us back. Draining here keeps a reply's final
+			// state honest — delivered means a report said so, not that we
+			// assumed it — without waiting on a worker tick the agent watching
+			// the thread would have to sit through.
+			if sandbox, ok := s.Connector.(*connector.Sandbox); ok {
+				for _, report := range sandbox.DrainReports() {
+					if report.MessageID != messageID {
+						continue
+					}
+					if report.Delivered {
+						status = "delivered"
+					} else {
+						status = "failed"
+					}
+				}
+			}
+		}
+	}
+
 	if _, err := store.AppendConversationMessage(ctx, s.DB, identity, store.ConversationMessage{
 		ConversationID: conversationID, Direction: "outbound",
 		Body: request.Body.Body, Segments: &segments, Status: &status,
 	}); err != nil {
 		return nil, err
+	}
+
+	// An inbox reply is an outbound message on a paid channel, so it costs the
+	// same as any other. This was not being charged at all: a customer could
+	// answer a thousand conversations and be billed for none of them.
+	//
+	// Priced from the same rate card campaigns use, per segment. A reply that
+	// runs to two segments costs twice as much for the same reason a campaign
+	// message does — the carrier charges per segment, not per intention.
+	//
+	// A missing rate is not fatal. The reply has already been written and the
+	// customer has been told it sent; refusing to record the charge is better
+	// than refusing the reply, and it is visible in the log rather than silent.
+	// Only a message a carrier actually took is charged. Billing a reply the
+	// carrier rejected would charge the customer for nothing — the same
+	// distinction between accepted and delivered that the rest of this system
+	// is built around.
+	if rate, err := store.FindPricingRate(ctx, s.DB,
+		conversation.Country, conversation.Channel, ""); status != "failed" &&
+		err == nil && rate.PerSegmentMinor > 0 {
+		amount := rate.PerSegmentMinor * int64(segments)
+		if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
+			Currency: rate.Currency, Type: "charge", AmountMinor: amount,
+			// The channel is in the description because the ledger is read by
+			// someone reconciling a bill, and "Inbox reply" alone does not say
+			// why one line cost 12 paise and the next 55.
+			Description: "Inbox reply (" + conversation.Channel + ")",
+		}); err != nil {
+			s.Logger.Warn("inbox reply sent but not billed",
+				"conversation", conversationID, "error", err)
+		}
 	}
 
 	detail, found, err := s.conversationDetail(ctx, identity, request.Id)

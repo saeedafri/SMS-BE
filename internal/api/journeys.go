@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/store"
 
@@ -350,4 +353,112 @@ func (s *Server) ArchiveJourney(ctx context.Context, request gen.ArchiveJourneyR
 			"That journey is already archived.")), nil
 	}
 	return gen.ArchiveJourney200JSONResponse(journey), nil
+}
+
+// UpdateJourney renames a journey or replaces its steps or trigger.
+//
+// Every field is optional, so the automation screen can rename without
+// resending the whole step list. Status is not among them: it moves through
+// SetJourneyStatus, which owns the rule that activated_at is stamped once and
+// never rewritten.
+func (s *Server) UpdateJourney(ctx context.Context, request gen.UpdateJourneyRequestObject) (gen.UpdateJourneyResponseObject, error) {
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	journeyID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.UpdateJourney404JSONResponse(errorBody(codeNotFound, "No such journey.")), nil
+	}
+	body := request.Body
+	if body == nil {
+		return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+			"Nothing to update.")), nil
+	}
+
+	var name *string
+	if body.Name != nil {
+		trimmed := strings.TrimSpace(*body.Name)
+		// An empty name is a rename to nothing, which leaves a row nobody can
+		// identify in a list. Rejected rather than stored.
+		if trimmed == "" {
+			return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+				"A journey name is required.")), nil
+		}
+		name = &trimmed
+	}
+
+	var steps []byte
+	if body.Steps != nil {
+		if len(*body.Steps) == 0 {
+			return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+				"A journey needs at least one step.")), nil
+		}
+		// Send steps are validated against real senders and templates for the
+		// same reason they are on create: a step pointing at something that
+		// does not exist fails at the first enrolment, long after whoever
+		// built it has moved on.
+		for _, step := range *body.Steps {
+			send, err := step.AsJourneyStepSend()
+			if err != nil || send.Type != "send" {
+				continue
+			}
+			senderID, ok := parsePathID(send.SenderId)
+			if !ok {
+				return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+					"A send step has an invalid sender.")), nil
+			}
+			if _, err := store.GetSenderID(ctx, s.DB, identity, senderID); err != nil {
+				return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+					"A send step points at a sender that does not exist.")), nil
+			}
+			templateID, ok := parsePathID(send.TemplateId)
+			if !ok {
+				return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+					"A send step has an invalid template.")), nil
+			}
+			if _, err := store.GetTemplate(ctx, s.DB, identity, templateID); err != nil {
+				return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+					"A send step points at a template that does not exist.")), nil
+			}
+		}
+		encoded, err := json.Marshal(*body.Steps)
+		if err != nil {
+			return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+				"Those steps could not be read.")), nil
+		}
+		steps = encoded
+	}
+
+	var triggerType *string
+	var triggerListID *uuid.UUID
+	if body.Trigger != nil {
+		if scheduled, err := body.Trigger.AsJourneyTriggerScheduled(); err == nil && scheduled.Type == "scheduled" {
+			kind := "scheduled"
+			triggerType = &kind
+			if listID, ok := parsePathID(scheduled.ListId); ok {
+				triggerListID = &listID
+			}
+		} else if entry, err := body.Trigger.AsJourneyTriggerListEntry(); err == nil {
+			kind := "list_entry"
+			triggerType = &kind
+			if listID, ok := parsePathID(entry.ListId); ok {
+				triggerListID = &listID
+			}
+		}
+		if triggerListID == nil {
+			return gen.UpdateJourney422JSONResponse(errorBody(codeValidation,
+				"A journey trigger needs a contact list.")), nil
+		}
+	}
+
+	journey, err := store.UpdateJourney(ctx, s.DB, identity, journeyID,
+		name, steps, triggerType, triggerListID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateJourney404JSONResponse(errorBody(codeNotFound, "No such journey.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.UpdateJourney200JSONResponse(s.toJourney(ctx, identity, journey)), nil
 }

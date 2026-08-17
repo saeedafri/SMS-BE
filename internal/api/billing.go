@@ -107,10 +107,12 @@ func (s *Server) GetInvoice(ctx context.Context, request gen.GetInvoiceRequestOb
 	return gen.GetInvoice200JSONResponse(invoiceResponse(invoice)), nil
 }
 
-// GetUsage reports spend groupings. Campaign and journey attribution needs
-// message-level data, which arrives with the data plane in Stage 5 — until
-// then a tenant genuinely has no attributed usage and the arrays are empty,
-// which is the truth rather than a placeholder.
+// GetUsage reports spend groupings.
+//
+// Channel totals come from the wallet, campaign and journey attribution from
+// the message rows: the ledger knows money moved, but only a message knows what
+// moved it. ClickHouse being unavailable costs the two attributed sections and
+// leaves the channel totals intact, rather than failing the whole screen.
 func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject) (gen.GetUsageResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
@@ -136,10 +138,47 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 			AmountMinor:  int(usage.AmountMinor),
 		})
 	}
+	campaigns := []gen.UsageByCampaign{}
+	journeys := []gen.UsageByJourney{}
+	if clickhouse, chErr := s.clickhouse(ctx); chErr == nil {
+		byCampaign, err := store.UsageByCampaign(ctx, clickhouse, identity.TenantID)
+		if err != nil {
+			return nil, s.clickhouseFailed(err)
+		}
+		for _, row := range byCampaign {
+			id, parseErr := uuid.Parse(row.ID)
+			if parseErr != nil {
+				continue
+			}
+			campaigns = append(campaigns, gen.UsageByCampaign{
+				CampaignId: id.String(), CampaignName: row.Name,
+				Channel:     gen.ChannelId(row.Channel),
+				Currency:    gen.CurrencyCode(row.Currency),
+				AmountMinor: int(row.Amount),
+			})
+		}
+		byJourney, err := store.UsageByJourney(ctx, clickhouse, identity.TenantID)
+		if err != nil {
+			return nil, s.clickhouseFailed(err)
+		}
+		for _, row := range byJourney {
+			id, parseErr := uuid.Parse(row.ID)
+			if parseErr != nil {
+				continue
+			}
+			journeys = append(journeys, gen.UsageByJourney{
+				JourneyId: id.String(), JourneyName: row.Name,
+				Channel:     gen.ChannelId(row.Channel),
+				Currency:    gen.CurrencyCode(row.Currency),
+				AmountMinor: int(row.Amount),
+			})
+		}
+	}
+
 	return gen.GetUsage200JSONResponse(gen.UsageReport{
 		ByChannel:  channels,
-		ByCampaign: []gen.UsageByCampaign{},
-		ByJourney:  []gen.UsageByJourney{},
+		ByCampaign: campaigns,
+		ByJourney:  journeys,
 	}), nil
 }
 

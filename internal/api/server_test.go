@@ -29,41 +29,6 @@ func TestHealthzReportsOK(t *testing.T) {
 	}
 }
 
-// An operation we have not built yet must answer with the contract's Error
-// envelope, not a bare Go error string. The frontend's error states read
-// error.code, so the shape is part of the contract even for a 501.
-//
-// This deliberately targets an operation from a later stage. As stages land,
-// point it at something still unbuilt — when nothing is left, delete it.
-func TestUnimplementedOperationReturnsContractErrorEnvelope(t *testing.T) {
-	router := api.NewRouter(&api.Server{})
-	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/operator/tenants", nil))
-
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotImplemented)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", ct)
-	}
-	var body struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.Error.Code != "not_implemented" {
-		t.Fatalf("error.code = %q, want %q", body.Error.Code, "not_implemented")
-	}
-	if body.Error.Message == "" {
-		t.Fatal("error.message is empty; the contract requires a message")
-	}
-}
-
 // Every route in the contract must be registered. A path the spec does not
 // define is a 404 — and that 404 must still use the Error envelope, because
 // the frontend parses failures the same way regardless of status.

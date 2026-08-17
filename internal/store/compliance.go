@@ -34,18 +34,84 @@ type SenderID struct {
 	VoiceVerified   bool
 	VoiceCodeSentAt *time.Time
 	CreatedAt       time.Time
+
+	// QualityRating and MessagingTier are assigned by WhatsApp, not by us, and
+	// stay nil for every other channel and for an account Meta has not yet
+	// rated. See db/migrations/00022_sender_wa_quality.sql.
+	QualityRating *string
+	MessagingTier *int32
+
+	// DNSRecords is populated for email senders only. The contract declares it
+	// on SenderId, and the onboarding screen shows one row per record with its
+	// own state, so it is loaded alongside rather than behind a second call the
+	// frontend would have to know to make.
+	DNSRecords []SenderDNSRecord
+}
+
+// SenderDNSRecord is one DNS record an email sender must publish.
+type SenderDNSRecord struct {
+	Type   string
+	Host   string
+	Value  string
+	Status string
+}
+
+// LoadSenderDNSRecords attaches DNS records to the senders that have them.
+//
+// One query for the whole set rather than one per sender: the senders list is
+// short but this is on a page load, and a per-row query is the shape that turns
+// into an N+1 the moment a customer has twenty senders.
+func LoadSenderDNSRecords(ctx context.Context, tx pgx.Tx, senders []SenderID) error {
+	ids := make([]uuid.UUID, 0, len(senders))
+	for _, sender := range senders {
+		if sender.Channel == "EMAIL" {
+			ids = append(ids, sender.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT sender_id, record_type, host, value, status
+		FROM sender_dns_records WHERE sender_id = ANY($1)
+		ORDER BY sender_id, record_type`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	bySender := map[uuid.UUID][]SenderDNSRecord{}
+	for rows.Next() {
+		var senderID uuid.UUID
+		var record SenderDNSRecord
+		if err := rows.Scan(&senderID, &record.Type, &record.Host,
+			&record.Value, &record.Status); err != nil {
+			return err
+		}
+		bySender[senderID] = append(bySender[senderID], record)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range senders {
+		if records, ok := bySender[senders[i].ID]; ok {
+			senders[i].DNSRecords = records
+		}
+	}
+	return nil
 }
 
 const senderColumns = `id, header, channel, country, status, rejection_reason,
 	external_id, waba_id, display_name, phone_number, email_domain, from_address,
-	from_name, caller_id_number, voice_code, voice_verified, created_at`
+	from_name, caller_id_number, voice_code, voice_verified, created_at,
+	quality_rating, messaging_tier`
 
 func scanSender(row pgx.Row) (SenderID, error) {
 	var s SenderID
 	err := row.Scan(&s.ID, &s.Header, &s.Channel, &s.Country, &s.Status,
 		&s.RejectionReason, &s.ExternalID, &s.WabaID, &s.DisplayName, &s.PhoneNumber,
 		&s.EmailDomain, &s.FromAddress, &s.FromName, &s.CallerIDNumber,
-		&s.VoiceCode, &s.VoiceVerified, &s.CreatedAt)
+		&s.VoiceCode, &s.VoiceVerified, &s.CreatedAt,
+		&s.QualityRating, &s.MessagingTier)
 	return s, err
 }
 
@@ -65,7 +131,14 @@ func ListSenderIDs(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Send
 			}
 			out = append(out, sender)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// Closed explicitly before the next query: pgx allows only one active
+		// result set per connection, so leaving this open makes the DNS query
+		// fail with a "conn busy" that looks nothing like its cause.
+		rows.Close()
+		return LoadSenderDNSRecords(ctx, tx, out)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list sender ids: %w", err)
@@ -103,7 +176,43 @@ func CreateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, sender
 			id.TenantID, sender.Header, sender.Channel, sender.Country,
 			sender.WabaID, sender.DisplayName, sender.PhoneNumber, sender.EmailDomain,
 			sender.FromAddress, sender.FromName, sender.CallerIDNumber))
-		return err
+		if err != nil {
+			return err
+		}
+		// An email sender is not usable until its domain is authenticated, and
+		// the records to publish are derived from the domain the customer just
+		// gave us. Generating them here — in the same transaction as the sender
+		// — means the onboarding screen never renders a sender with nowhere to
+		// send the customer next.
+		if sender.Channel == "EMAIL" && sender.EmailDomain != nil && *sender.EmailDomain != "" {
+			domain := *sender.EmailDomain
+			_, err = tx.Exec(ctx, `
+				INSERT INTO sender_dns_records (tenant_id, sender_id, record_type, host, value)
+				VALUES ($1, $2, 'SPF',   $3,            $4),
+				       ($1, $2, 'DKIM',  $5,            $6),
+				       ($1, $2, 'DMARC', $7,            $8)`,
+				id.TenantID, created.ID,
+				domain, "v=spf1 include:mail.relay-platform.example ~all",
+				"relay1._domainkey."+domain, "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCB",
+				"_dmarc."+domain, "v=DMARC1; p=quarantine; rua=mailto:dmarc@"+domain)
+			if err != nil {
+				return err
+			}
+			// Load them onto the sender being returned.
+			//
+			// `created` was scanned from the INSERT's RETURNING clause, which
+			// ran before these records existed, so it carried an empty list.
+			// The onboarding screen reads exactly this response to tell the
+			// customer which records to publish — so registering an email
+			// sender showed them a sender with nothing to do and no way
+			// forward, until they happened to reload the page.
+			senders := []SenderID{created}
+			if err := LoadSenderDNSRecords(ctx, tx, senders); err != nil {
+				return err
+			}
+			created = senders[0]
+		}
+		return nil
 	})
 	if isUniqueViolation(err) {
 		return SenderID{}, ErrConflict
@@ -177,15 +286,27 @@ type Template struct {
 	Status          string
 	RejectionReason *string
 	CreatedAt       time.Time
+
+	// Channel-specific message content, carried as raw JSON exactly as the
+	// contract defines it. Kept as bytes rather than decoded into a Go type
+	// here because each is a discriminated union whose variants are generated
+	// from the contract — the API layer owns those types, and decoding twice
+	// would mean two definitions of the same shape. Exactly one of the three is
+	// non-nil for any template; the database enforces that against the channel.
+	RCSContent   []byte
+	WAContent    []byte
+	EmailContent []byte
 }
 
 const templateColumns = `id, sender_id, name, channel, country, body, category,
-	variables, cta_url, status, rejection_reason, created_at`
+	variables, cta_url, status, rejection_reason, created_at,
+	rcs_content, wa_content, email_content`
 
 func scanTemplate(row pgx.Row) (Template, error) {
 	var t Template
 	err := row.Scan(&t.ID, &t.SenderID, &t.Name, &t.Channel, &t.Country, &t.Body,
-		&t.Category, &t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt)
+		&t.Category, &t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt,
+		&t.RCSContent, &t.WAContent, &t.EmailContent)
 	return t, err
 }
 
@@ -230,18 +351,37 @@ func GetTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templateI
 	return template, nil
 }
 
+// nullableJSON keeps an absent payload as SQL NULL rather than the two bytes
+// "{}" or an empty string. jsonb rejects the empty string outright, and "{}"
+// would store "this template has WhatsApp content, and it is empty" — which the
+// channel-matching CHECK then reads as a WhatsApp payload on whatever channel
+// the template actually is.
+func nullableJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
+}
+
 func CreateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, template Template) (Template, error) {
 	var created Template
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		var err error
 		created, err = scanTemplate(tx.QueryRow(ctx, `
 			INSERT INTO templates (tenant_id, sender_id, name, channel, country,
-			    body, category, variables, cta_url)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			    body, category, variables, cta_url,
+			    rcs_content, wa_content, email_content)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			RETURNING `+templateColumns,
 			id.TenantID, template.SenderID, template.Name, template.Channel,
 			template.Country, template.Body, template.Category,
-			template.Variables, template.CtaURL))
+			template.Variables, template.CtaURL,
+			// Columns are named explicitly above. An insert bound to table
+			// order broke every send once already, the day a column was added
+			// to the message table — see internal/store/messages.go.
+			nullableJSON(template.RCSContent),
+			nullableJSON(template.WAContent),
+			nullableJSON(template.EmailContent)))
 		return err
 	})
 	if isUniqueViolation(err) {
@@ -371,4 +511,26 @@ func RegistrationStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return "", fmt.Errorf("store: registration status: %w", err)
 	}
 	return status, nil
+}
+
+// ClearSenderVoiceCode discards a pending verification code.
+//
+// Called when someone enters the wrong one. The code is six digits, and leaving
+// it valid after a failed attempt makes it brute-forceable by anyone holding a
+// session: a million guesses is minutes of scripted requests, and the prize is
+// the right to place calls under a number you do not own. Burning it on the
+// first miss costs an honest user one extra call and costs an attacker the
+// whole attack.
+func ClearSenderVoiceCode(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	senderID uuid.UUID) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE sender_ids SET voice_code = NULL WHERE id = $1`, senderID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: clear voice code: %w", err)
+	}
+	return nil
 }

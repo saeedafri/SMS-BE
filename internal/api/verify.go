@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/saeedafri/sms-be/internal/domain/verify"
@@ -172,7 +173,7 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 			"Too many codes requested for this number. Try again later.")), nil
 	}
 
-	code, err := verify.GenerateCode(service.CodeLength)
+	code, err := verify.GenerateCode(service.CodeLength, s.EnableDevEndpoints)
 	if err != nil {
 		return nil, err
 	}
@@ -333,9 +334,22 @@ func (s *Server) GetVerifyAnalytics(ctx context.Context, request gen.GetVerifyAn
 
 	requested, verified := len(verifications), 0
 	var cost int64
+	// Counted from each verification's own fraud_flag. These were three
+	// hardcoded zeros, which is the worst possible answer for a fraud panel: it
+	// is indistinguishable from "we checked and found nothing", so a customer
+	// under attack sees an all-clear.
+	var fraud gen.VerifyFraudCounts
 	byDay := map[time.Time]*gen.VerifyAnalyticsBucket{}
 	for _, verification := range verifications {
 		cost += verification.CostMinor
+		switch verification.FraudFlag {
+		case "velocity":
+			fraud.Velocity++
+		case "geo_anomaly":
+			fraud.GeoAnomaly++
+		case "blocked":
+			fraud.Blocked++
+		}
 		day := verification.CreatedAt.UTC().Truncate(24 * time.Hour)
 		bucket, seen := byDay[day]
 		if !seen {
@@ -368,15 +382,88 @@ func (s *Server) GetVerifyAnalytics(ctx context.Context, request gen.GetVerifyAn
 	for _, bucket := range byDay {
 		buckets = append(buckets, *bucket)
 	}
+	// Sorted, because Go randomises map iteration order deliberately. Without
+	// this the buckets came out shuffled differently on every request and the
+	// trend chart drew a different zigzag each time it was refreshed, from the
+	// same unchanged data.
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].BucketStart.Before(buckets[j].BucketStart)
+	})
 
 	return gen.GetVerifyAnalytics200JSONResponse(gen.VerifyAnalytics{
 		Summary: gen.VerifyAnalyticsSummary{
 			Requested: requested, Sent: requested, Delivered: requested,
 			Verified: verified, SuccessRate: float32(successRate),
-			FraudCounts: gen.VerifyFraudCounts{Velocity: 0, GeoAnomaly: 0, Blocked: 0},
+			FraudCounts: fraud,
 			CostMinor:   int(cost), CostPerConversionMinor: int(costPerConversion),
 			Currency: gen.CurrencyCode("INR"),
 		},
 		Buckets: buckets,
 	}), nil
+}
+
+// UpdateVerifyService replaces a service's configuration.
+//
+// The same validation as create, deliberately duplicated rather than shared
+// through a helper: the two operations return different response types, and a
+// shared validator would have to be generic over both for no gain. The rules
+// themselves are one line each and read plainly here.
+func (s *Server) UpdateVerifyService(ctx context.Context, request gen.UpdateVerifyServiceRequestObject) (gen.UpdateVerifyServiceResponseObject, error) {
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	body := request.Body
+	if body == nil {
+		return gen.UpdateVerifyService422JSONResponse(errorBody(codeValidation,
+			"Nothing to update.")), nil
+	}
+
+	channels := make([]store.VerifyChannelConfig, 0, len(body.Channels))
+	for _, channel := range body.Channels {
+		// Copy with no {{code}} means the recipient gets a message with no code
+		// in it; two means carriers reject it as a template mismatch.
+		if !verify.BodyHasCodeVariable(channel.Body) {
+			return gen.UpdateVerifyService422JSONResponse(errorBody(codeValidation,
+				"Each channel's message must contain exactly one {{code}} variable.")), nil
+		}
+		channels = append(channels, store.VerifyChannelConfig{
+			Channel: string(channel.Channel), SenderID: channel.SenderId.String(),
+			Body: channel.Body,
+		})
+	}
+	if len(channels) == 0 {
+		return gen.UpdateVerifyService422JSONResponse(errorBody(codeValidation,
+			"At least one channel is required.")), nil
+	}
+	switch body.CodeLength {
+	case 4, 6, 8:
+	default:
+		return gen.UpdateVerifyService422JSONResponse(errorBody(codeValidation,
+			"Code length must be 4, 6 or 8.")), nil
+	}
+
+	fallback := make([]string, 0, len(body.FallbackOrder))
+	for _, channel := range body.FallbackOrder {
+		fallback = append(fallback, string(channel))
+	}
+
+	updated, err := store.UpdateVerifyService(ctx, s.DB, identity, request.Id,
+		store.VerifyService{
+			Name: body.Name, Channels: channels, FallbackOrder: fallback,
+			CodeLength: body.CodeLength, CodeTTLSeconds: body.CodeTtlSeconds,
+			MaxAttempts: body.MaxAttempts, MaxPerPhone: body.RateLimit.MaxPerPhone,
+			WindowSeconds:   body.RateLimit.WindowSeconds,
+			CooldownSeconds: body.RateLimit.CooldownSeconds,
+			RegionAllowlist: body.RegionAllowlist,
+		})
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateVerifyService404JSONResponse(
+			errorBody(codeNotFound, "No such service.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.UpdateVerifyService200JSONResponse(
+		s.toVerifyService(ctx, identity, updated)), nil
 }

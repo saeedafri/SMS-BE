@@ -15,6 +15,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/mailer"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/resilience"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
@@ -72,6 +73,27 @@ func run() error {
 	clickhouse := store.NewClickHousePool(cfg.ClickHouseURL, logger)
 	defer clickhouse.Close()
 
+	// The admin pool exists only to let the dev reset hook rebuild the demo
+	// tenant, so it is opened only when those hooks are on. A production process
+	// never holds a handle to the migration role.
+	var adminPool *pgxpool.Pool
+	if cfg.EnableDevEndpoints && cfg.DatabaseAdminURL != "" {
+		adminPool, err = pgxpool.New(ctx, cfg.DatabaseAdminURL)
+		if err != nil {
+			return err
+		}
+		defer adminPool.Close()
+	}
+
+	// The operator console's pool. Separate from the tenant pool because its
+	// connections carry cross-tenant visibility; keeping them apart means a
+	// tenant handler cannot accidentally acquire one.
+	operatorPool, err := store.OpenOperatorPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer operatorPool.Close()
+
 	sandbox := connector.NewSandbox(0)
 	metrics := api.NewMetrics()
 
@@ -125,7 +147,12 @@ func run() error {
 	server := &http.Server{
 		Addr: cfg.ControlAPIAddr,
 		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
-			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics}),
+			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
+			EnableDevEndpoints: cfg.EnableDevEndpoints, AdminDB: adminPool,
+			OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL,
+			Mail: &mailer.Mailer{
+				APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
+			}}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -19,11 +20,17 @@ func contactListResponse(l store.ContactList) gen.ContactList {
 	if counts == nil {
 		counts = map[string]int{}
 	}
+	// Always sent, including when it is zero. Unlike an optional field where
+	// absent means "not applicable", a zero here is a real and important
+	// answer: nobody on this list can be messaged freely on WhatsApp right now.
+	// Omitting it would let the wizard read "unknown" as "no restriction".
+	waSessionActive := l.WaSessionActive
 	return gen.ContactList{
 		Id:              l.ID,
 		Name:            l.Name,
 		ContactCount:    l.ContactCount,
 		ConsentedCounts: counts,
+		WaSessionActive: &waSessionActive,
 		CreatedAt:       l.CreatedAt,
 	}
 }
@@ -180,6 +187,23 @@ func contactResponse(c store.Contact) gen.Contact {
 	}
 	if city, ok := c.Fields["city"]; ok && city != "" {
 		contact.Fields.City = &city
+	}
+	// When each channel's consent was granted. This drives WhatsApp's 24-hour
+	// service window: outside it a business may only send a pre-approved
+	// template, and the campaign wizard shows how much of a list is still
+	// inside. The store has always loaded this and the contract has always
+	// declared it — it was simply never copied across, so every contact
+	// reported no consent timestamp and the window stat had nothing to count.
+	//
+	// Omitted rather than sent empty when a contact has no timestamps at all:
+	// "never recorded" and "recorded as nothing" mean different things to a
+	// screen deciding whether it can show a window at all.
+	if len(c.ConsentedAt) > 0 {
+		consentedAt := make(map[string]time.Time, len(c.ConsentedAt))
+		for channel, at := range c.ConsentedAt {
+			consentedAt[channel] = at
+		}
+		contact.ConsentedAt = &consentedAt
 	}
 	return contact
 }

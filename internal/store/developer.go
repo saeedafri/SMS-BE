@@ -51,12 +51,19 @@ func generateSecret(environment string) (secret, prefix string, hash []byte, err
 	return secret, prefix, sum[:], nil
 }
 
-func ListAPIKeys(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]APIKey, error) {
+// ListAPIKeys returns the tenant's keys for one environment.
+//
+// The environment is required, not optional. Live and test credentials are
+// different secrets with different blast radii, and the screen that shows them
+// is explicitly one or the other. Listing both together — which is what this
+// did before, because the parameter was never read — puts live keys on the
+// test-mode page.
+func ListAPIKeys(ctx context.Context, pool *pgxpool.Pool, id Identity, environment string) ([]APIKey, error) {
 	var out []APIKey
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT id, name, environment, scopes, key_prefix, status, last_used_at, created_at
-			FROM api_keys ORDER BY created_at DESC`)
+			FROM api_keys WHERE environment = $1 ORDER BY created_at DESC`, environment)
 		if err != nil {
 			return err
 		}
@@ -189,13 +196,22 @@ type WebhookEndpoint struct {
 	SigningSecret string
 }
 
-func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]WebhookEndpoint, error) {
+// ListWebhooks returns the tenant's endpoints for one environment. Scoped for
+// the same reason as ListAPIKeys: a test endpoint and a live endpoint receive
+// different traffic, and showing both on one screen invites someone to point
+// production deliveries at a staging URL.
+// A nil environment means "every environment", which is what the by-id lookups
+// need: an endpoint is addressed by its id alone, and the caller does not know
+// which environment it lives in until it has been read.
+func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, id Identity, environment *string) ([]WebhookEndpoint, error) {
 	var out []WebhookEndpoint
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT id, environment, url, subscribed_events, signing_secret_prefix,
 			       status, created_at
-			FROM webhook_endpoints ORDER BY created_at DESC`)
+			FROM webhook_endpoints
+			WHERE ($1::text IS NULL OR environment = $1)
+			ORDER BY created_at DESC`, environment)
 		if err != nil {
 			return err
 		}
@@ -389,12 +405,15 @@ type IPAllowEntry struct {
 	CreatedAt   time.Time
 }
 
-func ListIPAllowlist(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]IPAllowEntry, error) {
+// ListIPAllowlist returns the allowed source ranges for one environment. An
+// allowlist shown for the wrong environment is actively dangerous: it reads as
+// "these addresses may call us" for a set of addresses that in fact may not.
+func ListIPAllowlist(ctx context.Context, pool *pgxpool.Pool, id Identity, environment string) ([]IPAllowEntry, error) {
 	var out []IPAllowEntry
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT id, environment, cidr, label, created_at FROM ip_allowlist
-			 ORDER BY created_at DESC`)
+			 WHERE environment = $1 ORDER BY created_at DESC`, environment)
 		if err != nil {
 			return err
 		}

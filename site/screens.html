@@ -1,0 +1,1343 @@
+
+<!DOCTYPE html>
+
+<html class="no-js" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<meta content="How the Relay messaging platform works, end to end" name="description"/>
+<link href="walkthrough.html" rel="prev"/>
+<link href="ARCHITECTURE.html" rel="next"/>
+<link href="assets/images/favicon.png" rel="icon"/>
+<meta content="mkdocs-1.6.1, mkdocs-material-9.7.7" name="generator"/>
+<title>Every screen, every button - Relay Engineering Guide</title>
+<link href="assets/stylesheets/main.ec1eaa64.min.css" rel="stylesheet"/>
+<link href="assets/stylesheets/palette.ab4e12ef.min.css" rel="stylesheet"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback" rel="stylesheet"/>
+<style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+<script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+</head>
+<body data-md-color-accent="teal" data-md-color-primary="teal" data-md-color-scheme="default" dir="ltr">
+<input autocomplete="off" class="md-toggle" data-md-toggle="drawer" id="__drawer" type="checkbox"/>
+<input autocomplete="off" class="md-toggle" data-md-toggle="search" id="__search" type="checkbox"/>
+<label class="md-overlay" for="__drawer"></label>
+<div data-md-component="skip">
+<a class="md-skip" href="#every-screen-every-button">
+          Skip to content
+        </a>
+</div>
+<div data-md-component="announce">
+</div>
+<header class="md-header md-header--shadow" data-md-component="header">
+<nav aria-label="Header" class="md-header__inner md-grid">
+<a aria-label="Relay Engineering Guide" class="md-header__button md-logo" data-md-component="logo" href="index.html" title="Relay Engineering Guide">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+<label class="md-header__button md-icon" for="__drawer">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+</label>
+<div class="md-header__title" data-md-component="header-title">
+<div class="md-header__ellipsis">
+<div class="md-header__topic">
+<span class="md-ellipsis">
+            Relay Engineering Guide
+          </span>
+</div>
+<div class="md-header__topic" data-md-component="header-topic">
+<span class="md-ellipsis">
+            
+              Every screen, every button
+            
+          </span>
+</div>
+</div>
+</div>
+<form class="md-header__option" data-md-component="palette">
+<input aria-label="Dark" class="md-option" data-md-color-accent="teal" data-md-color-media="(prefers-color-scheme: light)" data-md-color-primary="teal" data-md-color-scheme="default" id="__palette_0" name="__palette" type="radio"/>
+<label class="md-header__button md-icon" for="__palette_1" hidden="" title="Dark">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"></path></svg>
+</label>
+<input aria-label="Light" class="md-option" data-md-color-accent="teal" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-primary="teal" data-md-color-scheme="slate" id="__palette_1" name="__palette" type="radio"/>
+<label class="md-header__button md-icon" for="__palette_0" hidden="" title="Light">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"></path></svg>
+</label>
+</form>
+<script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+<label class="md-header__button md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+</label>
+<div class="md-search" data-md-component="search" role="dialog">
+<label class="md-search__overlay" for="__search"></label>
+<div class="md-search__inner" role="search">
+<form class="md-search__form" name="search">
+<input aria-label="Search" autocapitalize="off" autocomplete="off" autocorrect="off" class="md-search__input" data-md-component="search-query" name="query" placeholder="Search" required="" spellcheck="false" type="text"/>
+<label class="md-search__icon md-icon" for="__search">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+</label>
+<nav aria-label="Search" class="md-search__options">
+<button aria-label="Clear" class="md-search__icon md-icon" tabindex="-1" title="Clear" type="reset">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+</button>
+</nav>
+</form>
+<div class="md-search__output">
+<div class="md-search__scrollwrap" data-md-scrollfix="" tabindex="0">
+<div class="md-search-result" data-md-component="search-result">
+<div class="md-search-result__meta">
+            Initializing search
+          </div>
+<ol class="md-search-result__list" role="presentation"></ol>
+</div>
+</div>
+</div>
+</div>
+</div>
+</nav>
+</header>
+<div class="md-container" data-md-component="container">
+<main class="md-main" data-md-component="main">
+<div class="md-main__inner md-grid">
+<div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Navigation" class="md-nav md-nav--primary" data-md-level="0">
+<label class="md-nav__title" for="__drawer">
+<a aria-label="Relay Engineering Guide" class="md-nav__button md-logo" data-md-component="logo" href="index.html" title="Relay Engineering Guide">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+</a>
+    Relay Engineering Guide
+  </label>
+<ul class="md-nav__list" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="index.html">
+<span class="md-ellipsis">
+    
+  
+    Start here
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="walkthrough.html">
+<span class="md-ellipsis">
+    
+  
+    The product in one message
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item md-nav__item--active">
+<input class="md-nav__toggle md-toggle" id="__toc" type="checkbox"/>
+<label class="md-nav__link md-nav__link--active" for="__toc">
+<span class="md-ellipsis">
+    
+  
+    Every screen, every button
+  
+
+    
+  </span>
+<span class="md-nav__icon md-icon"></span>
+</label>
+<a class="md-nav__link md-nav__link--active" href="screens.html">
+<span class="md-ellipsis">
+    
+  
+    Every screen, every button
+  
+
+    
+  </span>
+</a>
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#overview">
+<span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#campaigns">
+<span class="md-ellipsis">
+      
+        Campaigns
+      
+    </span>
+</a>
+<nav aria-label="Campaigns" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-campaign-wizard">
+<span class="md-ellipsis">
+      
+        The campaign wizard
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#audience">
+<span class="md-ellipsis">
+      
+        Audience
+      
+    </span>
+</a>
+<nav aria-label="Audience" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-whatsapp-24-hour-window">
+<span class="md-ellipsis">
+      
+        The WhatsApp 24-hour window
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#suppressions">
+<span class="md-ellipsis">
+      
+        Suppressions
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#compliance">
+<span class="md-ellipsis">
+      
+        Compliance
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#senders">
+<span class="md-ellipsis">
+      
+        Senders
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#templates">
+<span class="md-ellipsis">
+      
+        Templates
+      
+    </span>
+</a>
+<nav aria-label="Templates" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#only-sms-is-just-a-string">
+<span class="md-ellipsis">
+      
+        Only SMS is just a string
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#developer">
+<span class="md-ellipsis">
+      
+        Developer
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#analytics">
+<span class="md-ellipsis">
+      
+        Analytics
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#billing">
+<span class="md-ellipsis">
+      
+        Billing
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#settings">
+<span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#support-and-inbox">
+<span class="md-ellipsis">
+      
+        Support and Inbox
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#operator-console">
+<span class="md-ellipsis">
+      
+        Operator console
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#what-happens-on-every-single-request">
+<span class="md-ellipsis">
+      
+        What happens on every single request
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="ARCHITECTURE.html">
+<span class="md-ellipsis">
+    
+  
+    Architecture and why
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="pipeline.html">
+<span class="md-ellipsis">
+    
+  
+    The send pipeline
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="money.html">
+<span class="md-ellipsis">
+    
+  
+    Money
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="compliance.html">
+<span class="md-ellipsis">
+    
+  
+    Compliance
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="analytics.html">
+<span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="operator.html">
+<span class="md-ellipsis">
+    
+  
+    Operator console
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="reliability.html">
+<span class="md-ellipsis">
+    
+  
+    Reliability
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="numbers.html">
+<span class="md-ellipsis">
+    
+  
+    Numbers and deployment
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="gaps.html">
+<span class="md-ellipsis">
+    
+  
+    What is not done
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="ui-team.html">
+<span class="md-ellipsis">
+    
+  
+    For the frontend team
+  
+
+    
+  </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="handoff-ui.html">
+<span class="md-ellipsis">
+    
+  
+    Handoff — frontend changes
+  
+
+    
+  </span>
+</a>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+<div class="md-sidebar__scrollwrap">
+<div class="md-sidebar__inner">
+<nav aria-label="Table of contents" class="md-nav md-nav--secondary">
+<label class="md-nav__title" for="__toc">
+<span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+<ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#overview">
+<span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#campaigns">
+<span class="md-ellipsis">
+      
+        Campaigns
+      
+    </span>
+</a>
+<nav aria-label="Campaigns" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-campaign-wizard">
+<span class="md-ellipsis">
+      
+        The campaign wizard
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#audience">
+<span class="md-ellipsis">
+      
+        Audience
+      
+    </span>
+</a>
+<nav aria-label="Audience" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#the-whatsapp-24-hour-window">
+<span class="md-ellipsis">
+      
+        The WhatsApp 24-hour window
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#suppressions">
+<span class="md-ellipsis">
+      
+        Suppressions
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#compliance">
+<span class="md-ellipsis">
+      
+        Compliance
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#senders">
+<span class="md-ellipsis">
+      
+        Senders
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#templates">
+<span class="md-ellipsis">
+      
+        Templates
+      
+    </span>
+</a>
+<nav aria-label="Templates" class="md-nav">
+<ul class="md-nav__list">
+<li class="md-nav__item">
+<a class="md-nav__link" href="#only-sms-is-just-a-string">
+<span class="md-ellipsis">
+      
+        Only SMS is just a string
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#developer">
+<span class="md-ellipsis">
+      
+        Developer
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#analytics">
+<span class="md-ellipsis">
+      
+        Analytics
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#billing">
+<span class="md-ellipsis">
+      
+        Billing
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#settings">
+<span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#support-and-inbox">
+<span class="md-ellipsis">
+      
+        Support and Inbox
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#operator-console">
+<span class="md-ellipsis">
+      
+        Operator console
+      
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#what-happens-on-every-single-request">
+<span class="md-ellipsis">
+      
+        What happens on every single request
+      
+    </span>
+</a>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+</div>
+<div class="md-content" data-md-component="content">
+<article class="md-content__inner md-typeset">
+<h1 id="every-screen-every-button">Every screen, every button<a class="headerlink" href="#every-screen-every-button" title="Permanent link">¶</a></h1>
+<p><strong>This page exists so that a junior can point at any button and know exactly what
+happens in the backend when it is clicked.</strong></p>
+<p>Every screenshot is real, taken from the running product signed in as
+<code>founder@acme.test</code> with the seeded Acme Retail data. Every endpoint named is the one
+actually called.</p>
+<hr/>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">¶</a></h2>
+<p><img alt="Overview" src="screens/overview.png"/></p>
+<p>The landing screen after sign-in. It is a read-only summary — nothing here changes
+state.</p>
+<table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>Where it comes from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wallet balance in the header</td>
+<td><code>GET /v1/wallet</code> — derived by summing the ledger, never a stored figure</td>
+</tr>
+<tr>
+<td>Recent campaigns</td>
+<td><code>GET /v1/campaigns</code></td>
+</tr>
+<tr>
+<td>Delivery numbers</td>
+<td><code>GET /v1/analytics?range=30d</code> → ClickHouse rollup</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The environment switch (Live / Test)</strong> in the header sets a cookie the UI sends on
+later requests. Test and Live have separate API keys — the same screen, different data.</p>
+<hr/>
+<h2 id="campaigns">Campaigns<a class="headerlink" href="#campaigns" title="Permanent link">¶</a></h2>
+<p><img alt="Campaigns" src="screens/campaigns.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>What actually happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New campaign</strong></td>
+<td>—</td>
+<td>Navigates to the six-step wizard</td>
+</tr>
+<tr>
+<td>A campaign row</td>
+<td><code>GET /v1/campaigns/{id}</code></td>
+<td>Opens detail with per-message outcomes</td>
+</tr>
+<tr>
+<td><strong>Retry failed</strong> (on detail)</td>
+<td><code>POST /v1/campaigns/{id}/retry</code></td>
+<td>Creates a <strong>new</strong> campaign containing only the failed recipients, linked back by <code>retry_of</code>. It does not re-send the original — resending a campaign that already charged for delivered messages would double-bill them.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="the-campaign-wizard">The campaign wizard<a class="headerlink" href="#the-campaign-wizard" title="Permanent link">¶</a></h3>
+<p><img alt="New campaign" src="screens/campaign-new.png"/></p>
+<p>Six steps, and each one is a guard rather than a form field:</p>
+<pre class="mermaid"><code>flowchart LR
+    A[1 Channel&lt;br/&gt;+ country] --&gt; B[2 Audience]
+    B --&gt; C[3 Sender]
+    C --&gt; D[4 Template]
+    D --&gt; E[5 Schedule]
+    E --&gt; F[6 Review&lt;br/&gt;+ send]
+    style F fill:#E1F0E7,stroke:#1D6B45</code></pre>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Guard enforced</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 · Channel + country</td>
+<td>Only combinations you are compliant for are selectable</td>
+</tr>
+<tr>
+<td>2 · Audience</td>
+<td>Shows <strong>reachable</strong> count, not list size — opted-out and suppressed contacts are already excluded</td>
+</tr>
+<tr>
+<td>3 · Sender</td>
+<td>Only <code>approved</code> senders for that country and channel appear</td>
+</tr>
+<tr>
+<td>4 · Template</td>
+<td>Only <code>approved</code> templates bound to that sender</td>
+</tr>
+<tr>
+<td>5 · Schedule</td>
+<td>Now, or a future time</td>
+</tr>
+<tr>
+<td>6 · Review</td>
+<td>Shows a cost <strong>range</strong>, then <strong>Send campaign</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Send campaign</strong> calls <code>POST /v1/campaigns</code>. Before a single message goes out the
+backend re-checks consent, re-prices, and reserves the money. The wizard's guards are
+convenience; these checks are the real enforcement, because an API caller never saw
+the wizard.</p>
+<div class="admonition note">
+<p class="admonition-title">Why a cost range and not one number</p>
+<p>A message's cost depends on how many segments it becomes, and that depends on the
+characters in it after variables are substituted. <code>{{first_name}}</code> might be "Jo"
+or "Priyadarshini". The range is honest; a single number would be a guess.</p>
+</div>
+<hr/>
+<h2 id="audience">Audience<a class="headerlink" href="#audience" title="Permanent link">¶</a></h2>
+<p><img alt="Audience" src="screens/audience.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Import</strong></td>
+<td><code>POST /v1/contacts/import</code></td>
+<td>CSV upload, previewed before commit</td>
+</tr>
+<tr>
+<td><strong>New list</strong></td>
+<td><code>POST /v1/contact-lists</code></td>
+<td></td>
+</tr>
+<tr>
+<td>A list row</td>
+<td><code>GET /v1/contact-lists/{id}</code></td>
+<td>Members and per-channel consent</td>
+</tr>
+<tr>
+<td><strong>Suppressions</strong></td>
+<td><code>GET /v1/suppressions</code></td>
+<td>The do-not-contact register</td>
+</tr>
+</tbody>
+</table>
+<p>Seeded list <strong>"Diwali 2026"</strong> holds four contacts. Consent is <strong>per channel</strong> — Priya
+is opted in for SMS but unknown for RCS. A campaign only counts contacts opted in for
+<em>its</em> channel, which is why 4 members can mean 2 recipients.</p>
+<div class="admonition warning">
+<p class="admonition-title">A bug this caused, worth knowing</p>
+<p>The member count once read 8 for a 4-person list. The query joined a lateral
+expansion of the consent map, producing one row per opted-in channel per contact.
+The fix is <code>count(DISTINCT c.id)</code>. A count that is silently double is worse than
+one that is obviously missing.</p>
+</div>
+<h3 id="the-whatsapp-24-hour-window">The WhatsApp 24-hour window<a class="headerlink" href="#the-whatsapp-24-hour-window" title="Permanent link">¶</a></h3>
+<p>WhatsApp has a rule no other channel has. For <strong>24 hours</strong> after a customer last
+interacts with you, you may send them anything. After that, only a <strong>pre-approved
+template</strong>. So "may we message this person on WhatsApp?" and "may we message them
+<strong>freely, right now</strong>?" are two different questions, and the list screen answers
+both:</p>
+<table>
+<thead>
+<tr>
+<th>Number</th>
+<th>Question it answers</th>
+<th>On "Diwali 2026"</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>consentedCounts.WHATSAPP</code></td>
+<td>Have they ever opted in?</td>
+<td><strong>3</strong></td>
+</tr>
+<tr>
+<td><code>waSessionActive</code></td>
+<td>Are they still inside the 24h window?</td>
+<td><strong>2</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The two differ because <strong>Arjun</strong> last interacted 30 hours ago. He is fully opted
+in — but reaching him now needs an approved template, not free text.</p>
+<div class="admonition note">
+<p class="admonition-title">Why this is counted per request, not stored</p>
+<p>The window is measured from the customer's last interaction, so people drift
+out of it as time passes with nothing happening. A stored count would be wrong
+within the hour and wrong in the dangerous direction — reporting that someone
+is reachable when they are not.</p>
+</div>
+<h3 id="suppressions">Suppressions<a class="headerlink" href="#suppressions" title="Permanent link">¶</a></h3>
+<p><img alt="Suppressions" src="screens/suppressions.png"/></p>
+<p>Two rows are seeded, deliberately with <strong>different reasons</strong> — one
+<code>opted_out_keyword</code>, one <code>manual</code> — because the screen groups by reason and a list
+where every row says the same thing cannot show that grouping works.</p>
+<p>When a customer texts <strong>STOP</strong>, the backend writes a suppression with the note
+"Replied STOP". The keyword match is on the <strong>whole trimmed message</strong>, not a
+substring: "please don't stop the offers" is not an opt-out.</p>
+<hr/>
+<h2 id="compliance">Compliance<a class="headerlink" href="#compliance" title="Permanent link">¶</a></h2>
+<p><img alt="Compliance" src="screens/compliance.png"/></p>
+<p>The readiness board. Each cell is one country × channel, and each says whether you can
+actually send.</p>
+<p><img alt="India compliance" src="screens/compliance-in.png"/></p>
+<pre class="mermaid"><code>flowchart TB
+    E[Entity registration&lt;br/&gt;PE/RTM with DLT] --&gt;|must be approved first| H[Sender header&lt;br/&gt;ACMERT]
+    H --&gt;|then| T[Template&lt;br/&gt;approved per message]
+    T --&gt;|only now| S[You can send]
+    style E fill:#F8EFDC,stroke:#8A5B00
+    style S fill:#E1F0E7,stroke:#1D6B45</code></pre>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Submit registration</strong></td>
+<td><code>POST /v1/registrations</code> — status becomes <code>pending_review</code></td>
+</tr>
+<tr>
+<td><strong>Go to compliance</strong> (from Senders)</td>
+<td>Navigation only — appears when the entity is not yet approved</td>
+</tr>
+</tbody>
+</table>
+<p>A rejection shows the <strong>registry's own words</strong> — "Submitted details did not match the
+registry." — not ours, because those words tell the customer what to fix.</p>
+<hr/>
+<h2 id="senders">Senders<a class="headerlink" href="#senders" title="Permanent link">¶</a></h2>
+<p><img alt="Senders" src="screens/senders.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>Guard</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Register sender</strong></td>
+<td><code>POST /v1/sender-ids</code></td>
+<td>The form does not appear until the country's entity is approved; instead you see "Your India entity must be approved before you can register a sender"</td>
+</tr>
+</tbody>
+</table>
+<p>For an <strong>email</strong> sender the backend also creates three DNS records in the same
+transaction — SPF, DKIM, DMARC — each verifying independently, because "DKIM verified,
+DMARC pending" is the normal middle state of onboarding.</p>
+<hr/>
+<h2 id="templates">Templates<a class="headerlink" href="#templates" title="Permanent link">¶</a></h2>
+<p><img alt="Templates" src="screens/templates.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>New template</strong></td>
+<td>Navigates to the editor</td>
+</tr>
+<tr>
+<td><strong>Create template</strong></td>
+<td><code>POST /v1/templates</code> — starts <code>pending_review</code></td>
+</tr>
+</tbody>
+</table>
+<p><img alt="New template" src="screens/template-new.png"/></p>
+<p>Typing <code>{{first_name}}</code> makes a variable chip appear immediately — that is client-side
+detection, so you see what the message will need before saving. A CTA URL using a
+<strong>link shortener is blocked inline</strong> for India: shorteners are not permitted under DLT
+rules, and catching it here saves a rejection cycle that takes days.</p>
+<h3 id="only-sms-is-just-a-string">Only SMS is just a string<a class="headerlink" href="#only-sms-is-just-a-string" title="Permanent link">¶</a></h3>
+<p>The editor changes shape per channel, because the message itself has a different
+form on each one:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>What a template holds</th>
+<th>Stored as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SMS</strong></td>
+<td>One body, <code>{{variables}}</code> inline</td>
+<td><code>body</code></td>
+</tr>
+<tr>
+<td><strong>Voice</strong></td>
+<td>One body, read aloud by the call</td>
+<td><code>body</code></td>
+</tr>
+<tr>
+<td><strong>RCS</strong></td>
+<td>Either a text with tappable <strong>suggestion chips</strong>, or a <strong>card</strong> with an image, title and description</td>
+<td><code>rcs_content</code></td>
+</tr>
+<tr>
+<td><strong>WhatsApp</strong></td>
+<td>Text, <strong>reply buttons</strong>, or a <strong>list menu</strong> with titled sections</td>
+<td><code>wa_content</code></td>
+</tr>
+<tr>
+<td><strong>Email</strong></td>
+<td><strong>Subject</strong>, HTML body, and an optional preheader</td>
+<td><code>email_content</code></td>
+</tr>
+</tbody>
+</table>
+<p>Real examples from the demo tenant:</p>
+<ul>
+<li><em>Feedback request (WA buttons)</em> — "Hi {{first_name}}, how was your order?" with
+  <code>Great</code>, <code>Not great</code>, and a <code>Leave a review</code> link button.</li>
+<li><em>Support menu (WA list)</em> — "How can we help today?" opening a <code>View options</code>
+  menu of <code>Track my order</code> / <code>Start a return</code> / <code>Talk to a person</code>.</li>
+<li><em>Product launch (RCS card)</em> — an image, "Meet {{product}}", and a <code>Shop now</code>
+  chip.</li>
+<li><em>Diwali sale (Email)</em> — subject "{{first_name}}, our Diwali sale starts now",
+  preheader "20% off everything".</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Why these are one JSON column each, not columns per field</p>
+<p>Each of these is a <em>discriminated union</em> — WhatsApp content is text <strong>or</strong>
+buttons <strong>or</strong> a list — and the set of variants belongs to WhatsApp, not to us.
+A column per variant would mean a schema migration every time Meta ships a new
+message type, and twenty mostly-null columns after a few of those.</p>
+<p>The trade is that the database cannot check the shape, so the API validates it
+against the contract on write. What the database <em>does</em> enforce is that content
+matches its channel: an SMS template physically cannot hold WhatsApp buttons.
+Without that, a template could carry two conflicting bodies and whichever
+renderer looked first would win — which surfaces as the wrong message arriving
+at a customer, not as an error anyone sees.</p>
+</div>
+<hr/>
+<h2 id="developer">Developer<a class="headerlink" href="#developer" title="Permanent link">¶</a></h2>
+<p><img alt="API keys" src="screens/developer-api-keys.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>Important behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Create key</strong></td>
+<td><code>POST /v1/developer/api-keys</code></td>
+<td>The secret is shown <strong>once</strong>. Only a hash is stored, so we genuinely cannot show it again.</td>
+</tr>
+<tr>
+<td><strong>Rotate</strong></td>
+<td><code>POST /v1/developer/api-keys/{id}/rotate</code></td>
+<td>Issues a new secret, revealed once</td>
+</tr>
+<tr>
+<td><strong>Revoke</strong></td>
+<td><code>DELETE /v1/developer/api-keys/{id}</code></td>
+<td>Requires a confirm click</td>
+</tr>
+<tr>
+<td><strong>Add</strong> (IP allowlist)</td>
+<td><code>POST /v1/developer/ip-allowlist</code></td>
+<td>Empty by default — no restriction</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="Webhooks" src="screens/developer-webhooks.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Add endpoint</strong></td>
+<td><code>POST /v1/developer/webhooks</code></td>
+</tr>
+<tr>
+<td><strong>Send test event</strong></td>
+<td><code>POST /v1/developer/webhooks/{id}/test</code></td>
+</tr>
+<tr>
+<td><strong>Resend</strong></td>
+<td><code>POST /v1/developer/webhooks/events/{id}/resend</code></td>
+</tr>
+</tbody>
+</table>
+<p><img alt="Logs" src="screens/developer-logs.png"/></p>
+<p>The message explorer, reading ClickHouse. Filters by status, channel, country and
+fraud flag. This is the screen that answers "what happened to this one message".</p>
+<hr/>
+<h2 id="analytics">Analytics<a class="headerlink" href="#analytics" title="Permanent link">¶</a></h2>
+<p><img alt="Analytics" src="screens/analytics.png"/></p>
+<p>Everything here is measured, not estimated:</p>
+<table>
+<thead>
+<tr>
+<th>Tile</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sent / Delivered / Failed</td>
+<td>ClickHouse rollup, counting attempts once</td>
+</tr>
+<tr>
+<td>Delivery rate</td>
+<td><code>delivered ÷ attempted</code></td>
+</tr>
+<tr>
+<td>Latency p50 / p90</td>
+<td><code>created_at → delivered_at</code>, handset-confirmed</td>
+</tr>
+<tr>
+<td>Cost</td>
+<td>Sum of delivered message cost</td>
+</tr>
+<tr>
+<td>Fraud counts</td>
+<td><code>fraud_flag</code> on message rows</td>
+</tr>
+<tr>
+<td>Deliverability by carrier</td>
+<td>Message rows grouped by carrier</td>
+</tr>
+</tbody>
+</table>
+<p>The range chips (7d / 30d / 90d) and the channel and country filters are <strong>links</strong>,
+not form controls — each carries a query string, so any filtered view is a URL you can
+share or bookmark.</p>
+<div class="admonition danger">
+<p class="admonition-title">Known issue, frontend-side</p>
+<p>Clicking a filter chip currently does not change the URL. Navigating directly to
+the same URL works, and the server renders every filter combination correctly.
+Reproduction: <code>SMS-UI/e2e-probe-chip.mjs</code>.</p>
+</div>
+<hr/>
+<h2 id="billing">Billing<a class="headerlink" href="#billing" title="Permanent link">¶</a></h2>
+<p><img alt="Billing" src="screens/billing.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Top up</strong></td>
+<td><code>POST /v1/wallet/topup</code></td>
+<td>Charges the saved card, appends a <code>topup</code> row, balance moves</td>
+</tr>
+<tr>
+<td><strong>Auto-recharge</strong></td>
+<td><code>PUT /v1/wallet/auto-recharge</code></td>
+<td>When the balance crosses a threshold, top up automatically</td>
+</tr>
+</tbody>
+</table>
+<p>The ledger below the balance is <strong>append-only at the database level</strong>. A trigger
+refuses <code>UPDATE</code> and <code>DELETE</code> — even from psql, even as the table owner. The balance
+shown is derived by summing it, so the two cannot disagree.</p>
+<p><img alt="Usage" src="screens/billing-usage.png"/></p>
+<p>Spend by channel, by campaign, and by journey. Channel totals come from the wallet;
+campaign and journey attribution comes from the message rows, because only a message
+knows what caused it.</p>
+<p><img alt="Invoices" src="screens/billing-invoices.png"/></p>
+<p>Clicking an invoice calls <code>GET /v1/billing/invoices/{id}</code> and shows line items with a
+computed total — subtotal, 18% tax, total.</p>
+<hr/>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">¶</a></h2>
+<p><img alt="Settings" src="screens/settings.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Save</strong> (profile)</td>
+<td><code>PATCH /v1/me</code></td>
+</tr>
+<tr>
+<td><strong>Update password</strong></td>
+<td><code>POST /v1/auth/change-password</code> — requires the current password</td>
+</tr>
+<tr>
+<td><strong>Enable MFA</strong></td>
+<td><code>POST /v1/auth/mfa/enroll</code> then <code>/verify</code> — TOTP, with recovery codes shown once</td>
+</tr>
+<tr>
+<td><strong>Invite</strong> (team)</td>
+<td><code>POST /v1/team/invite</code></td>
+</tr>
+<tr>
+<td><strong>Save</strong> (alerts)</td>
+<td><code>PUT /v1/alerts</code></td>
+</tr>
+<tr>
+<td><strong>Save</strong> (data retention)</td>
+<td><code>PUT /v1/data-retention</code> — 30, 90, 180 or 365 days</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="Team" src="screens/settings-team.png"/></p>
+<p>Roles are <strong>owner</strong>, <strong>admin</strong>, <strong>member</strong>. A member sees a restricted view; navigating
+to a page their role cannot access shows a "Restricted" screen rather than a 403 —
+the middleware rewrites the response rather than redirecting, so the URL stays put.</p>
+<hr/>
+<h2 id="support-and-inbox">Support and Inbox<a class="headerlink" href="#support-and-inbox" title="Permanent link">¶</a></h2>
+<p><img alt="Support" src="screens/support.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Start a ticket</strong></td>
+<td><code>POST /v1/support/tickets</code></td>
+</tr>
+<tr>
+<td><strong>Reply</strong></td>
+<td><code>POST /v1/support/tickets/{id}/messages</code> — a customer reply reopens a resolved ticket</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="Inbox" src="screens/inbox.png"/></p>
+<p>Two-way conversations with contacts. An inbound message marks the thread unread; an
+outbound reply clears it, because sending a reply means you read what came before.</p>
+<hr/>
+<h2 id="operator-console">Operator console<a class="headerlink" href="#operator-console" title="Permanent link">¶</a></h2>
+<p>Separate identity, separate login, separate session table. A customer token cannot
+reach any of these screens — it returns <strong>401</strong>, verified on every test run.</p>
+<p><img alt="Tenants" src="screens/admin-tenants.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Suspend</strong></td>
+<td><code>POST /v1/operator/tenants/{id}/suspend</code></td>
+<td>Tenant stops sending; clears any abuse flag, because suspension <em>is</em> the decision</td>
+</tr>
+<tr>
+<td><strong>Reinstate</strong></td>
+<td><code>.../reinstate</code></td>
+<td>Clears suspension and throttle</td>
+</tr>
+<tr>
+<td><strong>Throttle</strong></td>
+<td><code>.../throttle</code></td>
+<td>Still sends, just slower — deliberately distinct from suspend</td>
+</tr>
+<tr>
+<td><strong>Flag for abuse</strong></td>
+<td><code>.../flag-abuse</code></td>
+<td>Adds to the abuse queue; flagging twice does not reset the timestamp</td>
+</tr>
+<tr>
+<td><strong>Dismiss flag</strong></td>
+<td><code>.../dismiss-flag</code></td>
+<td>Removes from the queue</td>
+</tr>
+</tbody>
+</table>
+<p>Every one of these writes an audit entry naming the operator. That table is
+append-only too.</p>
+<p><img alt="Approvals" src="screens/admin-approvals.png"/></p>
+<p>Senders and templates awaiting a decision, in one queue — an operator works through
+"what needs a decision", not "what kind of thing needs a decision".</p>
+<p><strong>Reject</strong> requires a reason. A rejection with no reason is useless to the customer
+receiving it: they cannot fix what they are not told about.</p>
+<p><img alt="Routes" src="screens/admin-routes.png"/></p>
+<table>
+<thead>
+<tr>
+<th>Button</th>
+<th>Backend</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Move up / Move down</strong></td>
+<td><code>POST /v1/operator/routes/{id}/move-up</code></td>
+<td>Swaps priority with its neighbour, in one transaction</td>
+</tr>
+<tr>
+<td><strong>Disable / Enable</strong></td>
+<td><code>.../disable</code></td>
+<td>A disabled route is skipped and excluded from cost comparisons</td>
+</tr>
+</tbody>
+</table>
+<p>Route order decides which carrier a customer's traffic actually takes, so every change
+is audited exactly like a suspension.</p>
+<p><img alt="Rates" src="screens/admin-rates.png"/></p>
+<p>Default rates plus per-tenant overrides. Each row shows a <strong>cost reference</strong> — the
+cheapest <em>enabled</em> route for that corridor — so an operator setting a price can see
+the floor. Disabled routes are excluded: a cheap route nobody may use is not a cost
+floor.</p>
+<p><img alt="Usage" src="screens/admin-usage.png"/>
+<img alt="Audit" src="screens/admin-audit.png"/></p>
+<p>The audit log answers "who did this, to whom, and when" months later. It stores the
+tenant <strong>name</strong> as well as the id, so the entry still reads as a sentence after the
+tenant row is gone.</p>
+<hr/>
+<h2 id="what-happens-on-every-single-request">What happens on every single request<a class="headerlink" href="#what-happens-on-every-single-request" title="Permanent link">¶</a></h2>
+<p>Before any handler runs:</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant B as Browser
+    participant M as Auth middleware
+    participant D as Postgres
+    participant H as Handler
+    B-&gt;&gt;M: Bearer token
+    M-&gt;&gt;M: SHA-256 the token
+    alt path starts /v1/operator
+        M-&gt;&gt;D: look up operator_sessions
+    else everything else
+        M-&gt;&gt;D: look up sessions
+    end
+    D--&gt;&gt;M: identity (tenant id)
+    M-&gt;&gt;H: request + identity in context
+    H-&gt;&gt;D: BEGIN; set_config('app.tenant_id', …, true)
+    Note over D: row-level security now filters&lt;br/&gt;every query to this tenant
+    H-&gt;&gt;D: the actual query
+    D--&gt;&gt;H: only this tenant's rows</code></pre>
+<p>The two lookups are deliberately separate. A tenant token must never satisfy an
+operator route, and an operator token must never scope a tenant query. The moment
+those share a code path, one missing branch becomes a cross-tenant leak.</p>
+</article>
+</div>
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+</div>
+<button class="md-top md-icon" data-md-component="top" hidden="" type="button">
+<svg viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"></path></svg>
+  Back to top
+</button>
+</main>
+<footer class="md-footer">
+<div class="md-footer-meta md-typeset">
+<div class="md-footer-meta__inner md-grid">
+<div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" rel="noopener" target="_blank">
+      Material for MkDocs
+    </a>
+</div>
+</div>
+</div>
+</footer>
+</div>
+<div class="md-dialog" data-md-component="dialog">
+<div class="md-dialog__inner md-typeset"></div>
+</div>
+<script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "search.highlight"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+<script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+</body>
+</html>

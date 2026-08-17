@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,14 +33,18 @@ type SupportMessage struct {
 	CreatedAt  time.Time
 }
 
-func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]SupportTicket, error) {
+// ListSupportTickets returns the tenant's tickets, narrowed by status and
+// category when given. Nil means no filter.
+func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity, status, category *string) ([]SupportTicket, error) {
 	var out []SupportTicket
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT t.id, t.tenant_id, n.name, t.subject, t.category, t.status,
 			       t.created_at, t.updated_at
 			FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id
-			ORDER BY t.updated_at DESC, t.id DESC`)
+			WHERE ($1::text IS NULL OR t.status   = $1)
+			  AND ($2::text IS NULL OR t.category = $2)
+			ORDER BY t.updated_at DESC, t.id DESC`, status, category)
 		if err != nil {
 			return err
 		}
@@ -203,6 +208,7 @@ type Conversation struct {
 	ID                 uuid.UUID
 	ContactID          uuid.UUID
 	ContactName        string
+	Country            string
 	Identity           string
 	Channel            string
 	Status             string
@@ -226,7 +232,19 @@ type ConversationMessage struct {
 }
 
 const conversationColumns = `
-	c.id, c.contact_id, ct.msisdn, c.channel, c.status, c.unread,
+	c.id, c.contact_id, ct.msisdn,
+	-- The contact's display name, falling back to their number.
+	--
+	-- This used to be the msisdn unconditionally, with a comment explaining it
+	-- was a placeholder "until contacts carry names". Contacts have carried
+	-- names since the audience work landed; the placeholder simply outlived the
+	-- reason for it, so the inbox listed every thread as a phone number even
+	-- though it knew the person was called Priya.
+	COALESCE(NULLIF(ct.fields ->> 'firstName', ''), ct.msisdn),
+	-- The contact's country, because a reply is priced by corridor: the same
+	-- sentence costs a different amount to India than to the US.
+	ct.country,
+	c.channel, c.status, c.unread,
 	EXISTS (SELECT 1 FROM suppressions s
 	        WHERE s.tenant_id = c.tenant_id AND s.identity = ct.msisdn),
 	COALESCE((SELECT m.body FROM conversation_messages m
@@ -237,21 +255,39 @@ const conversationColumns = `
 func scanConversation(row pgx.Row) (Conversation, error) {
 	var conversation Conversation
 	err := row.Scan(&conversation.ID, &conversation.ContactID, &conversation.Identity,
-		&conversation.Channel, &conversation.Status, &conversation.Unread,
-		&conversation.Suppressed, &conversation.LastMessagePreview,
+		&conversation.ContactName, &conversation.Country,
+		&conversation.Channel, &conversation.Status,
+		&conversation.Unread, &conversation.Suppressed,
+		&conversation.LastMessagePreview,
 		&conversation.CreatedAt, &conversation.UpdatedAt)
-	// The contact's display name is their identity until contacts carry names.
-	conversation.ContactName = conversation.Identity
 	return conversation, err
 }
 
-func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Conversation, error) {
+// ConversationFilter narrows the inbox. Every field is optional and a nil one
+// matches everything, so an absent query parameter behaves as "no filter".
+//
+// The inbox is the screen where filtering matters most: it is the only place an
+// agent works through a queue, and a filter that silently does nothing means
+// they answer the wrong messages first.
+type ConversationFilter struct {
+	Channel *string
+	Status  *string
+	Unread  *bool
+}
+
+func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity, filter ConversationFilter) ([]Conversation, error) {
 	var out []Conversation
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT `+conversationColumns+`
 			FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
-			ORDER BY c.updated_at DESC, c.id DESC`)
+			WHERE ($1::text IS NULL OR c.channel = $1)
+			  AND ($2::text IS NULL OR c.status  = $2)
+			  -- Only filters when the caller asked. unread=false is a real
+			  -- request for read threads, not the same as omitting it.
+			  AND ($3::bool IS NULL OR c.unread  = $3)
+			ORDER BY c.updated_at DESC, c.id DESC`,
+			filter.Channel, filter.Status, filter.Unread)
 		if err != nil {
 			return err
 		}
@@ -334,8 +370,24 @@ func AppendConversationMessage(ctx context.Context, pool *pgxpool.Pool, id Ident
 			&message.CreatedAt); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx,
-			`UPDATE conversations SET unread = $2, updated_at = now() WHERE id = $1`,
+		// An inbound message reopens a closed thread.
+		//
+		// Closing a conversation says "this is dealt with". A customer replying
+		// afterwards is the definition of it not being dealt with, and leaving
+		// the thread closed buries their message: closed threads are filtered
+		// out of the default inbox view, so the reply is invisible until
+		// somebody goes looking for it. Marking it unread is not enough on its
+		// own — an unread message inside a closed thread is still hidden.
+		//
+		// Outbound messages leave the status alone: an agent replying inside a
+		// closed thread has not reopened anything.
+		_, err := tx.Exec(ctx, `
+			UPDATE conversations
+			   SET unread = $2,
+			       status = CASE WHEN $2 AND status = 'closed' THEN 'open'
+			                     ELSE status END,
+			       updated_at = now()
+			 WHERE id = $1`,
 			message.ConversationID, message.Direction == "inbound")
 		return err
 	})
@@ -397,4 +449,64 @@ func EnsureConversation(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return uuid.Nil, fmt.Errorf("store: ensure conversation: %w", err)
 	}
 	return conversationID, nil
+}
+
+// stopKeywords are the words that mean "stop messaging me". Matching is on the
+// whole trimmed body, case-insensitive: a message that merely CONTAINS "stop"
+// ("please don't stop the offers") is not an opt-out, and treating it as one
+// would silently suppress a customer who asked for the opposite.
+var stopKeywords = map[string]bool{
+	"STOP": true, "UNSUBSCRIBE": true, "CANCEL": true, "END": true, "QUIT": true, "OPTOUT": true,
+}
+
+// ReceiveInboundMessage records a message from a contact: it opens or finds the
+// thread, stores the message, and honours a STOP-class keyword by suppressing
+// the contact.
+//
+// The suppression is the point. An inbound STOP that only appended a message
+// would leave the person opted out in the transcript but still reachable by the
+// next campaign, which is the compliance failure regulators fine for.
+func ReceiveInboundMessage(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	contactID uuid.UUID, channel, body string) (ConversationMessage, error) {
+
+	conversationID, err := EnsureConversation(ctx, pool, id, contactID, channel)
+	if err != nil {
+		return ConversationMessage{}, err
+	}
+
+	message := ConversationMessage{ConversationID: conversationID, Direction: "inbound", Body: body}
+	keyword := strings.ToUpper(strings.TrimSpace(body))
+	if stopKeywords[keyword] {
+		message.KeywordMatched = &keyword
+	}
+	message, err = AppendConversationMessage(ctx, pool, id, message)
+	if err != nil {
+		return ConversationMessage{}, err
+	}
+	if message.KeywordMatched == nil {
+		return message, nil
+	}
+
+	// The suppression key is the address the person actually messaged from, so
+	// an email opt-out suppresses the email and an SMS one the msisdn. Keying
+	// both off the msisdn would leave the other channel reachable.
+	var msisdn string
+	var email *string
+	if err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT msisdn, email FROM contacts WHERE id = $1`,
+			contactID).Scan(&msisdn, &email)
+	}); err != nil {
+		return ConversationMessage{}, fmt.Errorf("store: inbound contact lookup: %w", err)
+	}
+
+	suppression := Suppression{Identity: msisdn, Msisdn: &msisdn,
+		Reason: "opted_out_keyword", Note: "Replied " + keyword}
+	if channel == "EMAIL" && email != nil && *email != "" {
+		suppression = Suppression{Identity: *email, Email: email,
+			Reason: "opted_out_keyword", Note: "Replied " + keyword}
+	}
+	if _, err := AddSuppression(ctx, pool, id, suppression); err != nil {
+		return ConversationMessage{}, err
+	}
+	return message, nil
 }

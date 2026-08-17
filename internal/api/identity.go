@@ -26,7 +26,28 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		identity, err := store.ResolveSession(r.Context(), s.DB, auth.HashToken(token))
+		hash := auth.HashToken(token)
+
+		// Operator sessions are resolved from their OWN table, and only for
+		// /v1/operator paths. Two separate checks rather than one combined
+		// lookup, because a tenant token must never satisfy an operator route
+		// and an operator token must never scope a tenant query — the moment
+		// those share a code path, one missing branch becomes a cross-tenant
+		// leak.
+		if strings.HasPrefix(r.URL.Path, "/v1/operator") {
+			operator, operatorErr := store.ResolveOperatorSession(r.Context(), s.DB, hash)
+			if operatorErr == nil {
+				ctx := context.WithValue(r.Context(), operatorKey{}, operator)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			// Falls through deliberately: /v1/operator/login is under this
+			// prefix and must stay reachable without a session.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		identity, err := store.ResolveSession(r.Context(), s.DB, hash)
 		if err != nil {
 			next.ServeHTTP(w, r)
 			return

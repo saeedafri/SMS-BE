@@ -9,7 +9,7 @@ import (
 
 func TestGeneratedCodesHaveTheRequestedLengthAndAreNumeric(t *testing.T) {
 	for _, length := range []int{4, 6, 8} {
-		code, err := verify.GenerateCode(length)
+		code, err := verify.GenerateCode(length, false)
 		if err != nil {
 			t.Fatalf("generate: %v", err)
 		}
@@ -28,7 +28,7 @@ func TestGeneratedCodesHaveTheRequestedLengthAndAreNumeric(t *testing.T) {
 func TestCodesKeepLeadingZeros(t *testing.T) {
 	sawLeadingZero := false
 	for i := 0; i < 2000 && !sawLeadingZero; i++ {
-		code, err := verify.GenerateCode(6)
+		code, err := verify.GenerateCode(6, false)
 		if err != nil {
 			t.Fatalf("generate: %v", err)
 		}
@@ -47,7 +47,7 @@ func TestCodesKeepLeadingZeros(t *testing.T) {
 func TestCodesAreNotRepeated(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 500; i++ {
-		code, err := verify.GenerateCode(8)
+		code, err := verify.GenerateCode(8, false)
 		if err != nil {
 			t.Fatalf("generate: %v", err)
 		}
@@ -96,6 +96,46 @@ func TestOtpCopyMustCarryExactlyOneCodeVariable(t *testing.T) {
 	for body, want := range cases {
 		if got := verify.BodyHasCodeVariable(body); got != want {
 			t.Errorf("BodyHasCodeVariable(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
+
+// The dev bypass must be exactly that: opt-in, and never on by accident. A
+// regression that made GenerateCode return the fixed code without the flag
+// would hand every real user the same OTP, which is the same as having none.
+func TestDevCodeOnlyWhenAsked(t *testing.T) {
+	code, err := verify.GenerateCode(6, true)
+	if err != nil {
+		t.Fatalf("dev code: %v", err)
+	}
+	if code != verify.DevCode {
+		t.Fatalf("dev code = %q, want %q", code, verify.DevCode)
+	}
+
+	// 200 draws without the flag: the fixed code appearing even once would mean
+	// the branch leaks. A random 6-digit code collides with one specific value
+	// about once in a million, so 200 draws is a safe assertion.
+	for range 200 {
+		code, err := verify.GenerateCode(6, false)
+		if err != nil {
+			t.Fatalf("random code: %v", err)
+		}
+		if code == verify.DevCode {
+			t.Fatal("GenerateCode returned the dev code without the dev flag")
+		}
+	}
+}
+
+// A service configured for 4 or 8 digits must still get a code of that length,
+// or the input box rejects it before it ever reaches the server.
+func TestDevCodeMatchesConfiguredLength(t *testing.T) {
+	for _, length := range []int{4, 6, 8} {
+		code, err := verify.GenerateCode(length, true)
+		if err != nil {
+			t.Fatalf("dev code length %d: %v", length, err)
+		}
+		if len(code) != length {
+			t.Fatalf("dev code %q has length %d, want %d", code, len(code), length)
 		}
 	}
 }

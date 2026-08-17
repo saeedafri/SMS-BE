@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -71,11 +72,18 @@ func (s *Server) InviteTeamMember(ctx context.Context, request gen.InviteTeamMem
 	member, err := store.InviteTeamMember(ctx, s.DB, identity, email, role)
 	if errors.Is(err, store.ErrConflict) {
 		return gen.InviteTeamMember422JSONResponse(
-			errorBody(codeValidation, "That person is already on this team.")), nil
+			errorBody(codeValidation,
+				// Wording matches the frontend's copy for this case. It names
+				// the reason — the ADDRESS is taken — rather than the outcome,
+				// which is what tells the person what to change.
+				"This email already belongs to a team member.")), nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityTeamInvite,
+		fmt.Sprintf("Invited %s as %s", member.Email, member.Role))
+	s.sendInviteEmail(identity.TenantName, member.Email, member.Role)
 	return gen.InviteTeamMember201JSONResponse(teamMemberResponse(member)), nil
 }
 
@@ -111,6 +119,8 @@ func (s *Server) UpdateTeamMemberRole(ctx context.Context, request gen.UpdateTea
 	case err != nil:
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityTeamRoleChange,
+		fmt.Sprintf("Changed %s to %s", member.Email, member.Role))
 	return gen.UpdateTeamMemberRole200JSONResponse(teamMemberResponse(member)), nil
 }
 

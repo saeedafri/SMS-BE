@@ -33,6 +33,18 @@ func (s *Server) issueSession(ctx context.Context, tenantID, userID uuid.UUID) (
 	}); err != nil {
 		return gen.AuthSession{}, err
 	}
+	// Recorded here rather than in Login, because this is the single point every
+	// path that mints a session goes through — password sign-in, completing an
+	// MFA challenge, and signup. Recording it in Login alone would miss the
+	// logins of exactly the accounts that took security seriously enough to
+	// turn two-factor on.
+	//
+	// Logged and swallowed, never returned: a sign-in must not be refused
+	// because its audit row could not be written.
+	if err := store.RecordLogin(ctx, s.DB, tenantID, userID); err != nil {
+		s.Logger.Warn("login not recorded in user activity",
+			"tenant", tenantID, "error", err)
+	}
 	return gen.AuthSession{Token: raw, ExpiresAt: expiresAt}, nil
 }
 
@@ -196,5 +208,7 @@ func (s *Server) RevokeSession(ctx context.Context, request gen.RevokeSessionReq
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivitySessionRevoke,
+		"Signed out another device")
 	return gen.RevokeSession204Response{}, nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -188,14 +189,62 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		if template.Body != nil {
 			templateBody = *template.Body
 		}
+		templateCategory := ""
+		if template.Category != nil {
+			templateCategory = *template.Category
+		}
 		estimate, err := service.EstimateCampaign(ctx, identity, campaign.ListID,
-			campaign.Country, campaign.Channel, templateBody)
+			campaign.Country, campaign.Channel, templateBody, templateCategory)
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
 			campaign.SegmentsPerMessage = estimate.SegmentsPerMessage
 			campaign.CostMinorMin = estimate.CostMinorMin
 			campaign.CostMinorMax = estimate.CostMinorMax
 			campaign.Currency = estimate.Currency
+		}
+	}
+
+	// Refuse the campaign if the wallet cannot cover the estimate.
+	//
+	// The contract declares 402 for exactly this and we never returned it, so a
+	// tenant with an empty wallet got a 201 and a campaign that then failed
+	// message by message on a balance check deep in the send path. The customer
+	// saw a campaign that had "started" and was quietly failing, instead of one
+	// sentence telling them to top up.
+	//
+	// Checked against the HIGH end of the estimate. Segment counts vary per
+	// recipient, so clearing the low end only means a campaign can still run
+	// dry halfway — and half a campaign is worse than none, because the half
+	// that sent cannot be unsent.
+	if campaign.CostMinorMax > 0 && campaign.Currency != "" {
+		// Read wallet_balances, not the sum of the ledger.
+		//
+		// wallet_balances is the authoritative figure the send path itself
+		// checks and the one the billing screen shows. Summing the ledger looks
+		// equivalent and is not: anything that moves the balance without
+		// writing history — including the dev drain hook the specs use — leaves
+		// the two disagreeing, and a guard reading the wrong one would wave
+		// through a campaign the send path then refuses message by message.
+		balances, err := store.ListWalletBalances(ctx, s.DB, identity)
+		if err != nil {
+			return nil, err
+		}
+		var balance int64
+		for _, wallet := range balances {
+			if wallet.Currency == campaign.Currency {
+				balance = wallet.BalanceMinor
+				break
+			}
+		}
+		if balance < campaign.CostMinorMax {
+			// INSUFFICIENT_BALANCE, upper case. The contract does not fix the
+			// casing, and the dashboard keys its "Top up wallet" link off this
+			// exact string — a lower-case code produced a bare error message
+			// with no way to act on it, which is the one thing this response
+			// exists to provide.
+			return gen.CreateCampaign402JSONResponse(errorBody("INSUFFICIENT_BALANCE",
+				fmt.Sprintf("Insufficient %s balance for this campaign's estimated cost.",
+					campaign.Currency))), nil
 		}
 	}
 
@@ -239,19 +288,33 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 	}
 
 	templateBody := ""
+	templateCategory := ""
 	if body.TemplateId != "" {
 		templateID, err := uuid.Parse(body.TemplateId)
 		if err != nil {
 			return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation, "templateId must be a uuid")), nil
 		}
 		template, err := store.GetTemplate(ctx, s.DB, identity, templateID)
-		if err == nil && template.Body != nil {
-			templateBody = *template.Body
+		if err == nil {
+			if template.Body != nil {
+				templateBody = *template.Body
+			}
+			// The category is what Email, WhatsApp and Voice are actually
+			// priced on, so an estimate that ignored it quoted the wrong rate
+			// — or, where the corridor had no channel-level row at all, failed
+			// outright.
+			if template.Category != nil {
+				templateCategory = *template.Category
+			}
 		}
 	}
 
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
-		string(body.Country), string(body.Channel), templateBody)
+		string(body.Country), string(body.Channel), templateBody, templateCategory)
+	if errors.Is(err, sending.ErrNoRate) {
+		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
+			"We do not have a rate for that country and channel yet.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}

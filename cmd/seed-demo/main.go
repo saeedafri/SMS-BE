@@ -1,19 +1,7 @@
 // Command seed-demo creates the demo tenant the frontend team's Playwright
-// suite expects.
-//
-// The UI repo ships 43 browser specs, all written against MSW's fixed fixture:
-// founder@acme.test / relay-dev, org "Acme Retail", with specific sender and
-// wallet state. Those specs are the real answer to "are the UI and backend in
-// sync" — they drive actual forms in an actual browser, which no curl suite
-// can. They were unrunnable against this backend only because the fixture
-// existed nowhere but in MSW's memory. This puts it in Postgres.
-//
-// Identifiers are copied verbatim from ../SMS-UI/src/mocks/seed.ts. They are
-// fixed rather than generated because the specs assert on them.
-//
-// It connects as the migration role so it can write across tenants, and it is
-// idempotent: running it twice restores the fixture rather than duplicating it,
-// which matters because the specs mutate this data as they run.
+// suite expects. The rebuild itself lives in internal/demoseed, because the
+// /v1/dev/reset-mock-state test hook has to run exactly the same thing between
+// specs — two copies of a fixture definition would drift within a week.
 package main
 
 import (
@@ -23,17 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/saeedafri/sms-be/internal/domain/auth"
+	"github.com/saeedafri/sms-be/internal/demoseed"
 	"github.com/saeedafri/sms-be/internal/platform/config"
-)
-
-const (
-	tenantID = "88888888-8888-8888-8888-888888888888"
-	userID   = "99999999-9999-9999-9999-999999999999"
-	smsID    = "11111111-1111-1111-1111-111111111111"
-	rcsID    = "22222222-2222-2222-2222-222222222222"
-	listID   = "33333333-3333-3333-3333-333333333333"
-	password = "relay-dev"
 )
 
 func main() {
@@ -62,128 +41,9 @@ func run() error {
 	}
 	defer pool.Close()
 
-	hash, err := auth.HashPassword(password)
-	if err != nil {
+	if err := demoseed.Apply(ctx, pool); err != nil {
 		return err
 	}
-
-	// Deleting the tenant cascades to everything owned by it, which is what
-	// makes a re-run restore the fixture instead of colliding with it.
-	//
-	// That cascade reaches wallet_ledger, which is append-only and refuses the
-	// DELETE. The trigger is CORRECT: in production a tenant with financial
-	// history must not be erasable, because those records are needed for audit
-	// and tax long after the customer has gone. Deleting a real tenant should
-	// fail exactly like this.
-	//
-	// So the exception is made explicitly, narrowly, and only here — a dev
-	// seed rebuilding a known fixture. It runs as the table owner, drops the
-	// guard for one statement, and restores it immediately even if the delete
-	// fails. Nothing on the request path can reach this code.
-	if _, err := pool.Exec(ctx,
-		`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err != nil {
-		return fmt.Errorf("relax ledger guard for seed: %w", err)
-	}
-	_, deleteErr := pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID)
-	if _, err := pool.Exec(ctx,
-		`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`); err != nil {
-		return fmt.Errorf("restore ledger guard: %w", err)
-	}
-	if deleteErr != nil {
-		return fmt.Errorf("clear demo tenant: %w", deleteErr)
-	}
-	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE email = 'founder@acme.test'`); err != nil {
-		return fmt.Errorf("clear demo user: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO tenants (id, name, country, status, capabilities)
-		VALUES ($1, 'Acme Retail', 'IN', 'active',
-		        ARRAY['sms.send','rcs.send','compliance.manage','billing.view'])`,
-		tenantID); err != nil {
-		return fmt.Errorf("seed tenant: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO users (id, email, name, password_hash, email_verified)
-		VALUES ($1, 'founder@acme.test', 'Alex Rao', $2, true)`,
-		userID, hash); err != nil {
-		return fmt.Errorf("seed user: %w", err)
-	}
-
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO tenant_users (tenant_id, user_id, role) VALUES ($1, $2, 'owner')`,
-		tenantID, userID); err != nil {
-		return fmt.Errorf("seed membership: %w", err)
-	}
-
-	// One approved sender and one still in review: the senders spec asserts on
-	// both states, so a fixture with only approved rows would pass vacuously.
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO sender_ids (id, tenant_id, header, channel, country, status, created_at)
-		VALUES ($1, $3, 'ACMERT', 'SMS', 'IN', 'approved',    '2026-05-02T09:30:00Z'),
-		       ($2, $3, 'ACMERT', 'RCS', 'IN', 'pending_review','2026-06-18T14:05:00Z')`,
-		smsID, rcsID, tenantID); err != nil {
-		return fmt.Errorf("seed senders: %w", err)
-	}
-
-	// The wallet is funded through the ledger rather than by setting a balance
-	// directly, because the balance is derived and a trigger forbids rewriting
-	// history. Seeding the balance column alone would leave the two disagreeing.
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO wallet_balances (tenant_id, currency, balance_minor)
-		VALUES ($1, 'INR', 0) ON CONFLICT DO NOTHING`, tenantID); err != nil {
-		return fmt.Errorf("seed wallet: %w", err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO wallet_ledger (tenant_id, currency, entry_type, amount_minor,
-		                           balance_after_minor, description)
-		VALUES ($1, 'INR', 'topup', 4250000, 4250000, 'Demo seed')`,
-		tenantID); err != nil {
-		return fmt.Errorf("seed ledger: %w", err)
-	}
-	if _, err := pool.Exec(ctx,
-		`UPDATE wallet_balances SET balance_minor = 4250000
-		 WHERE tenant_id = $1 AND currency = 'INR'`, tenantID); err != nil {
-		return fmt.Errorf("set balance: %w", err)
-	}
-
-	// The audience spec asserts on an exact seeded list: 4 members, 2 consented
-	// for SMS, 2 for RCS. Per-channel consent is what the audience screen shows,
-	// and a list where everyone consented to everything would let a broken
-	// consent filter pass unnoticed.
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO contact_lists (id, tenant_id, name)
-		VALUES ($1, $2, 'Diwali 2026')`, listID, tenantID); err != nil {
-		return fmt.Errorf("seed contact list: %w", err)
-	}
-
-	contacts := []struct {
-		id, msisdn, name, consent string
-	}{
-		{"aaaaaaa1-0000-4000-8000-000000000001", "+919876500101", "Priya",
-			`{"SMS":"opted_in","RCS":"unknown"}`},
-		{"aaaaaaa1-0000-4000-8000-000000000002", "+919876500102", "Arjun",
-			`{"SMS":"opted_in","RCS":"opted_in"}`},
-		{"aaaaaaa1-0000-4000-8000-000000000003", "+919876500103", "Vikram",
-			`{"SMS":"unknown","RCS":"opted_in"}`},
-		{"aaaaaaa1-0000-4000-8000-000000000004", "+919876500104", "Meera",
-			`{"SMS":"unknown","RCS":"unknown"}`},
-	}
-	for _, contact := range contacts {
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO contacts (id, tenant_id, msisdn, country, fields, consent)
-			VALUES ($1, $2, $3, 'IN', jsonb_build_object('firstName', $4::text), $5::jsonb)`,
-			contact.id, tenantID, contact.msisdn, contact.name, contact.consent); err != nil {
-			return fmt.Errorf("seed contact %s: %w", contact.name, err)
-		}
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO contact_list_members (tenant_id, list_id, contact_id)
-			VALUES ($1, $2, $3)`, tenantID, listID, contact.id); err != nil {
-			return fmt.Errorf("seed list membership: %w", err)
-		}
-	}
-
 	fmt.Println("seeded Acme Retail — founder@acme.test / relay-dev")
 	return nil
 }

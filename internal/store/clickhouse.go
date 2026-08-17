@@ -30,9 +30,22 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 		host = "localhost"
 	}
 
+	// Credentials come from the URL's userinfo, exactly as they do for Postgres
+	// and Redis.
+	//
+	// This used to build Auth{Database: database} and nothing else, which meant
+	// a URL carrying a username and password connected as ClickHouse's
+	// passwordless `default` user and SILENTLY IGNORED both. On a box where
+	// `default` still exists that looks like it worked, so the failure is not
+	// that it breaks — it is that an operator writes credentials into the
+	// config, sees a healthy service, and believes ClickHouse is authenticated
+	// when it is not.
+	username := parsed.User.Username()
+	password, _ := parsed.User.Password()
+
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{host + ":9000"},
-		Auth: clickhouse.Auth{Database: database},
+		Auth: clickhouse.Auth{Database: database, Username: username, Password: password},
 		Settings: clickhouse.Settings{
 			// ClickHouse 26.x defaults async_insert to 1, which buffers an
 			// insert server-side for up to async_insert_busy_timeout_ms before

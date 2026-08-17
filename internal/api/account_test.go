@@ -446,12 +446,35 @@ func TestDisableMfaRequiresAValidCode(t *testing.T) {
 	}
 }
 
-func TestTOTPRejectsCodesFromADifferentSecret(t *testing.T) {
-	other, _, err := auth.NewTOTPSecret("someone@example.test")
+// The dev bypass must stay shut for a real secret even when dev mode is on.
+// This is the guard that keeps a test-only convenience from becoming a way into
+// any account on a developer's machine.
+func TestDevTOTPBypassOnlyUnlocksTheDevSecret(t *testing.T) {
+	real, _, err := auth.NewTOTPSecret("me@example.test", false)
 	if err != nil {
 		t.Fatalf("NewTOTPSecret: %v", err)
 	}
-	mine, _, err := auth.NewTOTPSecret("me@example.test")
+	if auth.VerifyTOTPWithDevBypass(real, auth.DevTOTPCode, true) {
+		t.Fatal("the dev code unlocked a real secret with dev mode on")
+	}
+	if auth.VerifyTOTPWithDevBypass(auth.DevTOTPSecret, auth.DevTOTPCode, false) {
+		t.Fatal("the dev code was accepted with dev mode off")
+	}
+	if !auth.VerifyTOTPWithDevBypass(auth.DevTOTPSecret, auth.DevTOTPCode, true) {
+		t.Fatal("the dev code was rejected for the dev secret with dev mode on")
+	}
+	// A real code for the dev secret still works — the bypass is additive.
+	if !auth.VerifyTOTPWithDevBypass(auth.DevTOTPSecret, currentTOTP(t, auth.DevTOTPSecret), true) {
+		t.Fatal("a genuine code for the dev secret was rejected")
+	}
+}
+
+func TestTOTPRejectsCodesFromADifferentSecret(t *testing.T) {
+	other, _, err := auth.NewTOTPSecret("someone@example.test", false)
+	if err != nil {
+		t.Fatalf("NewTOTPSecret: %v", err)
+	}
+	mine, _, err := auth.NewTOTPSecret("me@example.test", false)
 	if err != nil {
 		t.Fatalf("NewTOTPSecret: %v", err)
 	}

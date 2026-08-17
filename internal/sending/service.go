@@ -288,6 +288,9 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 	record := store.MessageRecord{
 		ID: messageID, Channel: current.Channel, Country: current.Country,
 		SenderHeader: current.SenderHeader, Msisdn: current.Msisdn,
+		// Carried forward, not dropped: this row REPLACES the previous version,
+		// so anything not set here is erased rather than left alone.
+		Email:  current.Email,
 		Status: string(to), Segments: current.Segments, Currency: current.Currency,
 		CostMinor: current.CostMinor, CampaignID: current.CampaignID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,

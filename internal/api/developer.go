@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -30,12 +31,12 @@ func toAPIKey(key store.APIKey) gen.ApiKey {
 	}
 }
 
-func (s *Server) ListApiKeys(ctx context.Context, _ gen.ListApiKeysRequestObject) (gen.ListApiKeysResponseObject, error) {
+func (s *Server) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequestObject) (gen.ListApiKeysResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	keys, err := store.ListAPIKeys(ctx, s.DB, identity)
+	keys, err := store.ListAPIKeys(ctx, s.DB, identity, string(request.Params.Environment))
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +64,8 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityAPIKeyCreate,
+		fmt.Sprintf("Created %s key %q", key.Environment, key.Name))
 	return gen.CreateApiKey201JSONResponse(gen.ApiKeyCreated{
 		Id: key.ID, Name: key.Name, Environment: gen.Environment(key.Environment),
 		Scopes: key.Scopes, KeyPrefix: key.KeyPrefix,
@@ -87,6 +90,8 @@ func (s *Server) RotateApiKey(ctx context.Context, request gen.RotateApiKeyReque
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityAPIKeyRotate,
+		fmt.Sprintf("Rotated %s key %q", key.Environment, key.Name))
 	return gen.RotateApiKey200JSONResponse(gen.ApiKeyCreated{
 		Id: key.ID, Name: key.Name, Environment: gen.Environment(key.Environment),
 		Scopes: key.Scopes, KeyPrefix: key.KeyPrefix,
@@ -111,6 +116,7 @@ func (s *Server) RevokeApiKey(ctx context.Context, request gen.RevokeApiKeyReque
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityAPIKeyRevoke, "Revoked an API key")
 	return gen.RevokeApiKey204Response{}, nil
 }
 
@@ -121,16 +127,23 @@ func (s *Server) ListApiScopes(ctx context.Context, _ gen.ListApiScopesRequestOb
 	if _, ok := identityFrom(ctx); !ok {
 		return nil, errUnauthenticated
 	}
+	// Keys and labels are the frontend's registry verbatim
+	// (../SMS-UI/src/lib/registries/scopes.ts).
+	//
+	// The contract does not enumerate scope strings, so both sides invented
+	// their own vocabulary and they did not match: we offered "messages.send"
+	// where the dashboard's key-creation form renders "send:sms". The form
+	// listed our labels but its own copy, tests and stored keys all speak the
+	// other set, so a key created through the UI carried scopes the API would
+	// not recognise. One vocabulary, and it is theirs, because a scope string
+	// is part of the public API surface customers paste into their own code.
 	return gen.ListApiScopes200JSONResponse([]gen.ApiScope{
-		{Key: "messages.send", Label: "Send messages", Category: "Messaging"},
-		{Key: "messages.read", Label: "Read message logs", Category: "Messaging"},
-		{Key: "campaigns.write", Label: "Create and launch campaigns", Category: "Messaging"},
-		{Key: "contacts.write", Label: "Manage contacts and lists", Category: "Audience"},
-		{Key: "contacts.read", Label: "Read contacts and lists", Category: "Audience"},
-		{Key: "senders.read", Label: "Read sender IDs and registrations", Category: "Compliance"},
-		{Key: "templates.write", Label: "Manage templates", Category: "Compliance"},
-		{Key: "wallet.read", Label: "Read balance and ledger", Category: "Billing"},
-		{Key: "analytics.read", Label: "Read analytics", Category: "Reporting"},
+		{Key: "send:sms", Label: "Send SMS", Category: "Send"},
+		{Key: "send:rcs", Label: "Send RCS", Category: "Send"},
+		{Key: "read:messages", Label: "Read message status", Category: "Read"},
+		{Key: "read:analytics", Label: "Read analytics", Category: "Read"},
+		{Key: "read:logs", Label: "Read message logs", Category: "Read"},
+		{Key: "webhooks:manage", Label: "Manage webhooks", Category: "Manage"},
 	}), nil
 }
 
@@ -168,12 +181,13 @@ func toWebhook(hook store.WebhookEndpoint) gen.WebhookEndpoint {
 	}
 }
 
-func (s *Server) ListWebhookEndpoints(ctx context.Context, _ gen.ListWebhookEndpointsRequestObject) (gen.ListWebhookEndpointsResponseObject, error) {
+func (s *Server) ListWebhookEndpoints(ctx context.Context, request gen.ListWebhookEndpointsRequestObject) (gen.ListWebhookEndpointsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	hooks, err := store.ListWebhooks(ctx, s.DB, identity)
+	environment := string(request.Params.Environment)
+	hooks, err := store.ListWebhooks(ctx, s.DB, identity, &environment)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +203,7 @@ func (s *Server) GetWebhookEndpoint(ctx context.Context, request gen.GetWebhookE
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	hooks, err := store.ListWebhooks(ctx, s.DB, identity)
+	hooks, err := store.ListWebhooks(ctx, s.DB, identity, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +338,7 @@ func (s *Server) SendWebhookTestEvent(ctx context.Context, request gen.SendWebho
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	hooks, err := store.ListWebhooks(ctx, s.DB, identity)
+	hooks, err := store.ListWebhooks(ctx, s.DB, identity, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +382,7 @@ func (s *Server) ResendWebhookEvent(ctx context.Context, request gen.ResendWebho
 	if err != nil {
 		return nil, err
 	}
-	hooks, err := store.ListWebhooks(ctx, s.DB, identity)
+	hooks, err := store.ListWebhooks(ctx, s.DB, identity, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -392,12 +406,12 @@ func (s *Server) ResendWebhookEvent(ctx context.Context, request gen.ResendWebho
 	return gen.ResendWebhookEvent404JSONResponse(errorBody("not_found", "No such endpoint.")), nil
 }
 
-func (s *Server) ListIpAllowlist(ctx context.Context, _ gen.ListIpAllowlistRequestObject) (gen.ListIpAllowlistResponseObject, error) {
+func (s *Server) ListIpAllowlist(ctx context.Context, request gen.ListIpAllowlistRequestObject) (gen.ListIpAllowlistResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	entries, err := store.ListIPAllowlist(ctx, s.DB, identity)
+	entries, err := store.ListIPAllowlist(ctx, s.DB, identity, string(request.Params.Environment))
 	if err != nil {
 		return nil, err
 	}
@@ -430,4 +444,31 @@ func (s *Server) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllow
 		Id: entry.ID, Environment: gen.Environment(entry.Environment),
 		Cidr: entry.CIDR, Label: entry.Label, CreatedAt: entry.CreatedAt,
 	}), nil
+}
+
+// RemoveIpAllowlistEntry deletes one allowed source range.
+//
+// Deleting the last entry is allowed and means "no IP restriction" — an empty
+// allowlist is not a lockout. The alternative, refusing to remove the final
+// entry, would strand a tenant who added the wrong range from an address they
+// no longer have.
+func (s *Server) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveIpAllowlistEntryRequestObject) (gen.RemoveIpAllowlistEntryResponseObject, error) {
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	entryID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.RemoveIpAllowlistEntry404JSONResponse(
+			errorBody(codeNotFound, "No such allowlist entry.")), nil
+	}
+	err := store.DeleteIPAllowEntry(ctx, s.DB, identity, entryID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.RemoveIpAllowlistEntry404JSONResponse(
+			errorBody(codeNotFound, "No such allowlist entry.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.RemoveIpAllowlistEntry204Response{}, nil
 }

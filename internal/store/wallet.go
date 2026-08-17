@@ -114,7 +114,7 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			return err
 		}
 
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO wallet_ledger (tenant_id, currency, entry_type, amount_minor,
 			    balance_after_minor, description, campaign_id, campaign_name,
 			    journey_id, journey_name)
@@ -126,7 +126,29 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			entry.JourneyID, entry.JourneyName,
 		).Scan(&created.ID, &created.Currency, &created.Type, &created.AmountMinor,
 			&created.BalanceAfterMinor, &created.Description, &created.CampaignID,
-			&created.CampaignName, &created.JourneyID, &created.JourneyName, &created.CreatedAt)
+			&created.CampaignName, &created.JourneyID, &created.JourneyName,
+			&created.CreatedAt); err != nil {
+			return err
+		}
+
+		// A charge that drops the balance under the tenant's threshold triggers
+		// their auto-recharge, in this same transaction.
+		//
+		// Auto-recharge was configurable and never fired. A customer could set
+		// "top me up when I fall below ₹1,000", watch the balance go under it,
+		// and have sending stop anyway — the setting existed, was saved, was
+		// displayed back to them, and did nothing.
+		//
+		// It lives here rather than in the send path because EVERY charge must
+		// arm it: campaigns, journeys, verify codes and inbox replies all debit
+		// the same wallet, and putting the check in one caller would leave the
+		// others able to run a tenant dry past their own threshold.
+		if !IsCredit(entry.Type) {
+			if err := applyAutoRecharge(ctx, tx, id.TenantID, entry.Currency, balance); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if errors.Is(err, ErrInsufficientFunds) {
 		return LedgerEntry{}, ErrInsufficientFunds
@@ -363,6 +385,28 @@ func RemovePaymentMethod(ctx context.Context, pool *pgxpool.Pool, id Identity, m
 	return nil
 }
 
+// GetPaymentMethod returns one saved card. Used by the top-up path so the
+// ledger line can name the card that was actually charged — someone
+// reconciling a bank statement needs to match a line here against a line there,
+// and "Wallet top-up (razorpay)" names the gateway rather than the card.
+func GetPaymentMethod(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	methodID uuid.UUID) (PaymentMethod, error) {
+
+	var method PaymentMethod
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id, brand, last4, is_default FROM payment_methods WHERE id = $1`,
+			methodID).Scan(&method.ID, &method.Brand, &method.Last4, &method.IsDefault)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PaymentMethod{}, ErrNotFound
+	}
+	if err != nil {
+		return PaymentMethod{}, fmt.Errorf("store: get payment method: %w", err)
+	}
+	return method, nil
+}
+
 func PaymentMethodExists(ctx context.Context, pool *pgxpool.Pool, id Identity, methodID uuid.UUID) (bool, error) {
 	var exists bool
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
@@ -478,12 +522,32 @@ func ListPricingRates(ctx context.Context, pool *pgxpool.Pool) ([]PricingRate, e
 func FindPricingRate(ctx context.Context, pool *pgxpool.Pool,
 	country, channel, category string) (PricingRate, error) {
 
+	// Preference order: the exact category, then the channel-level rate, then
+	// the cheapest category on that channel.
+	//
+	// That last step is what this was missing. SMS and RCS carry a channel-level
+	// row (category ''), but Email, Voice and WhatsApp price PER CATEGORY and
+	// some corridors have no channel-level row at all. A caller that did not
+	// know the category — the campaign estimator, which is handed a channel and
+	// a country and nothing else — asked for '' and got no rows, which surfaced
+	// as a 500 and made the whole campaign wizard unusable for Email and Voice.
+	//
+	// Falling back to the CHEAPEST category rather than an arbitrary one keeps
+	// the estimate's meaning honest: an estimate given without a category is a
+	// lower bound, and quoting the dearest rate would over-quote a customer who
+	// then picks a cheaper category. The estimate is a range for exactly this
+	// reason, and the returned rate carries the category it actually used.
 	var rate PricingRate
 	err := pool.QueryRow(ctx, `
 		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
 		FROM pricing_rates
-		WHERE country = $1 AND channel = $2 AND coalesce(category, '') IN ($3, '')
-		ORDER BY coalesce(category, '') DESC
+		WHERE country = $1 AND channel = $2
+		ORDER BY CASE
+		             WHEN coalesce(category, '') = $3 THEN 0
+		             WHEN coalesce(category, '') = ''  THEN 1
+		             ELSE 2
+		         END,
+		         per_segment_minor
 		LIMIT 1`, country, channel, category,
 	).Scan(&rate.Country, &rate.Channel, &rate.Category,
 		&rate.PerSegmentMinor, &rate.Currency)
@@ -663,4 +727,53 @@ func UsageByChannel(ctx context.Context, pool *pgxpool.Pool, id Identity, curren
 		return nil, fmt.Errorf("store: usage by channel: %w", err)
 	}
 	return out, nil
+}
+
+
+// applyAutoRecharge tops a wallet back up when a charge has taken it under the
+// tenant's configured threshold.
+//
+// Called with the balance AFTER the charge, inside the charge's own
+// transaction, so the credit and the debit either both land or neither does. A
+// separate transaction could leave a charge recorded and its recharge lost.
+//
+// It appends the ledger row directly rather than calling AppendLedgerEntry,
+// which would re-enter this function and, with a threshold above the top-up
+// amount, recharge forever.
+func applyAutoRecharge(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID,
+	currency string, balance int64) error {
+
+	var threshold, topup int64
+	err := tx.QueryRow(ctx, `
+		SELECT threshold_minor, topup_minor FROM auto_recharge_configs
+		WHERE tenant_id = $1 AND currency = $2 AND enabled
+		  -- A zero top-up is a configuration that would loop without ever
+		  -- lifting the balance, so it is treated as "not configured".
+		  AND topup_minor > 0`, tenantID, currency).Scan(&threshold, &topup)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if balance >= threshold {
+		return nil
+	}
+
+	topped := balance + topup
+	if _, err := tx.Exec(ctx,
+		`UPDATE wallet_balances SET balance_minor = $1, updated_at = now()
+		 WHERE tenant_id = $2 AND currency = $3`, topped, tenantID, currency); err != nil {
+		return err
+	}
+	// The description states the threshold that fired it, because the first
+	// question anyone asks of an unexpected charge on their card is "why did
+	// this happen now".
+	_, err = tx.Exec(ctx, `
+		INSERT INTO wallet_ledger (tenant_id, currency, entry_type, amount_minor,
+		    balance_after_minor, description)
+		VALUES ($1, $2, 'auto_recharge', $3, $4, $5)`,
+		tenantID, currency, topup, topped,
+		fmt.Sprintf("Auto-recharge triggered (balance fell below %d minor units)", threshold))
+	return err
 }

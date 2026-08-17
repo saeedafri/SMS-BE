@@ -1,0 +1,11 @@
+-- The carrier that actually carried the message, as a CarrierId from the
+-- contract's enum ('JIO', 'AIRTEL', 'VERIZON', …).
+--
+-- This is not carrier_ref, which already exists and holds the carrier's own
+-- reference id for one message — a per-message receipt number, not an identity.
+-- Grouping deliverability by carrier_ref would produce one row per message.
+--
+-- Nullable because a message sent before route selection existed has no honest
+-- answer, and the deliverability report excludes those rows rather than
+-- attributing them to a carrier that may not have carried them.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS carrier LowCardinality(String) DEFAULT '';

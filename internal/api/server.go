@@ -15,6 +15,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/mailer"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -29,6 +30,21 @@ type Server struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
 	Logger *slog.Logger
+
+	// EnableDevEndpoints mounts /v1/dev/*, the browser suite's state hooks.
+	// Off unless the deployment opts in.
+	EnableDevEndpoints bool
+
+	// OperatorDB sees across tenants and is used ONLY by operator-console
+	// handlers. Tenant handlers must keep using DB: that split is what stops a
+	// mistake in one handler from becoming a cross-tenant leak.
+	OperatorDB *pgxpool.Pool
+
+	// AdminDB is the migration role, used by exactly one thing: the dev reset
+	// hook, which rebuilds the demo tenant and therefore has to write across
+	// tenants and briefly disable the ledger's append-only trigger. Nil unless
+	// dev endpoints are enabled, so no request path can reach it in production.
+	AdminDB *pgxpool.Pool
 
 	// Connector is the carrier the send path submits to. Nil means no data
 	// plane, so campaign and send endpoints refuse rather than silently
@@ -49,6 +65,15 @@ type Server struct {
 	// Metrics is the live picture of this process. Nil disables collection
 	// entirely, which keeps tests from accumulating state between cases.
 	Metrics *Metrics
+
+	// Mail sends verification links, password resets and team invitations. Nil,
+	// or configured without an API key, logs instead of sending — so a missing
+	// credential degrades to the previous behaviour rather than breaking
+	// sign-up.
+	Mail *mailer.Mailer
+
+	// AppBaseURL is the frontend origin used to build links in those emails.
+	AppBaseURL string
 }
 
 // clickhouse dials on demand, so a restarted ClickHouse is picked up without
@@ -94,6 +119,16 @@ func NewRouter(s *Server) http.Handler {
 	// an observability endpoint that needs a working login is useless exactly
 	// when login is what has broken.
 	r.Get("/metrics", s.metrics)
+
+	// Registered only when explicitly enabled. Mounting these unconditionally
+	// and checking a flag inside each handler would leave the routes present in
+	// production, where an endpoint that changes the caller's role or zeroes a
+	// balance must not merely refuse — it must not exist.
+	if s.EnableDevEndpoints {
+		s.Logger.Warn("dev test hooks are ENABLED — never do this in production",
+			"routes", "/v1/dev/*")
+		s.mountDevRoutes(r)
+	}
 
 	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
 		// A request the generated binder rejects — bad JSON, a malformed
@@ -176,7 +211,11 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 // envelope is part of the contract even for failures we consider internal.
 func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 	var notImpl notImplementedError
+	var dependency dependencyUnmetError
 	switch {
+	case errors.As(err, &dependency):
+		writeError(w, http.StatusConflict, "dependency_unmet", dependency.Error())
+		return
 	case errors.As(err, &notImpl):
 		writeError(w, http.StatusNotImplemented, "not_implemented", notImpl.Error())
 		return
@@ -195,6 +234,12 @@ func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 		return
 	case errors.Is(err, errInvalidFilter):
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
+		return
+	case errors.As(err, &dependency):
+		// 409, not 422: the request is well formed and the operator is allowed
+		// to make it — the world is simply not ready yet, and it will be once
+		// the records verify.
+		writeError(w, http.StatusConflict, "dependency_unmet", dependency.Error())
 		return
 	}
 	// Deliberately not err.Error() in the body: internal failure detail belongs

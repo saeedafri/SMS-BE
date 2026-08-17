@@ -25,15 +25,37 @@ var (
 	ErrRateLimited = errors.New("verify: too many requests for this number")
 )
 
+// DevCode is the verification code issued when dev endpoints are enabled, and
+// only then.
+//
+// It matches DEV_VERIFY_CODE in ../SMS-UI/src/lib/auth/session-config.ts, which
+// is what the try-it panel prints on screen in dev mode. A browser test cannot
+// read the handset the real code goes to, and the API deliberately never
+// returns it — so without a known code the whole verify flow is untestable
+// end to end.
+//
+// Same bargain as auth.DevTOTPSecret: reachable only behind
+// ENABLE_DEV_ENDPOINTS, which defaults to off and refuses to start on an
+// unrecognised value.
+const DevCode = "424242"
+
 // GenerateCode produces a numeric OTP of the requested length.
 //
 // crypto/rand, not math/rand: a predictable OTP is not an OTP. Each digit is
 // drawn independently so every code of the given length is equally likely,
 // including ones with leading zeros — trimming those would shrink the keyspace
 // and bias the result.
-func GenerateCode(length int) (string, error) {
+func GenerateCode(length int, dev bool) (string, error) {
 	if length != 4 && length != 6 && length != 8 {
 		length = 6
+	}
+	if dev {
+		// Padded or trimmed to the service's configured length so a 4- or
+		// 8-digit service still gets a code of the right shape.
+		if len(DevCode) >= length {
+			return DevCode[:length], nil
+		}
+		return DevCode + strings.Repeat("0", length-len(DevCode)), nil
 	}
 	var builder strings.Builder
 	for i := 0; i < length; i++ {

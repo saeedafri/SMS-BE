@@ -20,6 +20,22 @@ func (Unimplemented) UpdateAlerts(ctx context.Context, request gen.UpdateAlertsR
 	return nil, errNotImplemented("UpdateAlerts")
 }
 
+func (Unimplemented) GetAnalytics(ctx context.Context, request gen.GetAnalyticsRequestObject) (gen.GetAnalyticsResponseObject, error) {
+	return nil, errNotImplemented("GetAnalytics")
+}
+
+func (Unimplemented) ListScheduledReports(ctx context.Context, request gen.ListScheduledReportsRequestObject) (gen.ListScheduledReportsResponseObject, error) {
+	return nil, errNotImplemented("ListScheduledReports")
+}
+
+func (Unimplemented) CreateScheduledReport(ctx context.Context, request gen.CreateScheduledReportRequestObject) (gen.CreateScheduledReportResponseObject, error) {
+	return nil, errNotImplemented("CreateScheduledReport")
+}
+
+func (Unimplemented) DeleteScheduledReport(ctx context.Context, request gen.DeleteScheduledReportRequestObject) (gen.DeleteScheduledReportResponseObject, error) {
+	return nil, errNotImplemented("DeleteScheduledReport")
+}
+
 func (Unimplemented) UpdateScheduledReport(ctx context.Context, request gen.UpdateScheduledReportRequestObject) (gen.UpdateScheduledReportResponseObject, error) {
 	return nil, errNotImplemented("UpdateScheduledReport")
 }
@@ -72,8 +88,36 @@ func (Unimplemented) ResendVerificationEmail(ctx context.Context, request gen.Re
 	return nil, errNotImplemented("ResendVerificationEmail")
 }
 
+func (Unimplemented) ListJourneys(ctx context.Context, request gen.ListJourneysRequestObject) (gen.ListJourneysResponseObject, error) {
+	return nil, errNotImplemented("ListJourneys")
+}
+
+func (Unimplemented) CreateJourney(ctx context.Context, request gen.CreateJourneyRequestObject) (gen.CreateJourneyResponseObject, error) {
+	return nil, errNotImplemented("CreateJourney")
+}
+
+func (Unimplemented) GetJourney(ctx context.Context, request gen.GetJourneyRequestObject) (gen.GetJourneyResponseObject, error) {
+	return nil, errNotImplemented("GetJourney")
+}
+
 func (Unimplemented) UpdateJourney(ctx context.Context, request gen.UpdateJourneyRequestObject) (gen.UpdateJourneyResponseObject, error) {
 	return nil, errNotImplemented("UpdateJourney")
+}
+
+func (Unimplemented) ActivateJourney(ctx context.Context, request gen.ActivateJourneyRequestObject) (gen.ActivateJourneyResponseObject, error) {
+	return nil, errNotImplemented("ActivateJourney")
+}
+
+func (Unimplemented) ArchiveJourney(ctx context.Context, request gen.ArchiveJourneyRequestObject) (gen.ArchiveJourneyResponseObject, error) {
+	return nil, errNotImplemented("ArchiveJourney")
+}
+
+func (Unimplemented) PauseJourney(ctx context.Context, request gen.PauseJourneyRequestObject) (gen.PauseJourneyResponseObject, error) {
+	return nil, errNotImplemented("PauseJourney")
+}
+
+func (Unimplemented) ResumeJourney(ctx context.Context, request gen.ResumeJourneyRequestObject) (gen.ResumeJourneyResponseObject, error) {
+	return nil, errNotImplemented("ResumeJourney")
 }
 
 func (Unimplemented) EstimateCost(ctx context.Context, request gen.EstimateCostRequestObject) (gen.EstimateCostResponseObject, error) {
@@ -90,6 +134,26 @@ func (Unimplemented) GetInvoice(ctx context.Context, request gen.GetInvoiceReque
 
 func (Unimplemented) GetUsage(ctx context.Context, request gen.GetUsageRequestObject) (gen.GetUsageResponseObject, error) {
 	return nil, errNotImplemented("GetUsage")
+}
+
+func (Unimplemented) ListCampaigns(ctx context.Context, request gen.ListCampaignsRequestObject) (gen.ListCampaignsResponseObject, error) {
+	return nil, errNotImplemented("ListCampaigns")
+}
+
+func (Unimplemented) CreateCampaign(ctx context.Context, request gen.CreateCampaignRequestObject) (gen.CreateCampaignResponseObject, error) {
+	return nil, errNotImplemented("CreateCampaign")
+}
+
+func (Unimplemented) EstimateCampaign(ctx context.Context, request gen.EstimateCampaignRequestObject) (gen.EstimateCampaignResponseObject, error) {
+	return nil, errNotImplemented("EstimateCampaign")
+}
+
+func (Unimplemented) GetCampaign(ctx context.Context, request gen.GetCampaignRequestObject) (gen.GetCampaignResponseObject, error) {
+	return nil, errNotImplemented("GetCampaign")
+}
+
+func (Unimplemented) ListCampaignMessages(ctx context.Context, request gen.ListCampaignMessagesRequestObject) (gen.ListCampaignMessagesResponseObject, error) {
+	return nil, errNotImplemented("ListCampaignMessages")
 }
 
 func (Unimplemented) ListContactLists(ctx context.Context, request gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {
@@ -124,8 +188,104 @@ func (Unimplemented) ImportContacts(ctx context.Context, request gen.ImportConta
 	return nil, errNotImplemented("ImportContacts")
 }
 
+func (Unimplemented) ListConversations(ctx context.Context, request gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {
+	return nil, errNotImplemented("ListConversations")
+}
+
+func (Unimplemented) GetConversation(ctx context.Context, request gen.GetConversationRequestObject) (gen.GetConversationResponseObject, error) {
+	return nil, errNotImplemented("GetConversation")
+}
+
+func (Unimplemented) CloseConversation(ctx context.Context, request gen.CloseConversationRequestObject) (gen.CloseConversationResponseObject, error) {
+	return nil, errNotImplemented("CloseConversation")
+}
+
+func (Unimplemented) MarkConversationRead(ctx context.Context, request gen.MarkConversationReadRequestObject) (gen.MarkConversationReadResponseObject, error) {
+	return nil, errNotImplemented("MarkConversationRead")
+}
+
+func (Unimplemented) ReopenConversation(ctx context.Context, request gen.ReopenConversationRequestObject) (gen.ReopenConversationResponseObject, error) {
+	return nil, errNotImplemented("ReopenConversation")
+}
+
+func (Unimplemented) ReplyToConversation(ctx context.Context, request gen.ReplyToConversationRequestObject) (gen.ReplyToConversationResponseObject, error) {
+	return nil, errNotImplemented("ReplyToConversation")
+}
+
+func (Unimplemented) GetDataRetention(ctx context.Context, request gen.GetDataRetentionRequestObject) (gen.GetDataRetentionResponseObject, error) {
+	return nil, errNotImplemented("GetDataRetention")
+}
+
+func (Unimplemented) UpdateDataRetention(ctx context.Context, request gen.UpdateDataRetentionRequestObject) (gen.UpdateDataRetentionResponseObject, error) {
+	return nil, errNotImplemented("UpdateDataRetention")
+}
+
+func (Unimplemented) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequestObject) (gen.ListApiKeysResponseObject, error) {
+	return nil, errNotImplemented("ListApiKeys")
+}
+
+func (Unimplemented) CreateApiKey(ctx context.Context, request gen.CreateApiKeyRequestObject) (gen.CreateApiKeyResponseObject, error) {
+	return nil, errNotImplemented("CreateApiKey")
+}
+
+func (Unimplemented) RevokeApiKey(ctx context.Context, request gen.RevokeApiKeyRequestObject) (gen.RevokeApiKeyResponseObject, error) {
+	return nil, errNotImplemented("RevokeApiKey")
+}
+
+func (Unimplemented) RotateApiKey(ctx context.Context, request gen.RotateApiKeyRequestObject) (gen.RotateApiKeyResponseObject, error) {
+	return nil, errNotImplemented("RotateApiKey")
+}
+
+func (Unimplemented) ListIpAllowlist(ctx context.Context, request gen.ListIpAllowlistRequestObject) (gen.ListIpAllowlistResponseObject, error) {
+	return nil, errNotImplemented("ListIpAllowlist")
+}
+
+func (Unimplemented) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllowlistEntryRequestObject) (gen.AddIpAllowlistEntryResponseObject, error) {
+	return nil, errNotImplemented("AddIpAllowlistEntry")
+}
+
 func (Unimplemented) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveIpAllowlistEntryRequestObject) (gen.RemoveIpAllowlistEntryResponseObject, error) {
 	return nil, errNotImplemented("RemoveIpAllowlistEntry")
+}
+
+func (Unimplemented) GetRateLimit(ctx context.Context, request gen.GetRateLimitRequestObject) (gen.GetRateLimitResponseObject, error) {
+	return nil, errNotImplemented("GetRateLimit")
+}
+
+func (Unimplemented) ListApiScopes(ctx context.Context, request gen.ListApiScopesRequestObject) (gen.ListApiScopesResponseObject, error) {
+	return nil, errNotImplemented("ListApiScopes")
+}
+
+func (Unimplemented) ListWebhookEndpoints(ctx context.Context, request gen.ListWebhookEndpointsRequestObject) (gen.ListWebhookEndpointsResponseObject, error) {
+	return nil, errNotImplemented("ListWebhookEndpoints")
+}
+
+func (Unimplemented) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWebhookEndpointRequestObject) (gen.CreateWebhookEndpointResponseObject, error) {
+	return nil, errNotImplemented("CreateWebhookEndpoint")
+}
+
+func (Unimplemented) DeleteWebhookEndpoint(ctx context.Context, request gen.DeleteWebhookEndpointRequestObject) (gen.DeleteWebhookEndpointResponseObject, error) {
+	return nil, errNotImplemented("DeleteWebhookEndpoint")
+}
+
+func (Unimplemented) GetWebhookEndpoint(ctx context.Context, request gen.GetWebhookEndpointRequestObject) (gen.GetWebhookEndpointResponseObject, error) {
+	return nil, errNotImplemented("GetWebhookEndpoint")
+}
+
+func (Unimplemented) UpdateWebhookEndpoint(ctx context.Context, request gen.UpdateWebhookEndpointRequestObject) (gen.UpdateWebhookEndpointResponseObject, error) {
+	return nil, errNotImplemented("UpdateWebhookEndpoint")
+}
+
+func (Unimplemented) ListWebhookEvents(ctx context.Context, request gen.ListWebhookEventsRequestObject) (gen.ListWebhookEventsResponseObject, error) {
+	return nil, errNotImplemented("ListWebhookEvents")
+}
+
+func (Unimplemented) ResendWebhookEvent(ctx context.Context, request gen.ResendWebhookEventRequestObject) (gen.ResendWebhookEventResponseObject, error) {
+	return nil, errNotImplemented("ResendWebhookEvent")
+}
+
+func (Unimplemented) SendWebhookTestEvent(ctx context.Context, request gen.SendWebhookTestEventRequestObject) (gen.SendWebhookTestEventResponseObject, error) {
+	return nil, errNotImplemented("SendWebhookTestEvent")
 }
 
 func (Unimplemented) GetMe(ctx context.Context, request gen.GetMeRequestObject) (gen.GetMeResponseObject, error) {
@@ -320,6 +480,30 @@ func (Unimplemented) RevokeSession(ctx context.Context, request gen.RevokeSessio
 	return nil, errNotImplemented("RevokeSession")
 }
 
+func (Unimplemented) GetSso(ctx context.Context, request gen.GetSsoRequestObject) (gen.GetSsoResponseObject, error) {
+	return nil, errNotImplemented("GetSso")
+}
+
+func (Unimplemented) UpdateSso(ctx context.Context, request gen.UpdateSsoRequestObject) (gen.UpdateSsoResponseObject, error) {
+	return nil, errNotImplemented("UpdateSso")
+}
+
+func (Unimplemented) GetSupportTickets(ctx context.Context, request gen.GetSupportTicketsRequestObject) (gen.GetSupportTicketsResponseObject, error) {
+	return nil, errNotImplemented("GetSupportTickets")
+}
+
+func (Unimplemented) CreateSupportTicket(ctx context.Context, request gen.CreateSupportTicketRequestObject) (gen.CreateSupportTicketResponseObject, error) {
+	return nil, errNotImplemented("CreateSupportTicket")
+}
+
+func (Unimplemented) GetSupportTicket(ctx context.Context, request gen.GetSupportTicketRequestObject) (gen.GetSupportTicketResponseObject, error) {
+	return nil, errNotImplemented("GetSupportTicket")
+}
+
+func (Unimplemented) AddSupportMessage(ctx context.Context, request gen.AddSupportMessageRequestObject) (gen.AddSupportMessageResponseObject, error) {
+	return nil, errNotImplemented("AddSupportMessage")
+}
+
 func (Unimplemented) ListSuppressions(ctx context.Context, request gen.ListSuppressionsRequestObject) (gen.ListSuppressionsResponseObject, error) {
 	return nil, errNotImplemented("ListSuppressions")
 }
@@ -364,8 +548,36 @@ func (Unimplemented) UpdateTenant(ctx context.Context, request gen.UpdateTenantR
 	return nil, errNotImplemented("UpdateTenant")
 }
 
+func (Unimplemented) ListVerifyServices(ctx context.Context, request gen.ListVerifyServicesRequestObject) (gen.ListVerifyServicesResponseObject, error) {
+	return nil, errNotImplemented("ListVerifyServices")
+}
+
+func (Unimplemented) CreateVerifyService(ctx context.Context, request gen.CreateVerifyServiceRequestObject) (gen.CreateVerifyServiceResponseObject, error) {
+	return nil, errNotImplemented("CreateVerifyService")
+}
+
+func (Unimplemented) GetVerifyService(ctx context.Context, request gen.GetVerifyServiceRequestObject) (gen.GetVerifyServiceResponseObject, error) {
+	return nil, errNotImplemented("GetVerifyService")
+}
+
 func (Unimplemented) UpdateVerifyService(ctx context.Context, request gen.UpdateVerifyServiceRequestObject) (gen.UpdateVerifyServiceResponseObject, error) {
 	return nil, errNotImplemented("UpdateVerifyService")
+}
+
+func (Unimplemented) GetVerifyAnalytics(ctx context.Context, request gen.GetVerifyAnalyticsRequestObject) (gen.GetVerifyAnalyticsResponseObject, error) {
+	return nil, errNotImplemented("GetVerifyAnalytics")
+}
+
+func (Unimplemented) ListVerificationAttempts(ctx context.Context, request gen.ListVerificationAttemptsRequestObject) (gen.ListVerificationAttemptsResponseObject, error) {
+	return nil, errNotImplemented("ListVerificationAttempts")
+}
+
+func (Unimplemented) CreateVerification(ctx context.Context, request gen.CreateVerificationRequestObject) (gen.CreateVerificationResponseObject, error) {
+	return nil, errNotImplemented("CreateVerification")
+}
+
+func (Unimplemented) CheckVerification(ctx context.Context, request gen.CheckVerificationRequestObject) (gen.CheckVerificationResponseObject, error) {
+	return nil, errNotImplemented("CheckVerification")
 }
 
 func (Unimplemented) ListAutoRecharge(ctx context.Context, request gen.ListAutoRechargeRequestObject) (gen.ListAutoRechargeResponseObject, error) {

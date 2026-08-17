@@ -142,3 +142,42 @@ func StepsOf(journey Journey) []map[string]any {
 	}
 	return steps
 }
+
+// UpdateJourney changes a journey's name, steps or trigger. Nil means "leave
+// this alone", so a rename does not have to resend the whole step list.
+//
+// Status is deliberately not updatable here: moving between draft, active and
+// paused goes through SetJourneyStatus, which owns the activated_at stamping
+// rule. Two paths that can both change status would eventually disagree about
+// it.
+func UpdateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	journeyID uuid.UUID, name *string, steps []byte, triggerType *string,
+	triggerListID *uuid.UUID) (Journey, error) {
+
+	var journey Journey
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		journey, err = scanJourney(tx.QueryRow(ctx, `
+			UPDATE journeys
+			SET name            = coalesce($2, name),
+			    steps           = coalesce($3::jsonb, steps),
+			    trigger_type    = coalesce($4, trigger_type),
+			    -- The list only moves when the trigger does. Coalescing it
+			    -- independently would leave a journey triggered by an event
+			    -- still pointing at the list it used to watch.
+			    trigger_list_id = CASE WHEN $4 IS NULL THEN trigger_list_id
+			                           ELSE $5 END,
+			    updated_at      = now()
+			WHERE id = $1
+			RETURNING `+journeyColumns,
+			journeyID, name, steps, triggerType, triggerListID))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Journey{}, ErrNotFound
+	}
+	if err != nil {
+		return Journey{}, fmt.Errorf("store: update journey: %w", err)
+	}
+	return journey, nil
+}
