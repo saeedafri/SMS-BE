@@ -53,3 +53,36 @@ func WithTenant(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID,
 	}
 	return nil
 }
+
+// OpenOperatorPool opens a pool whose every connection can see across tenants.
+//
+// The operator console reads and writes for all customers at once, which is
+// exactly what row-level security prevents. Rather than give operators a
+// BYPASSRLS role — one leaked connection string and every policy in the system
+// is void — the policies in 00019 open only while `app.operator` is set, and
+// this pool sets it on each connection as it is created.
+//
+// The separation is the safety property: this pool is handed ONLY to operator
+// handlers, and the ordinary pool is unchanged, so tenant traffic still cannot
+// cross a tenant boundary no matter what a handler gets wrong. Passing this
+// pool to a tenant query would defeat that, which is why it is a distinct
+// constructor with a distinct name rather than a flag on the usual one.
+func OpenOperatorPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("store: parse operator pool url: %w", err)
+	}
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, `SELECT set_config('app.operator', 'on', false)`)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("store: open operator pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("store: ping operator pool: %w", err)
+	}
+	return pool, nil
+}

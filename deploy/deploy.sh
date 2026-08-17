@@ -28,9 +28,21 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 ok "$(du -h /tmp/control-api | cut -f1) binary"
 
 say "Uploading"
+# goose travels with the deploy rather than being installed on the server.
+# It is a Go program, so it cross-compiles the same way the API does — and the
+# server needs no Go toolchain, no package repo and no version to drift.
+if ! ssh -i "$KEY" "root@$HOST" 'command -v goose' >/dev/null 2>&1; then
+  GOFLAGS= GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -o /tmp/goose github.com/pressly/goose/v3/cmd/goose 2>/dev/null \
+    || go install github.com/pressly/goose/v3/cmd/goose@v3.22.1
+  [ -f /tmp/goose ] || cp "$(go env GOPATH)/bin/linux_amd64/goose" /tmp/goose
+  scp -q -i "$KEY" /tmp/goose "root@$HOST:/usr/local/bin/goose"
+  ssh -i "$KEY" "root@$HOST" 'chmod 755 /usr/local/bin/goose'
+  ok "goose installed"
+fi
 scp -q -i "$KEY" /tmp/control-api "root@$HOST:/opt/relay/control-api.new"
 scp -q -i "$KEY" /tmp/seed-demo   "root@$HOST:/opt/relay/seed-demo.new"
-scp -q -i "$KEY" -r db            "root@$HOST:/opt/relay/"
+scp -q -i "$KEY" -r db scripts    "root@$HOST:/opt/relay/"
 scp -q -i "$KEY" deploy/relay-api.service "root@$HOST:/etc/systemd/system/relay-api.service"
 ok "uploaded"
 
@@ -38,11 +50,14 @@ say "Running migrations"
 $SSH 'cd /opt/relay && \
   export PATH=$PATH:/usr/local/go/bin:/root/go/bin && \
   set -a && . /opt/relay/.env && set +a && \
-  goose -dir db/migrations postgres "$DATABASE_ADMIN_URL" up' || {
+  goose -dir db/migrations postgres "$DATABASE_ADMIN_URL" up && \
+  CLICKHOUSE_HTTP=http://127.0.0.1:8123 CLICKHOUSE_USER=relay \
+  CLICKHOUSE_PASSWORD="$(sed -n "s/^CLICKHOUSE_PASSWORD=//p" /opt/relay/.secrets)" \
+    python3 scripts/clickhouse_migrate.py sms' || {
     echo "migrations failed — the old binary is still running, nothing was swapped"
     exit 1
   }
-ok "schema current"
+ok "schema current (postgres + clickhouse)"
 
 say "Swapping the binary"
 # mv on the same filesystem is atomic, so there is no instant where the file

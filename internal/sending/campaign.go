@@ -2,6 +2,7 @@ package sending
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -28,18 +29,30 @@ type CampaignEstimate struct {
 // The estimate is stored on the campaign at creation and never recomputed,
 // because the user approved a specific number: a rate change afterwards must
 // not silently rewrite what they agreed to.
-func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, country, channel, body string) (CampaignEstimate, error) {
+// ErrNoRate means this corridor has no price yet. It is a configuration gap,
+// not a fault, and the API answers it with a sentence the customer can act on.
+var ErrNoRate = errors.New("sending: no rate for corridor")
 
-	rate, err := store.FindPricingRate(ctx, s.DB, country, channel, "")
+func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
+	listID *uuid.UUID, country, channel, body, category string) (CampaignEstimate, error) {
+
+	rate, err := store.FindPricingRate(ctx, s.DB, country, channel, category)
 	if err != nil {
-		return CampaignEstimate{}, fmt.Errorf("sending: no rate for %s/%s", country, channel)
+		// Wrapped so the caller can tell "we have no price for this corridor"
+		// — a real, explainable answer — from a database failure. It used to
+		// collapse both into one opaque error that the API turned into a 500,
+		// so an unpriced corridor read to the customer as "something broke".
+		return CampaignEstimate{}, fmt.Errorf("%w: %s/%s", ErrNoRate, country, channel)
 	}
 
 	// Count the audience, not a page of it. A limit here would quietly
 	// under-quote a large list, which is the one direction an estimate must
 	// never be wrong in.
-	_, total, _, err := store.ListContacts(ctx, s.DB, identity, listID, "", 1)
+	// Only the contacts this channel can actually reach: an Email campaign
+	// counts the ones with an email address, and every channel counts only the
+	// ones who opted in on it. Counting the whole list quoted sends that could
+	// never happen and charged the customer for agreeing to them.
+	total, err := store.ReachableOnChannel(ctx, s.DB, identity, listID, channel)
 	if err != nil {
 		return CampaignEstimate{}, err
 	}

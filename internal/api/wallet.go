@@ -132,13 +132,13 @@ func (s *Server) TopUpWallet(ctx context.Context, request gen.TopUpWalletRequest
 		return gen.TopUpWallet422JSONResponse(
 			errorBody(codeValidation, "That payment method does not exist.")), nil
 	}
-	exists, err := store.PaymentMethodExists(ctx, s.DB, identity, methodID)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
+	method, err := store.GetPaymentMethod(ctx, s.DB, identity, methodID)
+	if errors.Is(err, store.ErrNotFound) {
 		return gen.TopUpWallet422JSONResponse(
 			errorBody(codeValidation, "That payment method does not exist.")), nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// Capture first, then move the balance. The other order would credit a
@@ -162,7 +162,10 @@ func (s *Server) TopUpWallet(ctx context.Context, request gen.TopUpWalletRequest
 		Currency:    string(request.Body.Currency),
 		Type:        "topup",
 		AmountMinor: receipt.CapturedMinor,
-		Description: "Wallet top-up (" + receipt.Provider + ")",
+		// Names the card, not the gateway. This line is read by someone
+		// matching it against a bank statement, and "Visa ending 4242" is what
+		// appears there — the payment provider's name does not.
+		Description: "Top-up via " + method.Brand + " ending " + method.Last4,
 	})
 	if err != nil {
 		return nil, err

@@ -18,16 +18,46 @@ type ContactList struct {
 	ContactCount    int
 	ConsentedCounts map[string]int
 	CreatedAt       time.Time
+
+	// WaSessionActive is how many members are both opted in to WhatsApp and
+	// still inside its 24-hour service window. Outside that window WhatsApp
+	// only permits a pre-approved template, so this is the number that decides
+	// what a campaign is allowed to send — see listWithCounts.
+	WaSessionActive int
 }
 
 // listWithCounts reads lists together with their membership and per-channel
 // consent tallies. The counts come from a lateral join rather than N+1 queries:
 // the audience screen renders every list at once.
+//
+// waSessionActive is counted separately from the consent tallies above rather
+// than folded into them. It answers a different question: not "may we message
+// this person on WhatsApp at all" but "may we message them freely right now".
+// WhatsApp lets a business send anything it likes for 24 hours after the
+// customer's last interaction; after that only a pre-approved template. A
+// contact who opted in a year ago is consented but not in session, so the two
+// numbers legitimately differ and merging them would hide the distinction the
+// campaign wizard exists to show.
 const listWithCounts = `
 	SELECT l.id, l.name, l.created_at,
 	       coalesce(m.total, 0),
-	       coalesce(m.consented, '{}'::jsonb)
+	       coalesce(m.consented, '{}'::jsonb),
+	       coalesce(w.in_session, 0)
 	FROM contact_lists l
+	LEFT JOIN LATERAL (
+	    -- now() - 24 hours, evaluated per query rather than cached: the window
+	    -- is measured from the customer's last interaction, so a contact drifts
+	    -- out of it silently as time passes and the count must reflect that.
+	    SELECT count(*) AS in_session
+	    FROM contact_list_members cm
+	    JOIN contacts c ON c.id = cm.contact_id
+	    WHERE cm.list_id = l.id
+	      AND c.consent ->> 'WHATSAPP' = 'opted_in'
+	      -- IS NOT NULL rather than the jsonb ? operator: pgx would have to be
+	      -- told that ? is not a parameter placeholder, and this reads the same.
+	      AND c.consented_at ->> 'WHATSAPP' IS NOT NULL
+	      AND (c.consented_at ->> 'WHATSAPP')::timestamptz > now() - interval '24 hours'
+	) w ON true
 	LEFT JOIN LATERAL (
 	    -- count(DISTINCT c.id), NOT count(*). The lateral jsonb_each_text below
 	    -- expands each contact into one row PER opted-in channel, so a contact
@@ -52,7 +82,7 @@ func scanList(row pgx.Row) (ContactList, error) {
 	var list ContactList
 	var consented []byte
 	if err := row.Scan(&list.ID, &list.Name, &list.CreatedAt, &list.ContactCount,
-		&consented); err != nil {
+		&consented, &list.WaSessionActive); err != nil {
 		return ContactList{}, err
 	}
 	list.ConsentedCounts = map[string]int{}
@@ -561,4 +591,47 @@ func SuppressedSet(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return nil, fmt.Errorf("store: suppressed set: %w", err)
 	}
 	return suppressed, nil
+}
+
+// ReachableOnChannel counts the contacts in a list who can actually be reached
+// on a channel.
+//
+// Two things have to hold, and the campaign estimate used to check neither: the
+// contact must have the identity that channel is addressed by — an email
+// address for Email, a phone number for everything else — and they must have
+// opted in on it.
+//
+// Counting everyone instead quoted an Email campaign for the whole list, so a
+// list of 1,000 contacts of whom 40 had an email address was priced, approved
+// and launched as 1,000 sends. The customer sees a number they did not agree
+// to and a delivery rate that looks catastrophic.
+func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, channel string) (int, error) {
+
+	// Email is the only channel addressed by an address rather than a number.
+	// Written as a flag rather than a channel comparison inside the SQL so the
+	// day a second such channel appears, this is the one line that changes.
+	byEmail := channel == "EMAIL"
+
+	var total int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*) FROM contacts c
+			WHERE ($1::uuid IS NULL OR EXISTS (
+			        SELECT 1 FROM contact_list_members m
+			        WHERE m.contact_id = c.id AND m.list_id = $1))
+			  AND CASE WHEN $2::boolean
+			           THEN c.email IS NOT NULL AND c.email <> ''
+			           ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
+			      END
+			  -- Consent is per channel and stored as a jsonb map. A channel the
+			  -- contact has never answered on is 'unknown', which is not
+			  -- consent: only an explicit opt-in counts.
+			  AND coalesce(c.consent ->> $3, '') = 'opted_in'`,
+			listID, byEmail, channel).Scan(&total)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: count reachable contacts: %w", err)
+	}
+	return total, nil
 }

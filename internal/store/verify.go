@@ -306,3 +306,50 @@ func ListVerifications(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	}
 	return out, total, nil
 }
+
+// UpdateVerifyService replaces a service's configuration.
+//
+// A full replacement rather than a merge, because that is what the contract's
+// VerifyServiceUpdate is: every field is required. For this particular object
+// that is the safer shape — the settings interact (fallback order names the
+// channels, the rate limit bounds the attempts), so applying half of a new
+// configuration could leave a combination the customer never chose, such as a
+// fallback order naming a channel they just removed.
+func UpdateVerifyService(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	serviceID uuid.UUID, service VerifyService) (VerifyService, error) {
+
+	channels, err := json.Marshal(service.Channels)
+	if err != nil {
+		return VerifyService{}, err
+	}
+	if service.FallbackOrder == nil {
+		service.FallbackOrder = []string{}
+	}
+	if service.RegionAllowlist == nil {
+		service.RegionAllowlist = []string{}
+	}
+
+	var updated VerifyService
+	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		updated, err = scanVerifyService(tx.QueryRow(ctx, `
+			UPDATE verify_services
+			SET name = $2, channels = $3, fallback_order = $4, code_length = $5,
+			    code_ttl_seconds = $6, max_attempts = $7, max_per_phone = $8,
+			    window_seconds = $9, cooldown_seconds = $10, region_allowlist = $11
+			WHERE id = $1
+			RETURNING `+verifyServiceColumns,
+			serviceID, service.Name, channels, service.FallbackOrder,
+			service.CodeLength, service.CodeTTLSeconds, service.MaxAttempts,
+			service.MaxPerPhone, service.WindowSeconds, service.CooldownSeconds,
+			service.RegionAllowlist))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return VerifyService{}, ErrNotFound
+	}
+	if err != nil {
+		return VerifyService{}, fmt.Errorf("store: update verify service: %w", err)
+	}
+	return updated, nil
+}

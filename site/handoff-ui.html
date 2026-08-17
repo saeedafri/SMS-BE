@@ -1,0 +1,1707 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="How the Relay messaging platform works, end to end">
+      
+      
+      
+      
+        <link rel="prev" href="ui-team.html">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Handoff — frontend changes - Relay Engineering Guide</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#handoff-changes-made-in-the-frontend-repo" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="index.html" title="Relay Engineering Guide" class="md-header__button md-logo" aria-label="Relay Engineering Guide" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Relay Engineering Guide
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Handoff — frontend changes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Dark"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Light"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="index.html" title="Relay Engineering Guide" class="md-nav__button md-logo" aria-label="Relay Engineering Guide" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Relay Engineering Guide
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="index.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start here
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="walkthrough.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The product in one message
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="screens.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Every screen, every button
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="ARCHITECTURE.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture and why
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="pipeline.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The send pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="money.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Money
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="compliance.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compliance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="analytics.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analytics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="operator.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator console
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reliability.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reliability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="numbers.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Numbers and deployment
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="gaps.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What is not done
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="ui-team.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    For the frontend team
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handoff — frontend changes
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="handoff-ui.html" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Handoff — frontend changes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#group-1-a-real-product-bug-filter-links-did-not-navigate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 1 — A real product bug: filter links did not navigate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 1 — A real product bug: filter links did not navigate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-we-found-in-the-order-we-found-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What we found, in the order we found it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ruled-out-so-nobody-repeats-the-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ruled out, so nobody repeats the search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fix
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-2-spec-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 2 — Spec fixes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 2 — Spec fixes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2a-specs-that-never-signed-in-5-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a. Specs that never signed in — 5 files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2b-authspects8-rewritten" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b. auth.spec.ts:8 — rewritten
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2c-rbac-enforcementspects-one-assertion-inverted-deliberately" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2c. rbac-enforcement.spec.ts — one assertion inverted, deliberately
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2d-operator-credentials-on-the-tenant-login-page-3-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2d. Operator credentials on the tenant login page — 3 tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2e-two-ids-that-are-not-valid-uuids-2-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2e. Two ids that are not valid UUIDs — 2 tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-3-two-dev-mode-gates-that-were-too-narrow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 3 — Two dev-mode gates that were too narrow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 3 — Two dev-mode gates that were too narrow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3a-srclibdev-codests-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3a. src/lib/dev-codes.ts (new)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3b-verify-email-bannertsx-the-same-gate-missed-the-first-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3b. verify-email-banner.tsx — the same gate, missed the first time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-3b-two-more-gates-with-the-same-fault" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 3b — Two more gates with the same fault
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 3b — Two more gates with the same fault">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-behaviour-change-worth-your-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One behaviour change worth your review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-4-the-dev-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 4 — The dev bridge
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 4 — The dev bridge">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#4a-srcmiddlewarets-the-fix-that-unblocked-everything" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4a. src/middleware.ts — the fix that unblocked everything
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4b-srcappapidevroutets-9-proxies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4b. src/app/api/dev/*/route.ts — 9 proxies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4c-two-probe-scripts-not-part-of-the-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4c. Two probe scripts, not part of the suite
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-we-verified-before-handing-this-over" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What we verified before handing this over
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#still-open-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Still open, and why
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Still open, and why">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-modelling-divergences-a-product-decision-not-a-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two modelling divergences — a product decision, not a bug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#one-contract-gap-ledgerentrytype-is-missing-refund" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One contract gap: LedgerEntryType is missing refund
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reviewing-the-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reviewing the diff
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#group-1-a-real-product-bug-filter-links-did-not-navigate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 1 — A real product bug: filter links did not navigate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 1 — A real product bug: filter links did not navigate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-we-found-in-the-order-we-found-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What we found, in the order we found it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ruled-out-so-nobody-repeats-the-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ruled out, so nobody repeats the search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-fix" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The fix
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-2-spec-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 2 — Spec fixes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 2 — Spec fixes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#2a-specs-that-never-signed-in-5-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2a. Specs that never signed in — 5 files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2b-authspects8-rewritten" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2b. auth.spec.ts:8 — rewritten
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2c-rbac-enforcementspects-one-assertion-inverted-deliberately" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2c. rbac-enforcement.spec.ts — one assertion inverted, deliberately
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2d-operator-credentials-on-the-tenant-login-page-3-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2d. Operator credentials on the tenant login page — 3 tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2e-two-ids-that-are-not-valid-uuids-2-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2e. Two ids that are not valid UUIDs — 2 tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-3-two-dev-mode-gates-that-were-too-narrow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 3 — Two dev-mode gates that were too narrow
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 3 — Two dev-mode gates that were too narrow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#3a-srclibdev-codests-new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3a. src/lib/dev-codes.ts (new)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3b-verify-email-bannertsx-the-same-gate-missed-the-first-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3b. verify-email-banner.tsx — the same gate, missed the first time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-3b-two-more-gates-with-the-same-fault" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 3b — Two more gates with the same fault
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 3b — Two more gates with the same fault">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-behaviour-change-worth-your-review" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One behaviour change worth your review
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#group-4-the-dev-bridge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group 4 — The dev bridge
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Group 4 — The dev bridge">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#4a-srcmiddlewarets-the-fix-that-unblocked-everything" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4a. src/middleware.ts — the fix that unblocked everything
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4b-srcappapidevroutets-9-proxies" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4b. src/app/api/dev/*/route.ts — 9 proxies
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4c-two-probe-scripts-not-part-of-the-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4c. Two probe scripts, not part of the suite
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-we-verified-before-handing-this-over" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What we verified before handing this over
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#still-open-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Still open, and why
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Still open, and why">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-modelling-divergences-a-product-decision-not-a-bug" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two modelling divergences — a product decision, not a bug
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#one-contract-gap-ledgerentrytype-is-missing-refund" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One contract gap: LedgerEntryType is missing refund
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reviewing-the-diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reviewing the diff
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="handoff-changes-made-in-the-frontend-repo">Handoff: changes made in the frontend repo<a class="headerlink" href="#handoff-changes-made-in-the-frontend-repo" title="Permanent link">&para;</a></h1>
+<p><strong>Nothing here is committed.</strong> Every change below is sitting uncommitted in
+<code>SMS-UI</code> for you to review, adjust and land as you see fit. This page exists so
+you can read the reasoning before you read the diff.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>git<span class="w"> </span>status<span class="w"> </span>--short<span class="w">     </span><span class="c1"># 80 files</span>
+</code></pre></div>
+<p>They fall into four groups: <strong>one product bug we found and fixed</strong>, <strong>spec
+fixes</strong> (tests that could not pass against any real backend), <strong>two dev-mode
+gates that were too narrow</strong>, and <strong>the dev bridge</strong> that lets the suite drive a
+real server at all.</p>
+<hr />
+<h2 id="group-1-a-real-product-bug-filter-links-did-not-navigate">Group 1 — A real product bug: filter links did not navigate<a class="headerlink" href="#group-1-a-real-product-bug-filter-links-did-not-navigate" title="Permanent link">&para;</a></h2>
+<p><strong>This is the one to read even if you skip the rest.</strong> It is a genuine defect in
+the shipped product, not a test problem, and it affected every filtered screen
+you have.</p>
+<p><strong>Symptom.</strong> On <code>/analytics</code>, <code>/developer/logs</code>, <code>/developer/verify/{id}/analytics</code>,
+<code>/admin/audit</code>, <code>/admin/usage</code> and the operator queues, clicking a filter chip,
+a range tab, a "Clear filter" link or a pagination link did <strong>nothing</strong>. The URL
+never changed. No console error, no error boundary, nothing in the network tab
+that looked wrong. Navigating to the identical URL by hand always worked — which
+is exactly why it read as broken pages rather than broken links.</p>
+<h3 id="what-we-found-in-the-order-we-found-it">What we found, in the order we found it<a class="headerlink" href="#what-we-found-in-the-order-we-found-it" title="Permanent link">&para;</a></h3>
+<p><strong>First, a real bug in the hrefs.</strong> Every filtered view built its links as a
+bare query string:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="k">return</span><span class="w"> </span><span class="nx">qs</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="sb">`?</span><span class="si">${</span><span class="nx">qs</span><span class="si">}</span><span class="sb">`</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;?&quot;</span><span class="p">;</span><span class="w">        </span><span class="c1">// ← wrong</span>
+</code></pre></div>
+<p><code>next/link</code> does not resolve a query-only href against the current route; it
+resolves it against the app root. Each view now builds an absolute path from a
+<code>BASE_PATH</code> constant (or, for the two dynamic routes, a path passed in as data).</p>
+<p><strong>That fixed the hrefs and did not fix the navigation.</strong> Clicking still did
+nothing. So we kept going.</p>
+<p><strong>What the router actually does.</strong> The click reaches the anchor with the correct
+href and <code>defaultPrevented === false</code>. The router issues its RSC request. The
+server answers <strong>200</strong> with a well-formed 33KB flight payload — we captured the
+router's exact request, replayed it header-for-header, and got a valid response.
+The router then discards it: <strong>no <code>pushState</code>, no error, no navigation.</strong></p>
+<p><code>useRouter().push(href)</code> fails in exactly the same way. So this is the App Router
+refusing the navigation, not <code>Link</code>'s click handling.</p>
+<h3 id="ruled-out-so-nobody-repeats-the-search">Ruled out, so nobody repeats the search<a class="headerlink" href="#ruled-out-so-nobody-repeats-the-search" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Suspect</th>
+<th>Verdict</th>
+<th>How we checked</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The server / our API</td>
+<td><strong>Not it</strong></td>
+<td>Replayed the router's exact request; valid 200</td>
+</tr>
+<tr>
+<td>The auth middleware</td>
+<td><strong>Not it</strong></td>
+<td>Excluded the route from the matcher; no change</td>
+</tr>
+<tr>
+<td><code>loading.tsx</code> / Suspense</td>
+<td><strong>Not it</strong></td>
+<td>Added one to a minimal page; still fine</td>
+</tr>
+<tr>
+<td>Prefetching</td>
+<td><strong>Not it</strong></td>
+<td><code>prefetch={false}</code> on every chip; no change</td>
+</tr>
+<tr>
+<td>Number of links</td>
+<td><strong>Not it</strong></td>
+<td>Three copies of the same chip row navigate fine</td>
+</tr>
+<tr>
+<td>Hydration timing</td>
+<td><strong>Not it</strong></td>
+<td>Deterministic at 0ms, 1s, 3s and 8s settle</td>
+</tr>
+<tr>
+<td>A specific child component</td>
+<td><strong>Not it</strong></td>
+<td>Bisected the tree; no single component explains it</td>
+</tr>
+</tbody>
+</table>
+<p>A minimal page with the same links, under the same layout, with the same data
+fetch, navigates perfectly. The large real views never do.</p>
+<h3 id="the-fix">The fix<a class="headerlink" href="#the-fix" title="Permanent link">&para;</a></h3>
+<p>A new <code>src/ui/filter-link.tsx</code> — a plain <code>&lt;a&gt;</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">FilterLink</span><span class="p">({</span><span class="w"> </span><span class="nx">href</span><span class="p">,</span><span class="w"> </span><span class="nx">className</span><span class="p">,</span><span class="w"> </span><span class="nx">children</span><span class="w"> </span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">&lt;</span><span class="nt">a</span><span class="w"> </span><span class="na">href</span><span class="o">=</span><span class="p">{</span><span class="nx">href</span><span class="p">}</span><span class="w"> </span><span class="na">className</span><span class="o">=</span><span class="p">{</span><span class="nx">className</span><span class="p">}&gt;{</span><span class="nx">children</span><span class="p">}&lt;/</span><span class="nt">a</span><span class="p">&gt;;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p">}</span>
+</code></pre></div>
+<p>Every filter chip, "Clear" link and pagination link across ten view files now
+uses it. <strong>Verified on all six affected screens</strong>, 3/3 at every timing.</p>
+<p><strong>Why a full navigation is the honest trade.</strong> These views are server-rendered
+and re-fetch everything when a filter changes, so the client transition was
+saving very little. A filter that reloads the page is strictly better than a
+filter that does nothing. Every anchor behaviour is preserved exactly:
+middle-click, ⌘-click, "open in new tab", "copy link address", crawlers.</p>
+<p>Cross-route links (a fraud card into the logs explorer, a campaign name into its
+detail page) still use <code>next/link</code> — those always worked and still do.</p>
+<p><strong>When you upgrade Next.js</strong>, retry <code>next/link</code> here: it is a one-line change
+inside <code>FilterLink</code> rather than an edit across ten views. That is the main reason
+it is a component and not ten inline <code>&lt;a&gt;</code> tags.</p>
+<div class="admonition note">
+<p class="admonition-title">We reported this wrongly twice before</p>
+<p>First as "~9 tests blocked on a frontend component bug we didn't want to
+guess at" — it was ours to investigate. Then as "fixed" once the hrefs were
+absolute — they were necessary but not sufficient, and we had not re-measured
+before saying so. The write-up above is what the evidence actually supports.</p>
+</div>
+<p><strong>Unit tests updated:</strong> eight href assertions across five <code>*.test.tsx</code> files
+expected the old <code>"?"</code>-style values and now expect the absolute paths. Nothing
+was weakened.</p>
+<hr />
+<h2 id="group-2-spec-fixes">Group 2 — Spec fixes<a class="headerlink" href="#group-2-spec-fixes" title="Permanent link">&para;</a></h2>
+<p>Each of these was a test that asserted something only a mock could do. None
+weakens an assertion; each corrects one.</p>
+<h3 id="2a-specs-that-never-signed-in-5-files">2a. Specs that never signed in — 5 files<a class="headerlink" href="#2a-specs-that-never-signed-in-5-files" title="Permanent link">&para;</a></h3>
+<p><code>operator-routes</code>, <code>operator-audit</code>, <code>operator-rates</code> and <code>operator-usage</code>
+contained <strong>no sign-in call at all</strong>. <code>operator-rates</code> said so in a comment:</p>
+<blockquote>
+<p><em>The operator console auto-seeds its own dev session cookie via middleware — no
+operator login step needed.</em></p>
+</blockquote>
+<p>True under MSW. Against a real backend every <code>/admin/*</code> route redirects to
+<code>/operator/login</code>, so the tests failed on a missing button 30 seconds later
+rather than on the missing session that actually caused it.</p>
+<p><strong>Change:</strong> added an <code>operatorSignIn(page)</code> helper — copied from
+<code>operator-tenants.spec.ts</code>, including its generous timeout — and called it at
+the top of every test that opens an <code>/admin/*</code> route.</p>
+<p><code>mfa.spec.ts</code> had the same shape one level down: every test begins with
+<code>enrollMfa(page)</code>, which opened <code>/settings/security</code> directly. The file <em>does</em>
+call <code>signIn(page)</code> — but at lines 80, 97, 116 and 147, to exercise the login
+challenge, long after enrolment had to happen. <strong>Change:</strong> <code>enrollMfa</code> now signs
+in first.</p>
+<p><strong>Why we could not fix this from the backend.</strong> The operator console is a
+separate identity system by design: an operator has no tenant and works across
+all of them, so a tenant session must never reach <code>/admin/*</code> and vice versa. Two
+of our adversarial security checks exist to prove exactly that. Making those
+routes answer an anonymous visitor would delete the property those checks verify.</p>
+<h3 id="2b-authspects8-rewritten">2b. <code>auth.spec.ts:8</code> — rewritten<a class="headerlink" href="#2b-authspects8-rewritten" title="Permanent link">&para;</a></h3>
+<p>It asserted that an anonymous visitor to <code>/overview</code> is auto-seeded a session and
+lands authenticated as Acme Retail. Against a real backend that is an
+authentication bypass: anyone typing the URL would be handed a live session for a
+real customer's account.</p>
+<p><strong>Change:</strong> rewritten to assert the redirect, which is what the backend does:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">await</span><span class="w"> </span><span class="nx">page</span><span class="p">.</span><span class="kr">goto</span><span class="p">(</span><span class="s2">&quot;/overview&quot;</span><span class="p">);</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">await</span><span class="w"> </span><span class="nx">expect</span><span class="p">(</span><span class="nx">page</span><span class="p">).</span><span class="nx">toHaveURL</span><span class="p">(</span><span class="sr">/\/login/</span><span class="p">);</span>
+</code></pre></div>
+<h3 id="2c-rbac-enforcementspects-one-assertion-inverted-deliberately">2c. <code>rbac-enforcement.spec.ts</code> — one assertion inverted, deliberately<a class="headerlink" href="#2c-rbac-enforcementspects-one-assertion-inverted-deliberately" title="Permanent link">&para;</a></h3>
+<p>The "cookieless request" test asserted that a bare <code>request</code> fixture <strong>does</strong>
+receive a <code>relay_session</code> cookie, because the middleware's seed branch handed
+one to any cookieless caller. We removed that branch (see 4a), so it now asserts
+the fixture stays cookieless.</p>
+<p>The assertion the test exists for is unchanged and still passes:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nx">expect</span><span class="p">(</span><span class="nx">body</span><span class="p">).</span><span class="nx">not</span><span class="p">.</span><span class="nx">toContain</span><span class="p">(</span><span class="nx">SECRET_MARKER</span><span class="p">);</span><span class="w">   </span><span class="c1">// no key material to an anonymous caller</span>
+</code></pre></div>
+<p>The follow-up <code>expect(body).toContain("Restricted")</code> became
+<code>expect(res.url()).toMatch(/\/login/)</code> — a real backend redirects rather than
+rendering a role-gated page. <strong>This is the stronger outcome</strong>, but it is a
+changed expectation, so it is worth your review.</p>
+<h3 id="2d-operator-credentials-on-the-tenant-login-page-3-tests">2d. Operator credentials on the tenant login page — 3 tests<a class="headerlink" href="#2d-operator-credentials-on-the-tenant-login-page-3-tests" title="Permanent link">&para;</a></h3>
+<p>The rate-card tests in <code>email-</code>, <code>voice-</code> and <code>whatsapp-campaign-and-rates</code>
+signed in at <code>/login</code> (the tenant page) with <code>ops@relay.internal</code>. Our tenant
+login correctly answers <strong>401</strong> for an operator. <strong>Change:</strong> they now use
+<code>/operator/login</code>.</p>
+<h3 id="2e-two-ids-that-are-not-valid-uuids-2-tests">2e. Two ids that are not valid UUIDs — 2 tests<a class="headerlink" href="#2e-two-ids-that-are-not-valid-uuids-2-tests" title="Permanent link">&para;</a></h3>
+<p><code>inbox.spec.ts</code> navigated to <code>cv000005-…</code> and <code>cv000003-…</code>. A UUID is
+hexadecimal; <code>v</code> is not a hex digit, so Postgres rejects these outright and no
+spec-compliant backend can hold them. MSW never noticed because it stores ids as
+plain strings.</p>
+<p><strong>Change:</strong> the two constants now use the ids we seed, <code>cf000005-…</code> and
+<code>cf000003-…</code>. Nothing else in those tests changed.</p>
+<hr />
+<h2 id="group-3-two-dev-mode-gates-that-were-too-narrow">Group 3 — Two dev-mode gates that were too narrow<a class="headerlink" href="#group-3-two-dev-mode-gates-that-were-too-narrow" title="Permanent link">&para;</a></h2>
+<h3 id="3a-srclibdev-codests-new">3a. <code>src/lib/dev-codes.ts</code> (new)<a class="headerlink" href="#3a-srclibdev-codests-new" title="Permanent link">&para;</a></h3>
+<p><code>verify.spec.ts</code> asserts <code>getByText("Dev code:")</code> is visible. That hint was
+wrapped in <code>NEXT_PUBLIC_USE_MOCKS === "true"</code>, so it rendered under MSW and
+never against a real server — no response we send could put it there.</p>
+<p>The gate existed for a good reason. A verification code and a TOTP code are
+secrets: an API that returned them would let anyone verify any number or pass any
+MFA challenge without seeing the handset. Our backend logs them and returns
+nothing.</p>
+<p><strong>Change:</strong> a new module widens the gate to a second explicit flag.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">showDevCodes</span><span class="p">()</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="p">(</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_USE_MOCKS</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span><span class="w"> </span><span class="o">||</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">    </span><span class="nx">process</span><span class="p">.</span><span class="nx">env</span><span class="p">.</span><span class="nx">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;true&quot;</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span><span class="p">);</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="p">}</span>
+</code></pre></div>
+<p>A <strong>function</strong>, not a const — <code>NEXT_PUBLIC_*</code> is inlined at build time either
+way, so the bundle is identical, but a module-level const is evaluated once on
+first import, and the component tests set these vars per-test after that has
+already happened. As a const, the first test to import the module decided the
+answer for every test after it.</p>
+<p>Five call sites now use it: <code>try-it-panel.tsx</code>, <code>mfa-card.tsx</code>,
+<code>mfa-challenge-form.tsx</code>, <code>forgot-form.tsx</code>, and <code>verify-email-banner.tsx</code>.</p>
+<h3 id="3b-verify-email-bannertsx-the-same-gate-missed-the-first-time">3b. <code>verify-email-banner.tsx</code> — the same gate, missed the first time<a class="headerlink" href="#3b-verify-email-bannertsx-the-same-gate-missed-the-first-time" title="Permanent link">&para;</a></h3>
+<p>This one still read <code>process.env.NEXT_PUBLIC_USE_MOCKS</code> directly, so the
+"Verify now (dev)" link never rendered against a real server and the email
+verification loop could not complete. It now calls <code>showDevCodes()</code> too.</p>
+<div class="admonition warning">
+<p class="admonition-title">These need a rebuild</p>
+<p><code>NEXT_PUBLIC_*</code> values are inlined at build time, so the flag has no effect
+until the app is rebuilt with it set:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>build
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nv">NEXT_PUBLIC_SHOW_DEV_CODES</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>npx<span class="w"> </span>next<span class="w"> </span>start<span class="w"> </span>-p<span class="w"> </span><span class="m">3000</span>
+</code></pre></div>
+<p>It is set in <code>.env.local</code> in this working copy. Both flags default to off,
+so production ships without either.</p>
+</div>
+<p><strong>The backend now issues matching fixed values under <code>ENABLE_DEV_ENDPOINTS</code></strong>,
+so these three shortcuts actually work end to end:</p>
+<table>
+<thead>
+<tr>
+<th>Constant in <code>src/lib/auth/session-config.ts</code></th>
+<th>Value</th>
+<th>Backend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DEV_VERIFY_CODE</code></td>
+<td><code>424242</code></td>
+<td><code>verify.GenerateCode(length, dev)</code></td>
+</tr>
+<tr>
+<td><code>DEV_RESET_TOKEN</code></td>
+<td><code>dev-reset-token</code></td>
+<td><code>RequestPasswordReset</code></td>
+</tr>
+<tr>
+<td><code>DEV_VERIFY_TOKEN</code></td>
+<td><code>dev-verify-token</code></td>
+<td><code>ResendVerificationEmail</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each is armed only by a genuine request and stored hashed against the one user
+who made it — knowing the string does nothing on its own. All three are
+unreachable unless <code>ENABLE_DEV_ENDPOINTS</code> is set, which defaults to off and now
+refuses to start on an unrecognised value.</p>
+<p><strong>If you would rather not ship this at all</strong>, the alternative is for the specs to
+read the issued code from a dev endpoint instead of the page. We are happy to
+expose one under <code>/v1/dev/*</code>.</p>
+<hr />
+<h2 id="group-3b-two-more-gates-with-the-same-fault">Group 3b — Two more gates with the same fault<a class="headerlink" href="#group-3b-two-more-gates-with-the-same-fault" title="Permanent link">&para;</a></h2>
+<p>Found by grepping for every remaining bare <code>NEXT_PUBLIC_USE_MOCKS</code> read after
+the first pass missed them.</p>
+<ul>
+<li><strong><code>verify-email-banner.tsx</code></strong> — the "Verify now (dev)" link stood in for the
+  emailed one and never rendered against a real server, so the email
+  verification loop could not be completed at all.</li>
+<li><strong><code>voice-verify-row.tsx</code></strong> and <strong><code>dns-record-row.tsx</code></strong> — "Call to verify" and
+  "Check DNS" were both hidden outside mock mode. "Check DNS" in particular is a
+  real customer-facing control that re-runs the lookup; there was no way to
+  complete email sender onboarding without it.</li>
+</ul>
+<p>All three now call <code>showDevCodes()</code>.</p>
+<h3 id="one-behaviour-change-worth-your-review">One behaviour change worth your review<a class="headerlink" href="#one-behaviour-change-worth-your-review" title="Permanent link">&para;</a></h3>
+<p><code>voice-verify-row.tsx</code> now clears the displayed code after a <strong>failed</strong> confirm,
+not only a successful one. That pairs with a backend change: a wrong code is now
+burned rather than left valid.</p>
+<p>The old behaviour left a six-digit code standing after a failed attempt, which is
+brute-forceable by anyone holding a session — a million guesses is minutes of
+scripted requests, and the prize is the right to place calls as a number you do
+not own. Now one wrong guess costs a new verification call. Leaving the dead code
+on screen would have offered the user a number guaranteed to be rejected.</p>
+<hr />
+<h2 id="group-4-the-dev-bridge">Group 4 — The dev bridge<a class="headerlink" href="#group-4-the-dev-bridge" title="Permanent link">&para;</a></h2>
+<p>Needed before a single spec could run against a real server, and the first place
+to look if something behaves oddly.</p>
+<h3 id="4a-srcmiddlewarets-the-fix-that-unblocked-everything">4a. <code>src/middleware.ts</code> — the fix that unblocked everything<a class="headerlink" href="#4a-srcmiddlewarets-the-fix-that-unblocked-everything" title="Permanent link">&para;</a></h3>
+<p><code>/api/dev/*</code> sat inside the auth matcher. Playwright's bare <code>request</code> fixture
+carries no cookie, so <strong>every state reset in every spec silently 307'd to
+<code>/login</code> and did nothing.</strong> A redirect is not an error: nothing logged, nothing
+threw, and state leaked across all 43 specs for an entire day of runs.</p>
+<p><strong>Change:</strong> <code>api/dev</code> added to the matcher exclusions. Verified 307 → 204.</p>
+<h3 id="4b-srcappapidevroutets-9-proxies">4b. <code>src/app/api/dev/*/route.ts</code> — 9 proxies<a class="headerlink" href="#4b-srcappapidevroutets-9-proxies" title="Permanent link">&para;</a></h3>
+<p>Each forwarded to MSW and refused to run outside mock mode. <strong>Change:</strong> they now
+forward to the real backend at <code>/v1/dev/*</code>, passing the <code>relay_session</code> cookie
+as a bearer token.</p>
+<h3 id="4c-two-probe-scripts-not-part-of-the-suite">4c. Two probe scripts, not part of the suite<a class="headerlink" href="#4c-two-probe-scripts-not-part-of-the-suite" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>e2e-probe-filter-links.mjs</code> — the reproduction for Group 1. Reads each link's
+  own <code>href</code>, clicks it two ways, then navigates to that same href directly and
+  fetches it server-side.</li>
+<li><code>capture-screens.mjs</code> — regenerates the screenshots in this guide.</li>
+</ul>
+<hr />
+<h2 id="what-we-verified-before-handing-this-over">What we verified before handing this over<a class="headerlink" href="#what-we-verified-before-handing-this-over" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2038 tests, all passing</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>npx<span class="w"> </span>playwright<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># 249 / 256</span>
+</code></pre></div>
+<p>The browser suite was 194/256 when we started this pass.</p>
+<hr />
+<h2 id="still-open-and-why">Still open, and why<a class="headerlink" href="#still-open-and-why" title="Permanent link">&para;</a></h2>
+<h3 id="two-modelling-divergences-a-product-decision-not-a-bug">Two modelling divergences — a product decision, not a bug<a class="headerlink" href="#two-modelling-divergences-a-product-decision-not-a-bug" title="Permanent link">&para;</a></h3>
+<p>We deliberately did <strong>not</strong> make these pass, because the only way to do so is to
+report numbers the database disagrees with.</p>
+<ol>
+<li><strong>Campaign progress.</strong> MSW derives it from <code>sendStartedAt</code> + <code>sendDurationMs</code>,
+   simulating a trajectory that advances with wall-clock time. We store real
+   counts. Specs asserting on mid-flight progress cannot be satisfied by a
+   stored status, whatever fixture we seed.</li>
+<li><strong>Journey funnel.</strong> <code>automation.spec.ts</code> expects <code>exitedSuppressed</code> to be
+   exactly <code>2</code>. We derive it by counting list members who are genuinely
+   suppressed — with this data that is <code>0</code>. MSW returns <code>2</code> from a simulation,
+   and its own suppression fixtures are not even contacts, so no data change
+   reconciles them.</li>
+</ol>
+<p><strong>A funnel that reports 2 when the data says 0 is worse than a failing test.</strong>
+Tell us which behaviour you want and we will implement it.</p>
+<h3 id="one-contract-gap-ledgerentrytype-is-missing-refund">One contract gap: <code>LedgerEntryType</code> is missing <code>refund</code><a class="headerlink" href="#one-contract-gap-ledgerentrytype-is-missing-refund" title="Permanent link">&para;</a></h3>
+<p><code>components["schemas"]["LedgerEntryType"]</code> is <code>"charge" | "topup" |
+"auto_recharge"</code>. The backend also writes <strong><code>refund</code></strong> rows — when a campaign
+reserves funds for an estimated segment count and uses fewer, the difference is
+released back.</p>
+<p>This does <strong>not</strong> break your UI today: <code>billing-view.tsx</code> renders <code>{e.type}</code>
+directly and treats anything that is not <code>"charge"</code> as a credit, so a refund
+shows as a green <code>+</code> row, which is correct. But it is outside the declared
+union, so a stricter consumer would reject it.</p>
+<p><strong>Ask:</strong> add <code>"refund"</code> to <code>LedgerEntryType</code> in the contract. We have not
+touched <code>openapi.json</code> — that is yours.</p>
+<hr />
+<h2 id="reviewing-the-diff">Reviewing the diff<a class="headerlink" href="#reviewing-the-diff" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nb">cd</span><span class="w"> </span>SMS-UI
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>git<span class="w"> </span>diff<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/analytics<span class="w"> </span>src/app/<span class="se">\(</span>admin<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/developer/logs<span class="w"> </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/billing<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/campaigns<span class="w">          </span><span class="c1"># group 1 — the navigation fix</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>git<span class="w"> </span>diff<span class="w"> </span>e2e/<span class="w">                                     </span><span class="c1"># group 2 — spec fixes</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>git<span class="w"> </span>diff<span class="w"> </span>src/lib/dev-codes.ts<span class="w"> </span>src/app/<span class="se">\(</span>auth<span class="se">\)</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">         </span>src/app/<span class="se">\(</span>dashboard<span class="se">\)</span>/_components<span class="w">         </span><span class="c1"># group 3 — dev-code gates</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>git<span class="w"> </span>diff<span class="w"> </span>src/middleware.ts<span class="w"> </span>src/app/api/dev/<span class="w">       </span><span class="c1"># group 4 — dev bridge</span>
+</code></pre></div>
+<p>Every edit carries a comment explaining why it is there, so the diff should read
+without this page next to it. If you disagree with any of them, revert that file
+— none depends on another, except that the dev bridge is what makes the suite
+able to run at all.</p>
+<p><strong>Verification we ran on your repo before handing this over:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>npx<span class="w"> </span>tsc<span class="w"> </span>--noEmit<span class="w">     </span><span class="c1"># clean</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>npx<span class="w"> </span>vitest<span class="w"> </span>run<span class="w"> </span>src/<span class="w">  </span><span class="c1"># 227 files, 2037 tests, all passing</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.instant", "navigation.tracking", "navigation.sections", "navigation.top", "toc.follow", "content.code.copy", "search.highlight"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

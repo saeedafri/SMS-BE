@@ -27,9 +27,25 @@
         </default>
     </profiles>
 
-    <!-- Background merges compete with queries for RAM and CPU. Two threads is
-         plenty at this volume and leaves the box responsive. -->
-    <background_pool_size>2</background_pool_size>
+    <!-- Background merges compete with queries for RAM and CPU, so this is
+         well below the default of 16 to leave the shared box responsive.
+         It is a pool CAPACITY, not threads created up front — an idle server
+         costs nothing for the headroom.
+
+         It cannot go much lower. ClickHouse REFUSES TO START unless
+         background_pool_size * background_merges_mutations_concurrency_ratio
+         exceeds number_of_free_entries_in_pool_to_execute_mutation (default
+         20). At the 2 this file originally specified that product is 4, and
+         the server exits with BAD_ARGUMENTS before it ever listens. Lowering
+         the two merge_tree thresholds below is what makes 8 viable. -->
+    <background_pool_size>8</background_pool_size>
+    <merge_tree>
+        <!-- Default 20, which only makes sense against the default pool of 16.
+             Sized against ours instead: a mutation may run while at least 4
+             pool slots stay free for ordinary merges. -->
+        <number_of_free_entries_in_pool_to_execute_mutation>4</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>4</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
     <mark_cache_size>268435456</mark_cache_size>
     <uncompressed_cache_size>0</uncompressed_cache_size>
 

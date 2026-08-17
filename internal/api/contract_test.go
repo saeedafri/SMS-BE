@@ -460,22 +460,28 @@ func TestImplementedOperationsMatchTheContract(t *testing.T) {
 	}
 }
 
-// Anything still unimplemented must answer 501 with the contract's Error
-// envelope. 501 is not in the contract's declared status set, which is
-// correct — it means "not built yet", not a documented outcome — so this
-// checks the envelope shape directly.
-func TestUnimplementedOperationsStillUseTheErrorEnvelope(t *testing.T) {
+// A tenant token must not reach the operator console.
+//
+// This replaces an earlier test that asserted these paths returned 501 while
+// the console was unbuilt. Now that they are built, the interesting property is
+// not "unimplemented" but "a customer cannot read across customers" — operator
+// identities resolve from their own session table, so a perfectly valid tenant
+// token resolves to no operator at all.
+func TestTenantTokenCannotReachTheOperatorConsole(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
-	for _, path := range []string{"/v1/operator/tenants", "/v1/operator/routes"} {
+	for _, path := range []string{
+		"/v1/operator/tenants", "/v1/operator/routes", "/v1/operator/audit-log",
+		"/v1/operator/rates", "/v1/operator/approvals",
+	} {
 		res := h.do(http.MethodGet, path, acct.Token, nil)
-		if res.Code != http.StatusNotImplemented {
-			t.Errorf("%s: status = %d, want 501", path, res.Code)
+		if res.Code != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401 for a tenant token", path, res.Code)
 			continue
 		}
-		if code := res.errorCode(t); code != "not_implemented" {
-			t.Errorf("%s: error.code = %q, want not_implemented", path, code)
+		if code := res.errorCode(t); code != "unauthenticated" {
+			t.Errorf("%s: error.code = %q, want unauthenticated", path, code)
 		}
 	}
 }

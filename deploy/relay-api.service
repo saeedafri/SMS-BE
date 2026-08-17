@@ -3,7 +3,10 @@ Description=Relay control-api
 # Wants= not Requires=: if a database is briefly down the API should start and
 # retry, not refuse to boot. The binary retries Postgres with backoff and
 # degrades gracefully without ClickHouse or Redis.
-After=network-online.target postgresql.service redis-server.service clickhouse-server.service
+# Every datastore is a container on this host — the reused ems-postgres plus
+# Relay's own ClickHouse and Redis — so docker is the dependency, not the
+# distro packages this line used to name (none of which are installed).
+After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
@@ -23,6 +26,19 @@ RestartSec=5s
 # comfortably above the 10s HTTP read timeout.
 KillSignal=SIGTERM
 TimeoutStopSec=30s
+
+# A hard ceiling, the same guarantee the containers get from their cgroup
+# limits. On a shared VPS an unbounded process is the one that gets a
+# NEIGHBOUR's app OOM-killed, because the kernel reaps the biggest process
+# rather than the guilty one.
+#
+# GOMEMLIMIT sits below it so Go's GC works harder as it approaches the cap
+# instead of waiting for its usual heap-doubling — the process trims itself
+# rather than being killed. Measured peak during a 20,000-message burst was
+# 510 MB unconstrained.
+MemoryMax=512M
+Environment=GOMEMLIMIT=400MiB
+Environment=GOGC=80
 
 # Hardening. The API needs a network socket and nothing else on this machine.
 NoNewPrivileges=true

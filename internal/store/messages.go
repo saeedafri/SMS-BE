@@ -30,11 +30,17 @@ type MessageRecord struct {
 	Currency     string
 	RouteID      *string
 	CarrierRef   *string
-	CreatedAt    time.Time
-	SentAt       *time.Time
-	DeliveredAt  *time.Time
-	UpdatedAt    time.Time
-	Version      uint64
+
+	// Carrier is the CarrierId the message went out on, from the contract's
+	// enum. Distinct from CarrierRef, which is the carrier's own reference for
+	// this one message. Empty until route selection records which carrier
+	// carried it; the deliverability report excludes empty rather than guessing.
+	Carrier     string
+	CreatedAt   time.Time
+	SentAt      *time.Time
+	DeliveredAt *time.Time
+	UpdatedAt   time.Time
+	Version     uint64
 }
 
 // InsertMessages writes a batch. ClickHouse is built for batched inserts and
@@ -44,7 +50,16 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 	if len(records) == 0 {
 		return nil
 	}
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO messages`)
+	// Columns named explicitly. An unqualified INSERT binds to the table's
+	// column order, so adding any column later silently turns every send into
+	// an "expected N arguments, got N-1" failure — which is exactly what
+	// happened when the carrier column was added.
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO messages (
+		tenant_id, id, campaign_id, campaign_name, journey_id, journey_name,
+		conversation_id, channel, country, sender_header, template_id, msisdn,
+		email, status, delivered_channel, error_code, error_class, fraud_flag,
+		segments, cost_minor, currency, route_id, carrier_ref, carrier,
+		created_at, sent_at, delivered_at, updated_at, version)`)
 	if err != nil {
 		return fmt.Errorf("store: prepare message batch: %w", err)
 	}
@@ -56,7 +71,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.Msisdn, record.Email, record.Status, nil,
 			record.ErrorCode, record.ErrorClass, record.FraudFlag,
 			record.Segments, record.CostMinor, record.Currency,
-			record.RouteID, record.CarrierRef,
+			record.RouteID, record.CarrierRef, record.Carrier,
 			record.CreatedAt, record.SentAt, record.DeliveredAt,
 			record.UpdatedAt, record.Version,
 		); err != nil {
@@ -197,17 +212,29 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	return out, total, next, nil
 }
 
+// LoadMessageState reads the fields a delivery report needs in order to write
+// the next version of a row.
+//
+// Every column read here is a column the settle path re-writes. The table is a
+// ReplacingMergeTree, so the new version REPLACES the old one wholesale — a
+// field that is loaded but not carried forward is not merely stale, it is
+// erased. `email` was missing from this list, so the moment a delivery report
+// landed, an Email message lost the address it was sent to and the campaign
+// showed the contact's phone number instead.
+//
+// Anything added to the insert belongs here too.
 // LoadMessageState reads one message's current state, for applying a receipt.
 func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.UUID) (MessageRecord, error) {
 	var record MessageRecord
 	err := conn.QueryRow(ctx, `
 		SELECT id, status, segments, cost_minor, currency, campaign_id, channel,
-		       country, sender_header, msisdn, created_at, version
+		       country, sender_header, msisdn, email, created_at, version
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
 		&record.Currency, &record.CampaignID, &record.Channel, &record.Country,
-		&record.SenderHeader, &record.Msisdn, &record.CreatedAt, &record.Version)
+		&record.SenderHeader, &record.Msisdn, &record.Email, &record.CreatedAt,
+		&record.Version)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}

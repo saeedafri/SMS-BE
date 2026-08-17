@@ -70,11 +70,63 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 			CostPerConversionMinor: 0,
 			Currency:               gen.CurrencyCode(summary.Currency),
 			CurrencyMixed:          summary.CurrencyMixed,
-			Latency:                gen.AnalyticsLatency{P50Ms: 0, P90Ms: 0},
-			FraudCounts:            gen.MessageFraudCounts{Velocity: 0, GeoAnomaly: 0, Blocked: 0},
+			// Measured, not stubbed: handset-confirmed delivery latency
+			// (created_at to delivered_at) and the fraud flags the send path
+			// actually recorded.
+			Latency: gen.AnalyticsLatency{
+				P50Ms: summary.LatencyP50Ms, P90Ms: summary.LatencyP90Ms},
+			FraudCounts: gen.MessageFraudCounts{
+				Velocity:   summary.FraudVelocity,
+				GeoAnomaly: summary.FraudGeoAnomaly,
+				Blocked:    summary.FraudBlocked},
 		},
 		Buckets:        make([]gen.AnalyticsBucket, 0, len(buckets)),
 		Deliverability: make([]gen.AnalyticsDeliverabilityRow, 0, len(deliverability)),
+	}
+
+	// Channel-specific figures are attached only when the view is filtered to
+	// the channel they describe.
+	//
+	// Sending all of them always would put "Bounced" on an SMS dashboard, where
+	// it is not an approximation but a category error — SMS has no bounces, and
+	// a tile reading zero invites the reader to conclude none occurred rather
+	// than that the concept does not apply. The contract marks each optional for
+	// exactly this reason.
+	switch request.Params.Channel {
+	case nil:
+		// The all-channels view shows none of them: a bounce count spanning
+		// email and SMS traffic answers no question anyone asked.
+	default:
+		switch string(*request.Params.Channel) {
+		case "EMAIL":
+			bounced := summary.Bounced
+			out.Summary.Bounced = &bounced
+			// Click tracking needs a redirect service that rewrites every link
+			// and records the hit. That does not exist yet, so this is the
+			// number of clicks we have actually recorded: zero.
+			//
+			// Sent rather than omitted because the tile is part of the email
+			// dashboard and an absent field renders as "unknown" rather than
+			// "none". It is listed in the gaps page precisely because a
+			// permanent zero is easy to mistake for a measurement.
+			clicked := 0
+			out.Summary.Clicked = &clicked
+		case "WHATSAPP":
+			conversations := summary.Conversations
+			out.Summary.Conversations = &conversations
+		case "VOICE":
+			// A rate over no attempts is not zero, it is undefined; omitting it
+			// says "no calls yet" instead of "nobody answered".
+			if summary.VoiceAttempts > 0 {
+				rate := float32(summary.VoiceAnswered) / float32(summary.VoiceAttempts)
+				out.Summary.AnsweredRate = &rate
+			}
+			// Mean length of the calls that actually connected.
+			if summary.VoiceAvgSeconds > 0 {
+				seconds := float32(summary.VoiceAvgSeconds)
+				out.Summary.AvgCallDurationSeconds = &seconds
+			}
+		}
 	}
 	for _, bucket := range buckets {
 		out.Buckets = append(out.Buckets, gen.AnalyticsBucket{
@@ -90,10 +142,7 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 		}
 		out.Deliverability = append(out.Deliverability, gen.AnalyticsDeliverabilityRow{
 			Country: gen.CountryCode(row.Country), Channel: gen.ChannelId(row.Channel),
-			// Per-carrier attribution needs the carrier the route actually
-			// used, which the sandbox connector does not report. "all" is
-			// honest about the granularity we have rather than inventing one.
-			Carrier: gen.CarrierId("all"),
+			Carrier: gen.CarrierId(row.Carrier),
 			Sent:    row.Sent, Delivered: row.Delivered, DeliveryRate: float32(rate),
 		})
 	}
@@ -262,6 +311,8 @@ func (s *Server) UpdateSso(ctx context.Context, request gen.UpdateSsoRequestObje
 	if err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivitySSOConfigChange,
+		map[bool]string{true: "Enabled SSO", false: "Disabled SSO"}[updated.SSOEnabled])
 	return gen.UpdateSso200JSONResponse(toSSO(updated)), nil
 }
 
@@ -300,4 +351,39 @@ func (s *Server) UpdateDataRetention(ctx context.Context, request gen.UpdateData
 		MessageLogRetentionDays: gen.DataRetentionSettingsMessageLogRetentionDays(
 			settings.MessageLogRetentionDays),
 	}), nil
+}
+
+// UpdateScheduledReport pauses or resumes a recurring export.
+//
+// Pause rather than delete is the whole point of the operation: someone who
+// wants their weekly report to stop during a quiet month should not have to
+// rebuild its recipients and range to start it again.
+func (s *Server) UpdateScheduledReport(ctx context.Context, request gen.UpdateScheduledReportRequestObject) (gen.UpdateScheduledReportResponseObject, error) {
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	reportID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.UpdateScheduledReport404JSONResponse(
+			errorBody(codeNotFound, "No such report.")), nil
+	}
+	// The contract declares no 422 on this operation — the body carries a single
+	// required boolean, so there is nothing to reject beyond a missing body,
+	// which a decoder would already have refused. An absent body here would be a
+	// framework bug, not a user error.
+	if request.Body == nil {
+		return gen.UpdateScheduledReport404JSONResponse(
+			errorBody(codeNotFound, "No such report.")), nil
+	}
+	report, err := store.SetScheduledReportPaused(ctx, s.DB, identity,
+		reportID, request.Body.Paused)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateScheduledReport404JSONResponse(
+			errorBody(codeNotFound, "No such report.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.UpdateScheduledReport200JSONResponse(toScheduledReport(report)), nil
 }

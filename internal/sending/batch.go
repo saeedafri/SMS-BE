@@ -26,7 +26,12 @@ const batchSize = 500
 type sendPlan struct {
 	messageID uuid.UUID
 	msisdn    string
-	body      string
+	// email is the recipient address for channels addressed by email rather
+	// than by phone number. Recorded alongside msisdn rather than instead of
+	// it: a contact has both, and the logs explorer and campaign detail show
+	// whichever one the message was actually sent to.
+	email string
+	body  string
 	cost      int64
 	segments  int
 	// refusal is set when the gate refused this recipient. Refused messages
@@ -76,12 +81,28 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 
 	for i, contact := range contacts {
 		msisdn := normalised[i]
+
+		// Contacts this channel cannot reach are skipped outright, not recorded
+		// as failures.
+		//
+		// A contact with no email address is not a failed Email delivery — they
+		// were never in the audience. Recording them would charge nothing but
+		// would wreck the two numbers the customer reads: a campaign to 40
+		// reachable contacts out of 1,000 would report a 4% delivery rate, and
+		// the message list would show phone numbers in the recipient column of
+		// an email campaign. This matches the estimate they approved, which
+		// counts the same set — see store.ReachableOnChannel.
+		if !recipientAddressable(context.sender.Channel, msisdn, contactEmail(contact)) {
+			continue
+		}
+
 		body := personalise(context.body, contact)
 		segments := billing.SegmentCount(body)
 		cost := int64(segments) * context.rate.PerSegmentMinor
 
+		email := contactEmail(contact)
 		plan := sendPlan{
-			messageID: uuid.New(), msisdn: msisdn, body: body,
+			messageID: uuid.New(), msisdn: msisdn, email: email, body: body,
 			cost: cost, segments: segments,
 		}
 
@@ -93,7 +114,12 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// wallet that runs dry mid-page refuses the rest instead of going
 			// negative.
 			BalanceMinor: context.balance - holdTotal, CostMinor: cost,
-			RecipientValid: msisdn != "",
+			// Valid means addressable ON THIS CHANNEL. An Email send to a
+			// contact with no email address is not a delivery failure to be
+			// retried, it is a message that was never sendable — and charging
+			// for it, or counting it against the delivery rate, would be wrong
+			// in both directions.
+			RecipientValid: recipientAddressable(context.sender.Channel, msisdn, email),
 		})
 		if gateErr != nil {
 			plan.refusal = messaging.GateFailureCode(gateErr)
@@ -144,7 +170,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			TenantID: identity.TenantID, ID: plan.messageID,
 			Channel: context.sender.Channel, Country: context.sender.Country,
 			SenderHeader: context.sender.Header, TemplateID: &context.templateID,
-			Msisdn: plan.msisdn, Status: string(state), ErrorCode: errorCode,
+			Msisdn: plan.msisdn, Email: plan.emailForChannel(context.sender.Channel),
+			Status: string(state), ErrorCode: errorCode,
 			FraudFlag: "none", Segments: uint8(plan.segments), CostMinor: cost,
 			Currency: context.rate.Currency, CampaignID: context.campaignID,
 			CreatedAt: now, UpdatedAt: now, Version: 1,
@@ -223,7 +250,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			TenantID: identity.TenantID, ID: plan.messageID,
 			Channel: context.sender.Channel, Country: context.sender.Country,
 			SenderHeader: context.sender.Header, TemplateID: &context.templateID,
-			Msisdn: plan.msisdn, Status: string(state), ErrorCode: errorCode,
+			Msisdn: plan.msisdn, Email: plan.emailForChannel(context.sender.Channel),
+			Status: string(state), ErrorCode: errorCode,
 			ErrorClass: errorClass, FraudFlag: "none", Segments: uint8(plan.segments),
 			CostMinor: cost, Currency: context.rate.Currency,
 			CampaignID: context.campaignID, CarrierRef: carrierRef,
@@ -282,4 +310,36 @@ type batchContext struct {
 	tenantStatus   string
 	balance        int64
 	campaignID     *uuid.UUID
+}
+
+// emailForChannel returns the address to record as the recipient, and only for
+// channels that are addressed by one.
+//
+// Every other channel keeps this nil so the read side falls back to the msisdn:
+// an SMS row carrying an email address would be a lie about where the message
+// went, even when the contact happens to have both.
+func (p sendPlan) emailForChannel(channel string) *string {
+	if channel != "EMAIL" || p.email == "" {
+		return nil
+	}
+	return &p.email
+}
+
+// recipientAddressable reports whether a contact carries the identity this
+// channel is addressed by. Email needs an address; every other channel needs a
+// number.
+func recipientAddressable(channel, msisdn, email string) bool {
+	if channel == "EMAIL" {
+		return email != ""
+	}
+	return msisdn != ""
+}
+
+// contactEmail flattens the optional address to a plain string, so the
+// addressability checks above read the same for both identity kinds.
+func contactEmail(contact store.Contact) string {
+	if contact.Email == nil {
+		return ""
+	}
+	return *contact.Email
 }

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -20,6 +22,39 @@ type AnalyticsSummary struct {
 	CostMinor     int64
 	Currency      string
 	CurrencyMixed bool
+
+	// Latency is handset-confirmed delivery time — created_at to delivered_at —
+	// not time-to-carrier-accept. Accept latency is nearly always fast and
+	// nearly always meaningless; what a customer feels is when the phone buzzes.
+	LatencyP50Ms int
+	LatencyP90Ms int
+
+	// Fraud counts come from the per-message table rather than the rollup: the
+	// rollup aggregates by status and has no fraud dimension, so a fraud figure
+	// derived from it would be an invention.
+	FraudVelocity   int
+	FraudGeoAnomaly int
+	FraudBlocked    int
+
+	// Channel-specific figures. Each is meaningful for exactly one channel and
+	// meaningless for the rest — an SMS has no bounce and a voice call has no
+	// read receipt — so the API sends each one only when the view is filtered
+	// to the channel it belongs to.
+	//
+	// The contract calls these approximate, and they are: they are derived from
+	// the outcome the carrier reported, not from a separate engagement pipeline
+	// we do not have. Bounces are counted from the error codes a mail provider
+	// returns; conversations approximate WhatsApp's billing unit; answered rate
+	// is the share of calls that connected.
+	Bounced       int
+	Conversations int
+	VoiceAnswered int
+	VoiceAttempts int
+
+	// Mean connected-call length, in seconds. Approximated by how long a call
+	// took to reach its delivered state — for Voice that span IS the call, from
+	// dial to hang-up, because a voice message is delivered by being played.
+	VoiceAvgSeconds float64
 }
 
 // AnalyticsBucket is one point on the time series.
@@ -36,6 +71,7 @@ type AnalyticsBucket struct {
 type DeliverabilityRow struct {
 	Country   string
 	Channel   string
+	Carrier   string
 	Sent      int
 	Delivered int
 }
@@ -113,6 +149,86 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		summary.Currency = "INR"
 	}
 
+	// Latency and fraud come from the per-message table, which the rollup cannot
+	// answer: it has no fraud dimension and quantiles cannot be summed out of
+	// pre-aggregated counts. This is a second pass over a narrower slice
+	// (delivered messages only, for the same window) rather than a second full
+	// scan.
+	//
+	// The filter is rebuilt because `messages` is partitioned on created_at
+	// while the rollup keys on `hour` — reusing the rollup's predicate here
+	// would silently scan every partition.
+	messageWhere := "tenant_id = ? AND created_at >= ?"
+	messageArgs := []any{tenantID, filter.Since}
+	if filter.Channel != "" {
+		messageWhere += " AND channel = ?"
+		messageArgs = append(messageArgs, filter.Channel)
+	}
+	if filter.Country != "" {
+		messageWhere += " AND country = ?"
+		messageArgs = append(messageArgs, filter.Country)
+	}
+	var p50, p90 float64
+	var velocity, geoAnomaly, blocked uint64
+	var bounced, conversations, voiceAnswered, voiceAttempts uint64
+	var voiceAvgSeconds float64
+	if err := conn.QueryRow(ctx, `
+		SELECT
+			quantileIf(0.5)(dateDiff('millisecond', created_at, delivered_at),
+			                delivered_at IS NOT NULL),
+			quantileIf(0.9)(dateDiff('millisecond', created_at, delivered_at),
+			                delivered_at IS NOT NULL),
+			countIf(fraud_flag = 'velocity'),
+			countIf(fraud_flag = 'geo_anomaly'),
+			countIf(fraud_flag = 'blocked'),
+			-- A bounce is the mail provider refusing the address, hard or soft.
+			-- Counted from the error code rather than from status alone, because
+			-- "undelivered" also covers a message we never handed over.
+			countIf(channel = 'EMAIL' AND error_code LIKE 'BOUNCED%'),
+			-- WhatsApp bills per 24-hour conversation with a person, not per
+			-- message, so the billable unit is the distinct recipient-day. This
+			-- is the same approximation their own reporting makes, and it is
+			-- labelled approximate in the contract for that reason.
+			uniqExactIf((msisdn, toDate(created_at)), channel = 'WHATSAPP'),
+			-- Answered means the call connected. A call nobody picked up is a
+			-- normal outcome, not a failure, which is why this is a rate rather
+			-- than a delivery figure.
+			countIf(channel = 'VOICE' AND status = 'delivered'),
+			countIf(channel = 'VOICE' AND status IN ('delivered','undelivered')),
+			-- Only connected calls. Averaging in the ones nobody answered would
+			-- drag the mean toward zero and describe a call length that never
+			-- happened.
+			avgIf(dateDiff('second', sent_at, delivered_at),
+			      channel = 'VOICE' AND status = 'delivered'
+			      AND sent_at IS NOT NULL AND delivered_at IS NOT NULL)
+		FROM messages WHERE `+messageWhere, messageArgs...,
+	).Scan(&p50, &p90, &velocity, &geoAnomaly, &blocked,
+		&bounced, &conversations, &voiceAnswered, &voiceAttempts,
+		&voiceAvgSeconds); err != nil {
+		// A tenant with no delivered messages yet is not an error — quantiles
+		// over an empty set return NaN, and the dashboard should show zeros
+		// rather than fail the whole page over a missing latency figure.
+		p50, p90 = 0, 0
+	}
+	if math.IsNaN(p50) {
+		p50 = 0
+	}
+	if math.IsNaN(p90) {
+		p90 = 0
+	}
+	summary.LatencyP50Ms, summary.LatencyP90Ms = int(p50), int(p90)
+	summary.FraudVelocity = int(velocity)
+	summary.FraudGeoAnomaly = int(geoAnomaly)
+	summary.FraudBlocked = int(blocked)
+	summary.Bounced = int(bounced)
+	summary.Conversations = int(conversations)
+	summary.VoiceAnswered = int(voiceAnswered)
+	summary.VoiceAttempts = int(voiceAttempts)
+	// An average over no connected calls is NaN, not zero.
+	if !math.IsNaN(voiceAvgSeconds) {
+		summary.VoiceAvgSeconds = voiceAvgSeconds
+	}
+
 	bucketRows, err := conn.Query(ctx, `
 		SELECT toStartOfDay(hour) AS bucket,
 		       sum(message_count),
@@ -142,12 +258,23 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		return summary, nil, nil, err
 	}
 
+	// Read from `messages` rather than the rollup: deliverability is broken down
+	// BY CARRIER, and the rollup has no carrier dimension. Adding one would mean
+	// changing the ingest path that the send tests already cover, to serve one
+	// screen — this grouped aggregate over a filtered slice is the cheaper trade.
+	// Reporting a single synthetic "all" carrier instead, which is what this did
+	// before, hides exactly the comparison the screen exists to make.
+	//
+	// Messages with no carrier recorded are EXCLUDED rather than bucketed under
+	// a placeholder: this table exists to compare carriers, and a row that
+	// attributes traffic to a carrier that may not have carried it is worse
+	// than a row that is absent. The summary above still counts them.
 	deliverRows, err := conn.Query(ctx, `
-		SELECT country, channel,
-		       sum(message_count),
-		       sumIf(message_count, status = 'delivered')
-		FROM message_rollup_hourly WHERE `+where+`
-		GROUP BY country, channel ORDER BY sum(message_count) DESC`, args...)
+		SELECT country, channel, carrier,
+		       countIf(status IN ('accepted','delivered','undelivered','rejected')) AS sent,
+		       countIf(status = 'delivered') AS delivered
+		FROM messages WHERE `+messageWhere+` AND carrier != ''
+		GROUP BY country, channel, carrier ORDER BY sent DESC`, messageArgs...)
 	if err != nil {
 		return summary, buckets, nil, fmt.Errorf("store: analytics deliverability: %w", err)
 	}
@@ -157,7 +284,8 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	for deliverRows.Next() {
 		var row DeliverabilityRow
 		var sent, delivered uint64
-		if err := deliverRows.Scan(&row.Country, &row.Channel, &sent, &delivered); err != nil {
+		if err := deliverRows.Scan(&row.Country, &row.Channel, &row.Carrier,
+			&sent, &delivered); err != nil {
 			return summary, buckets, nil, fmt.Errorf("store: scan deliverability: %w", err)
 		}
 		row.Sent, row.Delivered = int(sent), int(delivered)
@@ -313,4 +441,86 @@ func DeleteScheduledReport(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		}
 		return nil
 	})
+}
+
+// AttributedSpend is spend grouped by the thing that caused it.
+type AttributedSpend struct {
+	ID       string
+	Name     string
+	Channel  string
+	Currency string
+	Amount   int64
+}
+
+// UsageByCampaign and UsageByJourney attribute spend to what drove it.
+//
+// This has to come from ClickHouse rather than the wallet: the ledger records
+// that money moved, but only the message rows know WHICH campaign or journey
+// moved it. Charging is per message, so the message table is the only place the
+// attribution exists.
+//
+// Delivered messages only, matching every other cost figure in the product — a
+// tenant is not billed for a message that never arrived, so attributing spend
+// to one would inflate the campaign's cost.
+func UsageByCampaign(ctx context.Context, conn driver.Conn, tenantID uuid.UUID) (
+	[]AttributedSpend, error) {
+	return attributedSpend(ctx, conn, tenantID, "campaign_id", "campaign_name")
+}
+
+func UsageByJourney(ctx context.Context, conn driver.Conn, tenantID uuid.UUID) (
+	[]AttributedSpend, error) {
+	return attributedSpend(ctx, conn, tenantID, "journey_id", "journey_name")
+}
+
+func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
+	idColumn, nameColumn string) ([]AttributedSpend, error) {
+
+	rows, err := conn.Query(ctx, fmt.Sprintf(`
+		SELECT toString(%s) AS id, any(%s) AS name, channel, currency,
+		       sumIf(cost_minor, status = 'delivered') AS amount
+		FROM messages
+		WHERE tenant_id = ? AND %s IS NOT NULL
+		GROUP BY id, channel, currency
+		HAVING amount > 0
+		ORDER BY amount DESC`, idColumn, nameColumn, idColumn), tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("store: attributed spend: %w", err)
+	}
+	defer rows.Close()
+	out := []AttributedSpend{}
+	for rows.Next() {
+		var row AttributedSpend
+		if err := rows.Scan(&row.ID, &row.Name, &row.Channel, &row.Currency,
+			&row.Amount); err != nil {
+			return nil, fmt.Errorf("store: scan attributed spend: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// SetScheduledReportPaused pauses or resumes a report.
+//
+// Pausing rather than deleting is the point: a report someone spent time
+// configuring should be stoppable without losing its recipients and schedule,
+// so they can turn it back on later without rebuilding it.
+func SetScheduledReportPaused(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	reportID uuid.UUID, paused bool) (ScheduledReport, error) {
+
+	var report ScheduledReport
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			UPDATE scheduled_reports SET paused = $2 WHERE id = $1
+			RETURNING id, frequency, range_key, recipients, paused, created_at`,
+			reportID, paused,
+		).Scan(&report.ID, &report.Frequency, &report.Range, &report.Recipients,
+			&report.Paused, &report.CreatedAt)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ScheduledReport{}, ErrNotFound
+	}
+	if err != nil {
+		return ScheduledReport{}, fmt.Errorf("store: set scheduled report paused: %w", err)
+	}
+	return report, nil
 }

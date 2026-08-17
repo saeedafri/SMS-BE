@@ -32,6 +32,45 @@ func senderResponse(s store.SenderID) gen.SenderId {
 		CallerIdNumber:  s.CallerIDNumber,
 		CreatedAt:       s.CreatedAt,
 	}
+	// DNS records exist only for email senders. Absent rather than an empty
+	// array for other channels: the contract marks the field optional, and an
+	// empty list would render as "you have records to publish, none of them
+	// verified" on a screen that should not show the section at all.
+	if len(s.DNSRecords) > 0 {
+		records := make([]gen.EmailDnsRecord, 0, len(s.DNSRecords))
+		for _, record := range s.DNSRecords {
+			records = append(records, gen.EmailDnsRecord{
+				Type:   gen.EmailDnsRecordType(record.Type),
+				Host:   record.Host,
+				Value:  record.Value,
+				Status: gen.EmailDnsRecordStatus(record.Status),
+			})
+		}
+		sender.DnsRecords = &records
+	}
+
+	// WhatsApp health, when Meta has assigned it. Left absent rather than sent
+	// as a zero value: "no rating yet" and "rated red" are different facts, and
+	// the senders list must not present the first as the second.
+	if s.QualityRating != nil {
+		rating := gen.WaQualityRating(*s.QualityRating)
+		// The database CHECK already restricts this column to the contract's
+		// three values, so an unknown one means the constraint and the contract
+		// have drifted apart. Dropping the field is the safe half of that: the
+		// frontend resolves this against a fixed registry and throws on a value
+		// it does not know, blanking the whole page rather than one cell.
+		if rating.Valid() {
+			var quality gen.SenderId_QualityRating
+			_ = quality.FromWaQualityRating(rating)
+			sender.QualityRating = &quality
+		}
+	}
+	if s.MessagingTier != nil {
+		var tier gen.SenderId_MessagingTier
+		_ = tier.FromWaMessagingTier(gen.WaMessagingTier(*s.MessagingTier))
+		sender.MessagingTier = &tier
+	}
+
 	// Voice verification state only makes sense for a Voice sender; for every
 	// other channel the contract wants it absent, not a zero value.
 	if s.Channel == string(gen.ChannelIdVOICE) {
@@ -98,6 +137,14 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 		EmailDomain: request.Body.EmailDomain,
 		FromAddress: request.Body.FromAddress,
 		FromName:    request.Body.FromName,
+		// A Voice sender is worth nothing without the number it calls from,
+		// and this was being dropped on the floor: the field was missing from
+		// the contract, so the generated body had nowhere to put it even though
+		// the register form has always sent it and the column has always
+		// existed. The sender was created with a NULL caller-ID, the review
+		// dialog had nothing to show the operator, and the verification step
+		// that is supposed to gate approval had no number to verify.
+		CallerIDNumber: request.Body.CallerIdNumber,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		return gen.CreateSenderId409JSONResponse(errorBody(codeConflict,
@@ -171,8 +218,15 @@ func (s *Server) ConfirmVoiceCode(ctx context.Context, request gen.ConfirmVoiceC
 			"Request a verification call before entering a code.")), nil
 	}
 	if strings.TrimSpace(request.Body.Code) != *sender.VoiceCode {
+		// One wrong guess burns the code. Six digits left standing after a
+		// failed attempt is a brute-force target for anyone with a session, and
+		// what it buys them is the right to place calls as a number they do not
+		// own. The cost to an honest user is one more verification call.
+		if err := store.ClearSenderVoiceCode(ctx, s.DB, identity, senderID); err != nil {
+			return nil, err
+		}
 		return gen.ConfirmVoiceCode422JSONResponse(
-			errorBody(codeValidation, "That code is not correct.")), nil
+			errorBody(codeValidation, "That code is not correct. Request a new call.")), nil
 	}
 	if err := store.MarkSenderVoiceVerified(ctx, s.DB, identity, senderID); err != nil {
 		return nil, err

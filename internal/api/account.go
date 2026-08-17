@@ -17,19 +17,47 @@ const (
 	passwordResetLifetime     = time.Hour
 )
 
-// deliverToken stands in for sending an email; real delivery is wired up in a
-// later stage. Until then the token goes to the log, which is enough to
-// complete the flow locally.
+// deliverToken emails the link, and logs the token either way.
 //
-// It is deliberately NOT returned in the response, even behind a development
-// flag. These endpoints answer 204 by contract, and a reset token in an API
-// response would let anyone who knows an email address take the account over —
-// exactly the attack this flow exists to prevent. A flag that dangerous is not
-// worth the local convenience when a log line does the same job.
+// The token is deliberately NOT returned in the response, even behind a
+// development flag. These endpoints answer 204 by contract, and a reset token
+// in an API response would let anyone who knows an email address take the
+// account over — exactly the attack this flow exists to prevent. A flag that
+// dangerous is not worth the local convenience when a log line does the same
+// job, which is why the log line stays even now that mail really goes out.
+//
+// A send failure is logged, never returned. The token is already stored and
+// valid, so the caller's request genuinely succeeded; failing it would tell
+// somebody their password reset did not work while a working link sat in the
+// database. It would also turn a Resend outage into a broken sign-up flow.
+//
+// The context is deliberately NOT the request's. These run inline in handlers
+// that answer 204 immediately, and on the password-reset path the handler
+// returns the same 204 whether or not the address exists — so cancellation
+// when the client hangs up would silently drop the mail.
 func (s *Server) deliverToken(kind, email, token string) {
 	if s.Logger != nil {
 		s.Logger.Info("account token issued", "kind", kind, "email", email, "token", token)
 	}
+	subject, html, ok := accountEmail(kind, s.appBaseURL(), token)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 15*time.Second)
+	defer cancel()
+	if err := s.Mail.Send(ctx, email, subject, html); err != nil && s.Logger != nil {
+		s.Logger.Error("account email failed", "kind", kind, "email", email, "error", err)
+	}
+}
+
+// appBaseURL falls back to the frontend's development origin so a deployment
+// that forgets to set it still produces a usable link locally rather than one
+// beginning "/verify-email", which no mail client can follow.
+func (s *Server) appBaseURL() string {
+	if s.AppBaseURL != "" {
+		return strings.TrimRight(s.AppBaseURL, "/")
+	}
+	return "http://localhost:3000"
 }
 
 func (s *Server) ResendVerificationEmail(ctx context.Context, _ gen.ResendVerificationEmailRequestObject) (gen.ResendVerificationEmailResponseObject, error) {
@@ -41,6 +69,15 @@ func (s *Server) ResendVerificationEmail(ctx context.Context, _ gen.ResendVerifi
 	raw, hash, err := auth.NewToken()
 	if err != nil {
 		return nil, err
+	}
+	if s.EnableDevEndpoints {
+		// Fixed token in dev, matching DEV_VERIFY_TOKEN in
+		// ../SMS-UI/src/lib/auth/session-config.ts — the "Verify now (dev)"
+		// link that stands in for the emailed one. Same reasoning and the same
+		// gate as devPasswordResetToken above: still armed only by a real
+		// resend, still stored hashed against the one user who asked for it.
+		raw = devEmailVerificationToken
+		hash = auth.HashToken(raw)
 	}
 	if err := store.CreateEmailVerification(ctx, s.DB, hash, identity.UserID,
 		time.Now().Add(emailVerificationLifetime)); err != nil {
@@ -69,6 +106,16 @@ func (s *Server) ConfirmVerificationEmail(ctx context.Context, request gen.Confi
 	return gen.ConfirmVerificationEmail204Response{}, nil
 }
 
+// devEmailVerificationToken is the email-verification token issued when dev
+// endpoints are on. See devPasswordResetToken for the reasoning.
+const devEmailVerificationToken = "dev-verify-token"
+
+// devPasswordResetToken is the reset token issued when dev endpoints are on.
+// It matches DEV_RESET_TOKEN in ../SMS-UI/src/lib/auth/session-config.ts, which
+// is what the dev-only "Open reset link" shortcut on the forgot screen points
+// at.
+const devPasswordResetToken = "dev-reset-token"
+
 // RequestPasswordReset always answers 204, whether or not the address exists.
 // The contract's own description says so: revealing which addresses have
 // accounts turns this form into an enumeration oracle.
@@ -85,6 +132,22 @@ func (s *Server) RequestPasswordReset(ctx context.Context, request gen.RequestPa
 	raw, hash, err := auth.NewToken()
 	if err != nil {
 		return nil, err
+	}
+	if s.EnableDevEndpoints {
+		// A fixed token when dev endpoints are on, so an automated test can
+		// follow the reset link without reading an inbox it has no access to.
+		//
+		// This is the same narrow bargain as auth.DevTOTPSecret, and it is safe
+		// for the same reason plus one more: the token is still ARMED only by a
+		// genuine reset request, and still stored hashed against the one user
+		// who made it. Knowing the string does nothing on its own — visiting
+		// the reset page with it before anyone has asked for a reset fails
+		// exactly as an unknown token does, which is itself a test we run.
+		//
+		// Unreachable unless ENABLE_DEV_ENDPOINTS is set, which defaults to off
+		// and refuses to start on an unrecognised value.
+		raw = devPasswordResetToken
+		hash = auth.HashToken(raw)
 	}
 	if err := store.CreatePasswordReset(ctx, s.DB, hash, userID,
 		time.Now().Add(passwordResetLifetime)); err != nil {
@@ -136,8 +199,15 @@ func (s *Server) ChangePassword(ctx context.Context, request gen.ChangePasswordR
 	// Requiring the current password is what stops a stolen session from
 	// becoming permanent account takeover.
 	if !auth.VerifyPassword(credentials.PasswordHash, request.Body.CurrentPassword) {
-		return gen.ChangePassword403JSONResponse(
-			errorBody(codeForbidden, "Your current password is incorrect.")), nil
+		// 401, not 403. The contract assigns each a distinct meaning here —
+		// 401 "current password is incorrect", 403 "member role has no access
+		// to settings" — and the screen renders them differently: 401 marks the
+		// current-password field, 403 is a whole-form refusal. Answering 403
+		// for a wrong password put a permissions error on a screen the user has
+		// every right to be on, and left the field they actually mistyped
+		// unmarked.
+		return gen.ChangePassword401JSONResponse(
+			errorBody(codeUnauthenticated, "Your current password is incorrect.")), nil
 	}
 	hash, err := auth.HashPassword(request.Body.NewPassword)
 	if err != nil {
@@ -157,7 +227,7 @@ func (s *Server) EnrollMfa(ctx context.Context, _ gen.EnrollMfaRequestObject) (g
 		// than a typed response.
 		return nil, errUnauthenticated
 	}
-	secret, otpauthURI, err := auth.NewTOTPSecret(identity.Email)
+	secret, otpauthURI, err := auth.NewTOTPSecret(identity.Email, s.EnableDevEndpoints)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +264,7 @@ func (s *Server) ConfirmMfaEnrollment(ctx context.Context, request gen.ConfirmMf
 		return gen.ConfirmMfaEnrollment409JSONResponse(
 			errorBody(codeConflict, "Start enrolment before confirming it.")), nil
 	}
-	if !auth.VerifyTOTP(credentials.MFASecret, request.Body.Code) {
+	if !auth.VerifyTOTPWithDevBypass(credentials.MFASecret, request.Body.Code, s.EnableDevEndpoints) {
 		return gen.ConfirmMfaEnrollment401JSONResponse(
 			errorBody(codeUnauthenticated, "That code is not valid. Try the current one.")), nil
 	}
@@ -205,6 +275,11 @@ func (s *Server) ConfirmMfaEnrollment(ctx context.Context, request gen.ConfirmMf
 	if err := store.EnableMfa(ctx, s.DB, identity.UserID, hashes); err != nil {
 		return nil, err
 	}
+	// Recorded on confirmation, not on EnrollMfa: enrolment is staged until a
+	// code proves the user scanned it, and someone who opened the screen and
+	// walked away has not turned anything on.
+	s.recordActivity(ctx, identity, store.ActivityMFAEnroll,
+		"Enabled two-factor authentication")
 	// These are shown once and never again — only their hashes are stored.
 	return gen.ConfirmMfaEnrollment200JSONResponse(gen.MfaRecoveryCodes{
 		RecoveryCodes: codes,
@@ -226,13 +301,15 @@ func (s *Server) DisableMfa(ctx context.Context, request gen.DisableMfaRequestOb
 	}
 	// Turning MFA off is exactly what an attacker holding a stolen session
 	// would try first, so it costs a current code.
-	if !auth.VerifyTOTP(credentials.MFASecret, request.Body.Code) {
+	if !auth.VerifyTOTPWithDevBypass(credentials.MFASecret, request.Body.Code, s.EnableDevEndpoints) {
 		return gen.DisableMfa401JSONResponse(
 			errorBody(codeUnauthenticated, "That code is not valid.")), nil
 	}
 	if err := store.DisableMfa(ctx, s.DB, identity.UserID); err != nil {
 		return nil, err
 	}
+	s.recordActivity(ctx, identity, store.ActivityMFADisable,
+		"Disabled two-factor authentication")
 	return gen.DisableMfa204Response{}, nil
 }
 
@@ -272,7 +349,7 @@ func (s *Server) VerifyMfaChallenge(ctx context.Context, request gen.VerifyMfaCh
 		}
 		verified = err == nil
 	default:
-		verified = auth.VerifyTOTP(credentials.MFASecret, request.Body.Code)
+		verified = auth.VerifyTOTPWithDevBypass(credentials.MFASecret, request.Body.Code, s.EnableDevEndpoints)
 	}
 	if !verified {
 		return gen.VerifyMfaChallenge401JSONResponse(
