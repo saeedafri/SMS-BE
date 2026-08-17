@@ -55,6 +55,25 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	// PRIVILEGE ESCALATION. Every mutating route in this file was authenticated
+	// and nothing more, so a MEMBER — the lowest role, whom the frontend hides
+	// the entire Developer section from — could mint a live API key with
+	// messages:write and be handed the secret. Verified against the deployed
+	// server, not inferred: sam@acme.test (role=member) got 201 and a working
+	// sk_live_ key, and separately created a webhook pointing at an external URL
+	// that would have received every delivery event for the tenant.
+	//
+	// The frontend gate was the only thing in the way, and a frontend gate is
+	// not an authorization boundary — it stops a button being drawn, not a
+	// request being made. The contract already declared a 403 on all of these,
+	// so the guard was intended and simply never written.
+	//
+	// An API key also outlives the check: once issued it authenticates on its
+	// own, so a member who obtained one keeps that reach regardless of role.
+	if !canManageSettings(identity.Role) {
+		return gen.CreateApiKey403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot create API keys.")), nil
+	}
 	if request.Body.Name == "" {
 		return gen.CreateApiKey422JSONResponse(errorBody(codeValidation,
 			"A key name is required.")), nil
@@ -78,6 +97,10 @@ func (s *Server) RotateApiKey(ctx context.Context, request gen.RotateApiKeyReque
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.RotateApiKey403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot rotate API keys.")), nil
 	}
 	keyID, ok2 := parsePathID(request.Id)
 	if !ok2 {
@@ -104,6 +127,10 @@ func (s *Server) RevokeApiKey(ctx context.Context, request gen.RevokeApiKeyReque
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.RevokeApiKey403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot revoke API keys.")), nil
 	}
 	keyID, ok2 := parsePathID(request.Id)
 	if !ok2 {
@@ -220,6 +247,10 @@ func (s *Server) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWe
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	if !canManageSettings(identity.Role) {
+		return gen.CreateWebhookEndpoint403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot create webhook endpoints.")), nil
+	}
 	// An endpoint we cannot reach over TLS is an endpoint that leaks message
 	// content and lets anyone forge delivery reports, so plain http is refused
 	// rather than accepted with a warning nobody reads.
@@ -248,6 +279,10 @@ func (s *Server) UpdateWebhookEndpoint(ctx context.Context, request gen.UpdateWe
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.UpdateWebhookEndpoint403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change webhook endpoints.")), nil
 	}
 	var events []string
 	if request.Body.SubscribedEvents != nil {
@@ -279,6 +314,10 @@ func (s *Server) DeleteWebhookEndpoint(ctx context.Context, request gen.DeleteWe
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.DeleteWebhookEndpoint403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot delete webhook endpoints.")), nil
 	}
 	hookID, ok2 := parsePathID(request.Id)
 	if !ok2 {
@@ -430,6 +469,10 @@ func (s *Server) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllow
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	if !canManageSettings(identity.Role) {
+		return gen.AddIpAllowlistEntry403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change the IP allowlist.")), nil
+	}
 	// A malformed CIDR would silently allow nothing, locking the tenant out of
 	// their own API with no indication why.
 	if err := webhook.ValidateCIDR(request.Body.Cidr); err != nil {
@@ -456,6 +499,10 @@ func (s *Server) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveI
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.RemoveIpAllowlistEntry403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change the IP allowlist.")), nil
 	}
 	entryID, valid := parsePathID(request.Id)
 	if !valid {

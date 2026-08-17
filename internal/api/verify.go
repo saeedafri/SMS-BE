@@ -95,6 +95,10 @@ func (s *Server) CreateVerifyService(ctx context.Context, request gen.CreateVeri
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	if !canManageSettings(identity.Role) {
+		return gen.CreateVerifyService403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot create verify services.")), nil
+	}
 	body := request.Body
 
 	channels := make([]store.VerifyChannelConfig, 0, len(body.Channels))
@@ -412,6 +416,10 @@ func (s *Server) UpdateVerifyService(ctx context.Context, request gen.UpdateVeri
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return gen.UpdateVerifyService403JSONResponse(
+			errorBody(codeForbidden, "Member role cannot change verify services.")), nil
 	}
 	body := request.Body
 	if body == nil {
