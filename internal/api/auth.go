@@ -88,6 +88,23 @@ func (s *Server) Signup(ctx context.Context, request gen.SignupRequestObject) (g
 		return nil, err
 	}
 
+	// Email the verification link now, rather than waiting for the account to
+	// ask for it.
+	//
+	// Signing up sent NOTHING before this: the only path that mailed a
+	// verification link was the explicit /v1/auth/verify-email/resend, so a new
+	// customer created an account, went to their inbox and found an empty one.
+	// That reads as "your email is broken", and it was reported to us as
+	// exactly that.
+	//
+	// Failure is logged, not returned. The account exists and the session is
+	// already valid, so refusing the signup over an undelivered email would
+	// throw away a working account — and the resend endpoint is still there.
+	if err := s.sendVerificationEmail(ctx, userID, email); err != nil {
+		s.Logger.Warn("verification email not sent at signup",
+			"user", userID, "error", err)
+	}
+
 	session, err := s.issueSession(ctx, tenantID, userID)
 	if err != nil {
 		return nil, err
