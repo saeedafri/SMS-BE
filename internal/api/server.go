@@ -100,6 +100,10 @@ func (s *Server) clickhouseFailed(err error) error {
 func NewRouter(s *Server) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	// After RealIP, which is what makes RemoteAddr the caller's address rather
+	// than the proxy's, and before authenticate so a session minted during this
+	// request can record the device it was minted on.
+	r.Use(withClientInfo)
 	r.Use(requestLogger(s.Logger, s.Metrics))
 	r.Use(s.authenticate)
 
