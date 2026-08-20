@@ -27,9 +27,15 @@ func (s *Server) issueSession(ctx context.Context, tenantID, userID uuid.UUID) (
 		return gen.AuthSession{}, err
 	}
 	expiresAt := time.Now().Add(sessionLifetime)
+	// Taken from the request rather than hardcoded, so the security screen can
+	// show which device a session belongs to. Every row used to read
+	// "Unknown · Unknown" with no address, which made the one thing that screen
+	// exists for — spotting a session you do not recognise — impossible.
+	client := clientInfoFrom(ctx)
 	if _, err := store.CreateSession(ctx, s.DB, store.SessionRequest{
 		TenantID: tenantID, UserID: userID, TokenHash: hash,
-		Device: "Unknown", Browser: "Unknown", IP: "", ExpiresAt: expiresAt,
+		Device: client.Device, Browser: client.Browser, IP: client.IP,
+		ExpiresAt: expiresAt,
 	}); err != nil {
 		return gen.AuthSession{}, err
 	}
