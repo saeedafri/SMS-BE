@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/store"
 
@@ -60,30 +62,35 @@ func (s *Server) appBaseURL() string {
 	return "http://localhost:3000"
 }
 
+// sendVerificationEmail mints a verification token for one user and mails the
+// link. Shared by signup and the resend endpoint so the two cannot drift —
+// notably over which addresses get the fixed dev token.
+func (s *Server) sendVerificationEmail(ctx context.Context, userID uuid.UUID, email string) error {
+	raw, hash, err := auth.NewToken()
+	if err != nil {
+		return err
+	}
+	if s.EnableDevEndpoints && isFixtureAddress(email) {
+		raw = devEmailVerificationToken
+		hash = auth.HashToken(raw)
+	}
+	if err := store.CreateEmailVerification(ctx, s.DB, hash, userID,
+		time.Now().Add(emailVerificationLifetime)); err != nil {
+		return err
+	}
+	s.deliverToken("email_verification", email, raw)
+	return nil
+}
+
 func (s *Server) ResendVerificationEmail(ctx context.Context, _ gen.ResendVerificationEmailRequestObject) (gen.ResendVerificationEmailResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return gen.ResendVerificationEmail401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
-	raw, hash, err := auth.NewToken()
-	if err != nil {
+	if err := s.sendVerificationEmail(ctx, identity.UserID, identity.Email); err != nil {
 		return nil, err
 	}
-	if s.EnableDevEndpoints && isFixtureAddress(identity.Email) {
-		// Fixed token for a fixture address, matching DEV_VERIFY_TOKEN in
-		// ../SMS-UI/src/lib/auth/session-config.ts — the "Verify now (dev)"
-		// link that stands in for the emailed one. Same reasoning and the same
-		// gate as devPasswordResetToken above: still armed only by a real
-		// resend, still stored hashed against the one user who asked for it.
-		raw = devEmailVerificationToken
-		hash = auth.HashToken(raw)
-	}
-	if err := store.CreateEmailVerification(ctx, s.DB, hash, identity.UserID,
-		time.Now().Add(emailVerificationLifetime)); err != nil {
-		return nil, err
-	}
-	s.deliverToken("email_verification", identity.Email, raw)
 	return gen.ResendVerificationEmail204Response{}, nil
 }
 
