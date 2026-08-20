@@ -16,7 +16,10 @@ func CreateEmailVerification(ctx context.Context, pool *pgxpool.Pool,
 	tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
 
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+		// Same reason as CreatePasswordReset: the dev build issues a fixed token.
+		`INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (token_hash) DO UPDATE
+		   SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, used_at = NULL`,
 		tokenHash, userID, expiresAt); err != nil {
 		return fmt.Errorf("store: create email verification: %w", err)
 	}
@@ -72,8 +75,17 @@ func FindUserIDByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (u
 func CreatePasswordReset(ctx context.Context, pool *pgxpool.Pool,
 	tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
 
+	// Upsert, because token_hash is the primary key and the dev build issues a
+	// FIXED token — so the second reset request ever made collided and the
+	// endpoint answered 500 instead of 204. A random token never conflicts, so
+	// this changes nothing for real traffic.
+	//
+	// used_at is cleared as well: re-requesting a reset must re-arm the link,
+	// or a fixture account that consumed one could never request another.
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
+		`INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
+		 ON CONFLICT (token_hash) DO UPDATE
+		   SET user_id = EXCLUDED.user_id, expires_at = EXCLUDED.expires_at, used_at = NULL`,
 		tokenHash, userID, expiresAt); err != nil {
 		return fmt.Errorf("store: create password reset: %w", err)
 	}
