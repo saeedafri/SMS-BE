@@ -70,8 +70,8 @@ func (s *Server) ResendVerificationEmail(ctx context.Context, _ gen.ResendVerifi
 	if err != nil {
 		return nil, err
 	}
-	if s.EnableDevEndpoints {
-		// Fixed token in dev, matching DEV_VERIFY_TOKEN in
+	if s.EnableDevEndpoints && isFixtureAddress(identity.Email) {
+		// Fixed token for a fixture address, matching DEV_VERIFY_TOKEN in
 		// ../SMS-UI/src/lib/auth/session-config.ts — the "Verify now (dev)"
 		// link that stands in for the emailed one. Same reasoning and the same
 		// gate as devPasswordResetToken above: still armed only by a real
@@ -107,8 +107,49 @@ func (s *Server) ConfirmVerificationEmail(ctx context.Context, request gen.Confi
 }
 
 // devEmailVerificationToken is the email-verification token issued when dev
-// endpoints are on. See devPasswordResetToken for the reasoning.
+// endpoints are on, for a fixture address. See devPasswordResetToken.
 const devEmailVerificationToken = "dev-verify-token"
+
+// reservedTestTLDs are the top-level domains that can never be registered, so
+// no real person can ever hold an address under one.
+//
+// RFC 2606 and RFC 6761 set aside .test, .example, .invalid and .localhost
+// permanently for documentation and testing; .internal is reserved for private
+// use by RFC 8375. A DNS root that resolves any of them is misconfigured.
+var reservedTestTLDs = []string{
+	".test", ".example", ".invalid", ".localhost", ".internal",
+}
+
+// isFixtureAddress reports whether an address belongs to a test fixture rather
+// than a person.
+//
+// This is what makes the fixed dev tokens below safe to arm. Gating them on
+// ENABLE_DEV_ENDPOINTS alone was NOT safe, and was a live account-takeover on
+// the public API: /v1/auth/password/reset is an ordinary public endpoint, so
+// the nginx rule that denies /v1/dev/* never covered it. Anyone could POST
+// /v1/auth/password/forgot for any address, POST the publicly-known
+// "dev-reset-token" to /v1/auth/password/reset, and own that account without
+// ever seeing its inbox. Verified end to end against the deployment, then
+// fixed here.
+//
+// Two conditions, both required — the same bargain VerifyTOTPWithDevBypass
+// makes, and for the same reason. The dev flag alone says "this instance runs
+// tests"; it must also be true that the account being acted on IS one of those
+// tests. A real address cannot end in a reserved TLD, so a real account can
+// never be reached this way however the flag is set.
+func isFixtureAddress(email string) bool {
+	at := strings.LastIndexByte(email, '@')
+	if at < 0 {
+		return false
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, tld := range reservedTestTLDs {
+		if strings.HasSuffix(domain, tld) {
+			return true
+		}
+	}
+	return false
+}
 
 // devPasswordResetToken is the reset token issued when dev endpoints are on.
 // It matches DEV_RESET_TOKEN in ../SMS-UI/src/lib/auth/session-config.ts, which
@@ -133,9 +174,14 @@ func (s *Server) RequestPasswordReset(ctx context.Context, request gen.RequestPa
 	if err != nil {
 		return nil, err
 	}
-	if s.EnableDevEndpoints {
-		// A fixed token when dev endpoints are on, so an automated test can
-		// follow the reset link without reading an inbox it has no access to.
+	if s.EnableDevEndpoints && isFixtureAddress(email) {
+		// A fixed token for a FIXTURE address when dev endpoints are on, so an
+		// automated test can follow the reset link without reading an inbox it
+		// has no access to.
+		//
+		// The isFixtureAddress half is not optional: without it this is an
+		// unauthenticated account takeover on any address the server knows.
+		// See its doc comment.
 		//
 		// This is the same narrow bargain as auth.DevTOTPSecret, and it is safe
 		// for the same reason plus one more: the token is still ARMED only by a
