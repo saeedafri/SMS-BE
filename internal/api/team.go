@@ -64,6 +64,13 @@ func (s *Server) InviteTeamMember(ctx context.Context, request gen.InviteTeamMem
 	// Only an owner may create another owner; an admin promoting someone to
 	// owner would be an escalation past their own level.
 	role := string(request.Body.Role)
+	// Checked before the escalation rule below, not after: that rule only asks
+	// whether the role IS "owner", so an unrecognised one slips past it and
+	// lands on the tenant_users CHECK constraint as a 500.
+	if !oneOf(role, validRoles) {
+		return gen.InviteTeamMember422JSONResponse(
+			errorBody(codeValidation, enumMessage("Role", validRoles))), nil
+	}
 	if role == "owner" && identity.Role != "owner" {
 		return gen.InviteTeamMember403JSONResponse(
 			errorBody(codeForbidden, "Only an owner can invite another owner.")), nil
@@ -103,6 +110,10 @@ func (s *Server) UpdateTeamMemberRole(ctx context.Context, request gen.UpdateTea
 			errorBody(codeNotFound, "No such team member.")), nil
 	}
 	role := string(request.Body.Role)
+	if !oneOf(role, validRoles) {
+		return gen.UpdateTeamMemberRole422JSONResponse(
+			errorBody(codeValidation, enumMessage("Role", validRoles))), nil
+	}
 	if role == "owner" && identity.Role != "owner" {
 		return gen.UpdateTeamMemberRole403JSONResponse(
 			errorBody(codeForbidden, "Only an owner can promote someone to owner.")), nil
