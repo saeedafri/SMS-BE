@@ -185,21 +185,40 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	if auditErr != nil {
 		return fmt.Errorf("clear operator audit log: %w", auditErr)
 	}
-	// Everything the fixture does not own goes, not just the demo tenant.
+	// What the fixture does not own goes — but ONLY if it is itself a test
+	// account.
 	//
-	// The specs sign up real accounts with FIXED addresses — grace@newco.test is
-	// one — so the first run creates them and every later run gets a 409 and
-	// never leaves the signup page. That reads as a broken signup flow when it is
-	// really leftover state. A rebuild that removes only its own tenant leaves
-	// exactly the rows that break the next run.
+	// The specs sign up accounts with FIXED addresses (grace@newco.test), so the
+	// first run creates them and every later run gets a 409 and never leaves the
+	// signup page. That reads as a broken signup flow when it is really leftover
+	// state, so the rebuild has to clear more than its own tenant.
+	//
+	// It used to clear EVERYTHING it did not recognise, which on a deployment
+	// that also serves real traffic is a data-loss bug rather than a cleanup: a
+	// real customer signing up on the demo had their tenant deleted by the next
+	// test run. That happened — a live account created minutes earlier was gone,
+	// and the signup that raced the delete died on the sessions foreign key.
+	//
+	// So a tenant now survives if ANY of its users has a real email address. A
+	// reserved TLD (.test/.example/.invalid/.localhost/.internal, RFC 2606 and
+	// 6761) cannot be registered, so "every user is at a reserved TLD" is a
+	// reliable statement that nobody real is in there. Same test the auth code
+	// uses to decide whether a fixed dev token may be issued.
 	_, deleteErr := pool.Exec(ctx, `
-		DELETE FROM tenants WHERE id NOT IN (
+		DELETE FROM tenants t
+		 WHERE (t.id NOT IN (
 			$1,
 			'aaaaaaaa-1111-1111-1111-111111111111','bbbbbbbb-2222-2222-2222-222222222222',
 			'cccccccc-3333-3333-3333-333333333333','dddddddd-4444-4444-4444-444444444444',
 			'eeeeeeee-5555-5555-5555-555555555555','ffffffff-6666-6666-6666-666666666666',
 			'99999999-7777-7777-7777-777777777777')
-		   OR id = $1`, tenantID)
+		        AND NOT EXISTS (
+		          SELECT 1 FROM tenant_users tu
+		            JOIN users u ON u.id = tu.user_id
+		           WHERE tu.tenant_id = t.id
+		             AND u.email !~ '\.(test|example|invalid|localhost|internal)$'
+		        ))
+		    OR t.id = $1`, tenantID)
 	if _, err := pool.Exec(ctx,
 		`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`); err != nil {
 		return fmt.Errorf("restore ledger guard: %w", err)
