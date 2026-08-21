@@ -1120,6 +1120,20 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	// rate card renders one row per (country, channel, category), so a rate card
 	// with only channel-level rows shows nothing for Email or Voice — and the
 	// categories are what a customer is actually billed against.
+	// Cleared first, then rebuilt — the same shape as routes below.
+	//
+	// Upserting alone restored every row the fixture KNOWS about but left behind
+	// any row it does not, and the console can create those: one probe wrote a
+	// rate for channel "TELEPATHY" and it survived every later reset, sat in the
+	// rate card forever, and broke four specs that walk the table looking for
+	// their own row. Rows nobody can explain are exactly what a reset is for.
+	//
+	// Safe to delete wholesale: no foreign key references pricing_rates, and the
+	// INSERT below is the complete rate card rather than a patch on top of
+	// migration 00009.
+	if _, err := pool.Exec(ctx, `DELETE FROM pricing_rates`); err != nil {
+		return fmt.Errorf("clear pricing rates: %w", err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO pricing_rates (country, channel, category, per_segment_minor, currency)
 		-- MARKETING, not PROMOTIONAL. The contract types this field as
