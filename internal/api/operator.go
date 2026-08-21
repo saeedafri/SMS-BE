@@ -227,6 +227,25 @@ func (s *Server) GetTenantDetail(ctx context.Context, request gen.GetTenantDetai
 	if err != nil {
 		return nil, err
 	}
+	// Volume comes from the warehouse; GetTenant only reads Postgres. Without
+	// this the screen reported "0 messages sent in the last 30 days" for every
+	// tenant, forever, while the usage report one click away said 2,119 for the
+	// same tenant over the same window.
+	//
+	// Logged and swallowed, never returned: a warehouse that is down should cost
+	// this screen its volume figure, not the whole tenant record an operator
+	// opened it to read.
+	if conn, chErr := s.clickhouse(ctx); chErr != nil {
+		s.Logger.Warn("tenant usage snapshot unavailable — no warehouse connection",
+			"tenant", tenant.ID, "error", chErr)
+	} else if usage, usageErr := store.QueryTenantUsage(ctx, conn, tenant.ID.String(),
+		time.Now().AddDate(0, 0, -30)); usageErr != nil {
+		s.Logger.Warn("tenant usage snapshot unavailable",
+			"tenant", tenant.ID, "error", usageErr)
+	} else {
+		tenant.MessagesSent30d = usage.MessagesSent30d
+		tenant.LastActivityAt = usage.LastActivityAt
+	}
 	return gen.GetTenantDetail200JSONResponse(toTenantDetail(tenant)), nil
 }
 

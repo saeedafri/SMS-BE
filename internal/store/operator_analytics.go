@@ -142,3 +142,44 @@ func TenantNames(ctx context.Context, pool *pgxpool.Pool) (map[string]string, er
 	}
 	return names, rows.Err()
 }
+
+// TenantUsageSnapshot is one tenant's recent volume, for the operator console's
+// tenant detail screen.
+type TenantUsageSnapshot struct {
+	MessagesSent30d int
+	LastActivityAt  *time.Time
+}
+
+// QueryTenantUsage returns how much one tenant has sent since `since`.
+//
+// This exists because the tenant detail screen was reporting zero for every
+// tenant, forever: GetTenant reads Postgres, the volume lives in ClickHouse, and
+// nothing ever bridged the two — so TenantDetail.usage was serialised straight
+// from an unpopulated struct. The platform usage report on the very next screen
+// said 2,119 for the same tenant over the same window.
+//
+// Same table and the same `attempted` definition the platform report uses, so
+// the two screens cannot drift apart again by counting different things.
+func QueryTenantUsage(ctx context.Context, conn driver.Conn, tenantID string,
+	since time.Time) (TenantUsageSnapshot, error) {
+
+	const attempted = `status IN ('accepted','submitted','rejected')`
+	var snapshot TenantUsageSnapshot
+	var total uint64
+	var lastHour time.Time
+
+	// maxIf, not max: a tenant with no attempted messages in the window has no
+	// last activity, and ClickHouse returns the zero time for that rather than
+	// NULL. The zero check below turns it back into "nothing yet".
+	if err := conn.QueryRow(ctx, `
+		SELECT sumIf(message_count, `+attempted+`), maxIf(hour, `+attempted+`)
+		FROM message_rollup_hourly
+		WHERE tenant_id = ? AND hour >= ?`, tenantID, since).Scan(&total, &lastHour); err != nil {
+		return TenantUsageSnapshot{}, fmt.Errorf("store: tenant usage: %w", err)
+	}
+	snapshot.MessagesSent30d = int(total)
+	if !lastHour.IsZero() {
+		snapshot.LastActivityAt = &lastHour
+	}
+	return snapshot, nil
+}
