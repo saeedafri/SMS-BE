@@ -121,6 +121,13 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 		return gen.CreateSenderId422JSONResponse(
 			errorBody(codeValidation, "A sender header is required.")), nil
 	}
+	// sender_ids.channel has no CHECK constraint behind it, so an unchecked
+	// value here is written verbatim — a probe created a sender on channel
+	// "TELEPATHY" and it sat in the approvals queue.
+	if !oneOf(string(request.Body.Channel), validChannels) {
+		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation,
+			enumMessage("Channel", validChannels))), nil
+	}
 	country := string(request.Body.Country)
 	if _, known := compliance.For(country); !known {
 		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation,

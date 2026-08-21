@@ -231,6 +231,10 @@ func (s *Server) CreateScheduledReport(ctx context.Context, request gen.CreateSc
 		return gen.CreateScheduledReport422JSONResponse(errorBody(codeValidation,
 			"At least one recipient is required.")), nil
 	}
+	if !oneOf(string(request.Body.Frequency), validFrequencies) {
+		return gen.CreateScheduledReport422JSONResponse(errorBody(codeValidation,
+			enumMessage("Frequency", validFrequencies))), nil
+	}
 	report, err := store.CreateScheduledReport(ctx, s.DB, identity, store.ScheduledReport{
 		Frequency:  string(request.Body.Frequency),
 		Range:      string(request.Body.Range),

@@ -691,6 +691,12 @@ func (s *Server) UpdateDefaultRate(ctx context.Context, request gen.UpdateDefaul
 			category = string(parsed)
 		}
 	}
+	// An unchecked channel here writes a rate row nothing will ever match, so
+	// the corridor it was meant to price silently keeps the old number.
+	if !oneOf(string(request.Body.Channel), validChannels) {
+		return gen.UpdateDefaultRate422JSONResponse(errorBody(codeValidation,
+			enumMessage("Channel", validChannels))), nil
+	}
 	rate, err := store.UpsertPricingRate(ctx, s.DB, string(request.Body.Country),
 		string(request.Body.Channel), category, int64(request.Body.PerSegmentMinor))
 	if err != nil {
@@ -777,6 +783,10 @@ func (s *Server) CreateRateOverride(ctx context.Context,
 	// The override's currency follows the tenant's default rate corridor rather
 	// than being chosen here: an override priced in a different currency from
 	// the wallet it debits cannot be charged.
+	if !oneOf(string(request.Body.Channel), validChannels) {
+		return gen.CreateRateOverride422JSONResponse(errorBody(codeValidation,
+			enumMessage("Channel", validChannels))), nil
+	}
 	created, err := store.CreateRateOverride(ctx, s.DB, store.RateOverride{
 		TenantID: request.Body.TenantId, TenantName: tenant.Name,
 		Country: string(request.Body.Country), Channel: string(request.Body.Channel),

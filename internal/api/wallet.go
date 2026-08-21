@@ -220,6 +220,10 @@ func (s *Server) AddPaymentMethod(ctx context.Context, request gen.AddPaymentMet
 		}
 	}
 
+	if !oneOf(string(request.Body.Brand), validCardBrands) {
+		return gen.AddPaymentMethod422JSONResponse(errorBody(codeValidation,
+			enumMessage("Brand", validCardBrands))), nil
+	}
 	created, err := store.AddPaymentMethod(ctx, s.DB, identity,
 		string(request.Body.Brand), request.Body.Last4)
 	if err != nil {
@@ -324,6 +328,10 @@ func (s *Server) UpdateAutoRecharge(ctx context.Context, request gen.UpdateAutoR
 			errorBody(codeForbidden, "Member role cannot change auto-recharge.")), nil
 	}
 
+	if !oneOf(string(request.Body.Currency), validCurrencies) {
+		return gen.UpdateAutoRecharge422JSONResponse(errorBody(codeValidation,
+			enumMessage("Currency", validCurrencies))), nil
+	}
 	config := store.AutoRecharge{
 		Currency:       string(request.Body.Currency),
 		Enabled:        request.Body.Enabled,
