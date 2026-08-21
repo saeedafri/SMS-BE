@@ -78,6 +78,10 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 		return gen.CreateApiKey422JSONResponse(errorBody(codeValidation,
 			"A key name is required.")), nil
 	}
+	if !oneOf(string(request.Body.Environment), validEnvironments) {
+		return gen.CreateApiKey422JSONResponse(errorBody(codeValidation,
+			enumMessage("Environment", validEnvironments))), nil
+	}
 	key, err := store.CreateAPIKey(ctx, s.DB, identity, request.Body.Name,
 		string(request.Body.Environment), request.Body.Scopes)
 	if err != nil {
@@ -260,6 +264,10 @@ func (s *Server) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWe
 	events := make([]string, 0, len(request.Body.SubscribedEvents))
 	for _, event := range request.Body.SubscribedEvents {
 		events = append(events, string(event))
+	}
+	if !oneOf(string(request.Body.Environment), validEnvironments) {
+		return gen.CreateWebhookEndpoint422JSONResponse(errorBody(codeValidation,
+			enumMessage("Environment", validEnvironments))), nil
 	}
 	hook, err := store.CreateWebhook(ctx, s.DB, identity,
 		string(request.Body.Environment), request.Body.Url, events)
@@ -477,6 +485,10 @@ func (s *Server) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllow
 	// their own API with no indication why.
 	if err := webhook.ValidateCIDR(request.Body.Cidr); err != nil {
 		return gen.AddIpAllowlistEntry422JSONResponse(errorBody(codeValidation, err.Error())), nil
+	}
+	if !oneOf(string(request.Body.Environment), validEnvironments) {
+		return gen.AddIpAllowlistEntry422JSONResponse(errorBody(codeValidation,
+			enumMessage("Environment", validEnvironments))), nil
 	}
 	entry, err := store.AddIPAllowEntry(ctx, s.DB, identity,
 		string(request.Body.Environment), request.Body.Cidr, request.Body.Label)
