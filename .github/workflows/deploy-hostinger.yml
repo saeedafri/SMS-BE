@@ -54,6 +54,7 @@ jobs:
           mkdir -p out
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/control-api ./cmd/control-api
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/seed-demo   ./cmd/seed-demo
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/operator-admin ./cmd/operator-admin
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o out/goose github.com/pressly/goose/v3/cmd/goose \
             || GOBIN="$PWD/out" go install github.com/pressly/goose/v3/cmd/goose@v3.22.1
           ls -lh out/
@@ -75,6 +76,7 @@ jobs:
           SCP="scp -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
           $SCP out/control-api "$USER@$HOST:/opt/relay/control-api.new"
           $SCP out/seed-demo   "$USER@$HOST:/opt/relay/seed-demo.new"
+          $SCP out/operator-admin "$USER@$HOST:/opt/relay/operator-admin.new"
           $SCP out/goose       "$USER@$HOST:/usr/local/bin/goose.new"
           $SCP -r db scripts   "$USER@$HOST:/opt/relay/"
           $SCP deploy/relay-api.service "$USER@$HOST:/etc/systemd/system/relay-api.service"
@@ -117,10 +119,11 @@ jobs:
           # Keep the outgoing binary. Without it there is nothing to roll back
           # TO, and "redeploy the previous commit" is a slow answer at 3am.
           cp -a /opt/relay/control-api /opt/relay/control-api.prev 2>/dev/null || true
-          chown relay:relay /opt/relay/control-api.new /opt/relay/seed-demo.new
-          chmod 755 /opt/relay/control-api.new /opt/relay/seed-demo.new
+          chown relay:relay /opt/relay/control-api.new /opt/relay/seed-demo.new /opt/relay/operator-admin.new
+          chmod 755 /opt/relay/control-api.new /opt/relay/seed-demo.new /opt/relay/operator-admin.new
           mv /opt/relay/control-api.new /opt/relay/control-api
           mv /opt/relay/seed-demo.new  /opt/relay/seed-demo
+          mv /opt/relay/operator-admin.new /opt/relay/operator-admin
           systemctl daemon-reload
           systemctl restart relay-api
           echo "::endgroup::"
