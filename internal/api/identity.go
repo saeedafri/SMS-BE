@@ -14,6 +14,16 @@ import (
 
 type identityKey struct{}
 
+// environmentKey carries the API key's environment, which decides its throttle.
+type environmentKey struct{}
+
+// keyEnvironment reports which environment the calling API key belongs to.
+// Empty for a dashboard session.
+func keyEnvironment(ctx context.Context) string {
+	environment, _ := ctx.Value(environmentKey{}).(string)
+	return environment
+}
+
 // scopesKey carries an API key's scopes. Absent for a dashboard session, which
 // is authorised by role instead.
 type scopesKey struct{}
@@ -79,10 +89,12 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		// enforcing scopes at each endpoint that opts in, not here.
 		if isAPIKey(token) {
 			if r.Method == http.MethodPost && r.URL.Path == "/v1/messages" {
-				keyIdentity, scopes, keyErr := store.ResolveAPIKey(r.Context(), s.DB, token)
+				keyIdentity, scopes, environment, keyErr := store.ResolveAPIKey(
+					r.Context(), s.DB, token)
 				if keyErr == nil {
 					ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
 					ctx = context.WithValue(ctx, scopesKey{}, scopes)
+					ctx = context.WithValue(ctx, environmentKey{}, environment)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
