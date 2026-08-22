@@ -213,3 +213,100 @@ func TestSendsAreThrottledToTheTierTheCustomerIsShown(t *testing.T) {
 			"developer settings page advertises is not enforced")
 	}
 }
+
+// A sender that is not approved must be refused, not crash.
+//
+// Found on production the day the endpoint shipped: sending from the fixture's
+// pending header returned 500 "an unexpected error occurred". The customer
+// cannot tell a rejected send from a broken platform, and neither can we.
+func TestSendingFromAnUnapprovedSenderIsRefusedCleanly(t *testing.T) {
+	h := newSendHarness(t)
+	tenant := h.newAccount("owner")
+	h.fundWallet(tenant)
+	var pending string
+	if err := h.admin.QueryRow(context.Background(), `
+		INSERT INTO sender_ids (tenant_id, header, channel, country, status)
+		VALUES ($1, 'PENDNG', 'SMS', 'IN', 'pending_review') RETURNING id`,
+		tenant.TenantID).Scan(&pending); err != nil {
+		t.Fatalf("seed pending sender: %v", err)
+	}
+
+	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
+		"senderId": pending, "to": "9876543210", "body": "Hello",
+	})
+	if res.Code >= 500 {
+		t.Fatalf("sending from a pending sender = %d\n%s", res.Code, res.Body)
+	}
+	if res.Code == http.StatusAccepted {
+		var result struct {
+			Status    string  `json:"status"`
+			ErrorCode *string `json:"errorCode"`
+		}
+		res.decode(t, &result)
+		if result.Status == "sent" || result.Status == "queued" {
+			t.Fatalf("a pending sender sent a message (status %q)", result.Status)
+		}
+		if result.ErrorCode == nil || *result.ErrorCode == "" {
+			t.Error("refused with no reason the caller can act on")
+		}
+	}
+}
+
+// Every gate refusal has to come back as an answer, not a crash. Each of these
+// is a rule a customer can hit on their first integration.
+func TestEveryGateRefusalIsAnAnswerNotAFiveHundred(t *testing.T) {
+	h := newSendHarness(t)
+	tenant := h.newAccount("owner")
+	sender := h.approvedSender(tenant)
+	h.fundWallet(tenant)
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"a recipient that is not a number", map[string]any{
+			"senderId": sender, "to": "not-a-phone-number", "body": "Hello"}},
+		{"a template that belongs to another sender", map[string]any{
+			"senderId": sender, "to": "9876543210", "body": "Hello",
+			"templateId": h.templateForOtherSender(tenant)}},
+	}
+	for _, c := range cases {
+		res := h.do(http.MethodPost, "/v1/messages", tenant.Token, c.body)
+		if res.Code >= 500 {
+			t.Errorf("%s = %d\n%s", c.name, res.Code, res.Body)
+			continue
+		}
+		if res.Code == http.StatusAccepted {
+			var result struct {
+				Status    string  `json:"status"`
+				ErrorCode *string `json:"errorCode"`
+			}
+			res.decode(t, &result)
+			if result.Status == "sent" || result.Status == "queued" {
+				t.Errorf("%s was accepted and sent", c.name)
+			}
+			if result.ErrorCode == nil || *result.ErrorCode == "" {
+				t.Errorf("%s: refused with no reason", c.name)
+			}
+		}
+	}
+}
+
+// A template hung off a DIFFERENT approved sender, which the gate refuses.
+func (h *harness) templateForOtherSender(tenant account) string {
+	h.t.Helper()
+	var otherSender, template string
+	if err := h.admin.QueryRow(context.Background(), `
+		INSERT INTO sender_ids (tenant_id, header, channel, country, status)
+		VALUES ($1, 'OTHERS', 'SMS', 'IN', 'approved') RETURNING id`,
+		tenant.TenantID).Scan(&otherSender); err != nil {
+		h.t.Fatalf("seed other sender: %v", err)
+	}
+	if err := h.admin.QueryRow(context.Background(), `
+		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status)
+		VALUES ($1, $2, 'Mismatched', 'SMS', 'IN', 'Hello', 'approved') RETURNING id`,
+		tenant.TenantID, otherSender).Scan(&template); err != nil {
+		h.t.Fatalf("seed template: %v", err)
+	}
+	return template
+}

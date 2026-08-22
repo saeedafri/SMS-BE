@@ -70,6 +70,28 @@ func Check(input GateInput) error {
 
 // GateFailureCode maps a gate error to a stable, machine-readable code for the
 // API and the message log.
+// IsRefusal reports whether err is the gate declining a send, rather than the
+// send path itself failing.
+//
+// The difference matters to anyone reporting the outcome: a refusal is a normal
+// result with a reason the caller can act on ("that sender is not approved"),
+// while any other error means something broke and there is nothing useful to
+// tell them. Treating the two alike is how a customer sending from a pending
+// sender got "an unexpected error occurred" and a 500 — found on production the
+// day the send API shipped.
+func IsRefusal(err error) bool {
+	for _, refusal := range []error{
+		ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
+		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
+		ErrInvalidRecipient,
+	} {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
 func GateFailureCode(err error) string {
 	switch {
 	case errors.Is(err, ErrTenantSuspended):
