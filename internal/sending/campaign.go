@@ -122,7 +122,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	}
 
 	campaignID := campaign.ID
-	context := batchContext{
+	batch := batchContext{
 		sender: sender, templateID: campaign.TemplateID,
 		templateStatus: template.Status, templateSender: template.SenderID.String(),
 		body: body, rate: rate, tenantStatus: tenantStatus,
@@ -133,6 +133,29 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		return 0, 0, err
 	}
 
+	// From here on the campaign is 'sending', and every early return below has
+	// to move it off that status. Without this, one failed page — a contact
+	// query that errors, a ClickHouse blip — left the campaign sending forever
+	// with nothing running to finish it, and the customer saw a send that never
+	// ended. The status matches what actually left: some messages out is a send
+	// that happened, none out is one that did not.
+	//
+	// WithoutCancel because the common cause of the early return is the request
+	// context going away, and the landing write must still happen.
+	defer func() {
+		if err == nil {
+			return
+		}
+		status := "sent"
+		if sent == 0 {
+			status = "failed"
+		}
+		if landErr := store.SetCampaignStatus(context.WithoutCancel(ctx), s.DB,
+			identity, campaign.ID, status); landErr != nil && s.Logger != nil {
+			s.Logger.Warn("campaign left sending", "campaign", campaign.ID, "error", landErr)
+		}
+	}()
+
 	// Paged so a million-contact list never has to fit in memory at once.
 	cursor := ""
 	for {
@@ -141,7 +164,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		if err != nil {
 			return sent, failed, err
 		}
-		pageSent, pageFailed, err := s.SendBatch(ctx, identity, context, contacts)
+		pageSent, pageFailed, err := s.SendBatch(ctx, identity, batch, contacts)
 		sent += pageSent
 		failed += pageFailed
 		if err != nil {
@@ -149,7 +172,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 		// The running balance shrinks as the campaign spends, so a wallet that
 		// runs dry stops the rest of the campaign instead of overdrawing.
-		context.balance -= int64(pageSent) * rate.PerSegmentMinor
+		batch.balance -= int64(pageSent) * rate.PerSegmentMinor
 		if next == "" {
 			break
 		}

@@ -132,7 +132,7 @@ func run() error {
 				if err != nil {
 					return nil
 				}
-				reconciler := &sending.Service{DB: pool, ClickHouse: conn}
+				reconciler := &sending.Service{DB: pool, ClickHouse: conn, Logger: logger}
 				expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
 				if err != nil {
 					clickhouse.Drop()
@@ -140,8 +140,30 @@ func run() error {
 				if expired > 0 {
 					logger.Info("reconciled stale messages", "expired", expired)
 				}
-				return err
+
+				// Campaigns abandoned mid-fan-out. Same tick rather than a
+				// second worker: it reads the same ClickHouse handle, runs in
+				// milliseconds, and a campaign stuck at 'sending' is the
+				// campaign-level version of exactly what the sweep above fixes
+				// per message.
+				landed, campaignErr := sending.ReconcileStuckCampaigns(ctx,
+					operatorPool, pool, conn, sending.StuckCampaignWindow, 100)
+				if landed > 0 {
+					logger.Info("landed abandoned campaigns", "count", landed)
+				}
+				return errors.Join(err, campaignErr)
 			})
+	}
+
+	// Parsed before the server starts: a malformed allowlist must stop the
+	// process, not silently leave the console open to everyone.
+	operatorAllowlist, err := api.ParseOperatorAllowlist(cfg.OperatorIPAllowlist)
+	if err != nil {
+		logger.Error("OPERATOR_IP_ALLOWLIST is not a list of addresses or CIDRs", "error", err)
+		os.Exit(1)
+	}
+	if cfg.OperatorIPAllowlist == "" {
+		logger.Warn("operator console is reachable from any address — set OPERATOR_IP_ALLOWLIST")
 	}
 
 	server := &http.Server{
@@ -150,7 +172,9 @@ func run() error {
 			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
 			EnableDevEndpoints: cfg.EnableDevEndpoints,
 			SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
-			OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL,
+			AllowGreyRoutes:   cfg.AllowGreyRoutes,
+			OperatorAllowlist: operatorAllowlist,
+			OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
 			Mail: &mailer.Mailer{
 				APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 			}}),

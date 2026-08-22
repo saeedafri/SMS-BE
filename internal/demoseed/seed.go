@@ -10,12 +10,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/domain/auth"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -330,6 +332,35 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		  ($1, 'cccccccc-cccc-cccc-cccc-cccccccccccc', 'member', 'invited', '2026-07-20T10:00:00Z')`,
 		tenantID); err != nil {
 		return fmt.Errorf("seed team memberships: %w", err)
+	}
+
+	// The compliance registrations that stand behind the approved senders below.
+	//
+	// Without these the fixture is a state the product must not be able to
+	// reach: India requires a registered principal entity before any header
+	// sends, and the seed was approving five senders and eleven templates with
+	// no entity behind them at all. It looked fine on every screen and was
+	// discovered only when a live campaign refused to send — the console said
+	// approved, the regime said the tenant had registered nothing.
+	//
+	// Approved, because the senders they authorise are seeded approved. Seeding
+	// them pending would swap one contradiction for the mirror image of it.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO registrations (tenant_id, country, object_key, status,
+		                           external_id, fields, created_at, updated_at)
+		VALUES
+		  ($1, 'IN', 'pe_rtm_entity', 'approved', '1101234567890123456',
+		   '{"legalName":"Acme Retail Private Limited","pan":"AACCA1234A",
+		     "entityType":"private_ltd","contactEmail":"compliance@acme.test"}'::jsonb,
+		   '2026-05-01T09:00:00Z', '2026-05-02T09:25:00Z'),
+		  ($1, 'IN', 'dlt_header', 'approved', '1201234567890123456',
+		   '{"header":"ACMERT","headerType":"transactional"}'::jsonb,
+		   '2026-05-01T09:10:00Z', '2026-05-02T09:30:00Z'),
+		  ($1, 'IN', 'dlt_template', 'approved', '1301234567890123456',
+		   '{"templateName":"Order shipped","dltTemplateId":"1307161234567890123"}'::jsonb,
+		   '2026-05-01T09:20:00Z', '2026-05-02T09:35:00Z')`,
+		tenantID); err != nil {
+		return fmt.Errorf("seed registrations: %w", err)
 	}
 
 	// The five senders the frontend's fixtures define, one per channel, plus a
@@ -1192,8 +1223,16 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		-- Priority repeats within a corridor because it ranks the ways of reaching
 		-- ONE carrier: JIO has a direct route and an aggregator route, so those are
 		-- 1 and 2, while AIRTEL's own direct route is separately priority 1.
+		--
+		-- Every 'grey' route is seeded DISABLED, without exception. A grey route
+		-- reaches handsets without being registered with the operator behind it:
+		-- it delivers until the carrier notices, and then messages are filtered
+		-- with no report and the sender id is blocked. Two of them were seeded
+		-- active and were found carrying production traffic on 2026-08-21, both
+		-- with a registered alternative in the same corridor. The fixture must
+		-- not create a state an operator would be refused for creating by hand.
 		VALUES ('IN','SMS','JIO',        'Jio Direct',                  1,'registered',12,'INR','active'),
-		       ('IN','SMS','JIO',        'Jio via Aggregator A',        2,'grey',       9,'INR','active'),
+		       ('IN','SMS','JIO',        'Jio via Aggregator A',        2,'grey',       9,'INR','disabled'),
 		       ('IN','SMS','AIRTEL',     'Airtel Direct',               1,'registered',14,'INR','active'),
 		       ('IN','SMS','VI',         'Vi Direct',                   1,'grey',       8,'INR','disabled'),
 		       ('IN','RCS','JIO',        'Jio RCS Direct',              1,'registered',45,'INR','active'),
@@ -1201,7 +1240,7 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		       ('IN','VOICE','JIO',      'Jio Voice Direct',            1,'registered',40,'INR','active'),
 		       ('US','SMS','VERIZON',    'Verizon Direct',              1,'registered', 1,'USD','active'),
 		       ('US','SMS','ATT',        'AT&T Direct',                 1,'registered', 1,'USD','active'),
-		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   1,'grey',       1,'USD','active'),
+		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   1,'grey',       1,'USD','disabled'),
 		       ('US','RCS','VERIZON',    'Verizon RCS Direct',          1,'registered', 5,'USD','active'),
 		       ('US','VOICE','VERIZON',  'Verizon Voice Direct',        1,'registered', 5,'USD','active'),
 		       ('GB','SMS','EE',         'EE Direct',                   1,'registered', 4,'GBP','active'),
@@ -1217,6 +1256,109 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		return fmt.Errorf("seed routes: %w", err)
 	}
 
+	return verifyFixtureCompliance(ctx, pool, activityTenants)
+}
+
+// verifyFixtureCompliance refuses to leave the fixture in a state the product
+// itself would refuse to produce.
+//
+// Two of them shipped, and both looked correct on every screen. Senders were
+// seeded approved with no compliance registration behind them at all, so India
+// showed a tenant cleared to send that the regime said had registered nothing —
+// found only when a live campaign would not send. And grey routes were seeded
+// active, which is traffic that reaches handsets unregistered; an operator
+// pressing the same button by hand is now refused.
+//
+// A fixture is not a lesser thing than production here: it is what every demo,
+// every browser spec and every hand test reads as the truth, so a contradiction
+// in it is a contradiction people trust. Failing the seed is the cheap moment
+// to find that — the alternative is finding it in front of a customer.
+func verifyFixtureCompliance(ctx context.Context, pool *pgxpool.Pool,
+	fixtureTenants []string) error {
+
+	var offenders []string
+
+	// An approved sender in a country with a real regime needs an approved
+	// entity-tier registration behind it. Stub regimes register nothing yet, so
+	// they are correctly exempt rather than specially cased.
+	// The fixture's own tenants only. This deployment also serves real
+	// customers, and one of them holding an approved sender we never seeded is
+	// their business, not a broken fixture — failing every reset over it would
+	// make the check the thing that breaks.
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT s.tenant_id, s.country, s.header
+		  FROM sender_ids s
+		 WHERE s.status = 'approved' AND s.tenant_id = ANY($1::uuid[])
+		 ORDER BY s.country, s.header`, fixtureTenants)
+	if err != nil {
+		return fmt.Errorf("verify fixture: read senders: %w", err)
+	}
+	type approvedSender struct {
+		tenant  string
+		country string
+		header  string
+	}
+	var senders []approvedSender
+	for rows.Next() {
+		var row approvedSender
+		if err := rows.Scan(&row.tenant, &row.country, &row.header); err != nil {
+			rows.Close()
+			return fmt.Errorf("verify fixture: scan sender: %w", err)
+		}
+		senders = append(senders, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verify fixture: read senders: %w", err)
+	}
+
+	for _, sender := range senders {
+		regime, known := compliance.For(sender.country)
+		if !known || regime.Stub() {
+			continue
+		}
+		entity := ""
+		for _, object := range regime.RegistrationObjects() {
+			if object.Tier == compliance.TierEntity {
+				entity = object.Key
+				break
+			}
+		}
+		if entity == "" {
+			continue
+		}
+		var approved bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+			  SELECT 1 FROM registrations
+			   WHERE tenant_id = $1 AND country = $2 AND object_key = $3
+			     AND status = 'approved')`,
+			sender.tenant, sender.country, entity).Scan(&approved); err != nil {
+			return fmt.Errorf("verify fixture: read registrations: %w", err)
+		}
+		if !approved {
+			offenders = append(offenders, fmt.Sprintf(
+				"sender %s (%s, tenant %s) is approved with no approved %s registration",
+				sender.header, sender.country, sender.tenant, entity))
+		}
+	}
+
+	var greyActive int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM routes WHERE compliance_standing = 'grey' AND status = 'active'`,
+	).Scan(&greyActive); err != nil {
+		return fmt.Errorf("verify fixture: count grey routes: %w", err)
+	}
+	if greyActive > 0 {
+		offenders = append(offenders, fmt.Sprintf(
+			"%d grey route(s) are active — unregistered traffic the console itself refuses to enable",
+			greyActive))
+	}
+
+	if len(offenders) > 0 {
+		return fmt.Errorf("seed produced a state the product forbids:\n  %s",
+			strings.Join(offenders, "\n  "))
+	}
 	return nil
 }
 

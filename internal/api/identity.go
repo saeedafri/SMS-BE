@@ -14,6 +14,25 @@ import (
 
 type identityKey struct{}
 
+// scopesKey carries an API key's scopes. Absent for a dashboard session, which
+// is authorised by role instead.
+type scopesKey struct{}
+
+// isAPIKey tells a minted key from a session token by its prefix, which
+// store.generateSecret writes: sk_live_… or sk_test_….
+func isAPIKey(token string) bool {
+	return strings.HasPrefix(token, "sk_live_") || strings.HasPrefix(token, "sk_test_")
+}
+
+// scopesFrom returns the scopes of the API key that authenticated this request,
+// and whether the caller is a key at all. A dashboard session returns false, and
+// callers must decide for themselves whether a session may do the thing — a
+// session is not "a key with every scope".
+func scopesFrom(ctx context.Context) ([]string, bool) {
+	scopes, ok := ctx.Value(scopesKey{}).([]string)
+	return scopes, ok
+}
+
 // authenticate resolves a bearer token to an Identity and puts it in the
 // request context. It is deliberately permissive: an absent or bad token is
 // simply no identity, because /v1/auth/login and friends must stay reachable.
@@ -43,6 +62,31 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			}
 			// Falls through deliberately: /v1/operator/login is under this
 			// prefix and must stay reachable without a session.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// An API key, not a session token.
+		//
+		// Keys were mintable from the moment the dashboard shipped and
+		// authenticated nothing: store.ResolveAPIKey had no callers at all, so
+		// every sk_live_ key a customer pasted into their code was decoration.
+		//
+		// Accepted ONLY for the send endpoint, deliberately. A key carries
+		// scopes rather than a role, and no other handler checks them — letting
+		// a key through the general path would mean a read:messages key could
+		// read the team roster and the billing history too. Widening this means
+		// enforcing scopes at each endpoint that opts in, not here.
+		if isAPIKey(token) {
+			if r.Method == http.MethodPost && r.URL.Path == "/v1/messages" {
+				keyIdentity, scopes, keyErr := store.ResolveAPIKey(r.Context(), s.DB, token)
+				if keyErr == nil {
+					ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
+					ctx = context.WithValue(ctx, scopesKey{}, scopes)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -2,9 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -135,4 +140,104 @@ func contractStatusToState(status string) string {
 	default:
 		return ""
 	}
+}
+
+// sendScopeFor maps a sender's channel to the scope an API key must carry.
+//
+// The vocabulary is the frontend's registry verbatim (send:sms, send:rcs and
+// so on), for the same reason ListApiScopes uses it: a scope string is part of
+// the public API surface that customers paste into their own code, and two
+// vocabularies is how a key created in the dashboard fails against the API.
+func sendScopeFor(channel string) string {
+	return "send:" + strings.ToLower(channel)
+}
+
+// SendMessage sends one message, now.
+//
+// The gap this closes: /v1/messages was read-only, so the only way to send
+// anything through this platform was to build a campaign in the dashboard. A
+// CPaaS whose customers cannot send one message from their own code is missing
+// the product. The API keys were the other half of it — mintable since the
+// dashboard shipped and wired to nothing, so every sk_live_ key a customer
+// pasted into their code authenticated exactly nothing.
+//
+// Every rule a campaign send passes, this passes: same Service.Send, same gate,
+// same hold on the wallet, same message row in the log. That is deliberate and
+// it is the whole reason the data plane was never an HTTP handler — a send API
+// that relaxed one check is how a suppressed contact eventually gets messaged.
+func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequestObject) (
+	gen.SendMessageResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return gen.SendMessage401JSONResponse(errorBody(codeUnauthenticated,
+			"Send an API key as a bearer token, or sign in.")), nil
+	}
+	if request.Body == nil {
+		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
+			"A JSON body with senderId, to and body is required.")), nil
+	}
+	to := strings.TrimSpace(request.Body.To)
+	body := strings.TrimSpace(request.Body.Body)
+	if to == "" || body == "" {
+		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
+			"Both to and body must be present and non-empty.")), nil
+	}
+
+	// The sender is read before the scope check because the scope depends on
+	// the channel, and a key must not learn which sender ids exist by watching
+	// 403 turn into 404.
+	sender, err := store.GetSenderID(ctx, s.DB, identity, request.Body.SenderId)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
+			"No such sender id on this account.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	// Scopes apply to API keys only. A dashboard session is authorised by role,
+	// and treating a session as "a key with every scope" would silently grant
+	// send rights the key model exists to limit.
+	if scopes, isKey := scopesFrom(ctx); isKey {
+		if !oneOf(sendScopeFor(sender.Channel), scopes) {
+			return gen.SendMessage403JSONResponse(errorBody(codeForbidden,
+				fmt.Sprintf("This API key does not carry the %s scope.",
+					sendScopeFor(sender.Channel)))), nil
+		}
+	}
+
+	service := s.sendingService(ctx)
+	if service == nil {
+		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
+			"Sending is not available on this deployment.")), nil
+	}
+
+	result, err := service.Send(ctx, identity, sending.SendRequest{
+		SenderID: request.Body.SenderId, TemplateID: request.Body.TemplateId,
+		Msisdn: to, Body: body,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 202 whatever the verdict, including a rejection. The request was
+	// well-formed and the outcome is in the body — a caller integrating against
+	// this needs the message id and the reason far more than it needs a status
+	// code that collapses "we refused it" and "you sent us nonsense" into one.
+	out := gen.SendMessageResult{
+		Status:    gen.SendMessageResultStatus(result.Status),
+		Segments:  result.Segments,
+		CostMinor: result.CostMinor,
+		Currency:  result.Currency,
+	}
+	if result.MessageID != uuid.Nil {
+		id := result.MessageID
+		out.Id = &id
+	}
+	if result.FailureCode != "" {
+		code := result.FailureCode
+		out.ErrorCode = &code
+	}
+	return gen.SendMessage202JSONResponse(out), nil
 }
