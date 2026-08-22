@@ -179,8 +179,25 @@ func TestVoiceVerificationRoundTrip(t *testing.T) {
 		t.Fatal("a wrong code verified the sender")
 	}
 
+	// A wrong attempt DISCARDS the code — deliberately, so a session holder
+	// cannot brute-force six digits — so the original code is dead now and a new
+	// call is required. This test used to reuse it and fail with "Request a
+	// verification call before entering a code", which is the anti-brute-force
+	// measure working, not a bug.
+	//
+	// Not testing the discarded code here on purpose: submitting it would be
+	// another wrong attempt and would discard the REISSUED code too, which is
+	// the same trap one line further down.
+	recall := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-call",
+		acct.Token, nil)
+	if recall.Code != http.StatusOK {
+		t.Fatalf("second voice-call: status = %d; body = %s", recall.Code, recall.Body)
+	}
+	var reissued gen.VoiceCallResult
+	recall.decode(t, &reissued)
+
 	right := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-code",
-		acct.Token, map[string]string{"code": result.Code})
+		acct.Token, map[string]string{"code": reissued.Code})
 	if right.Code != http.StatusNoContent {
 		t.Fatalf("voice-code: status = %d, want 204; body = %s", right.Code, right.Body)
 	}
