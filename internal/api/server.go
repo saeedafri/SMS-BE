@@ -35,6 +35,14 @@ type Server struct {
 	// Off unless the deployment opts in.
 	EnableDevEndpoints bool
 
+	// OperatorAllowlist restricts /v1/operator to known networks. Nil or empty
+	// means no restriction.
+	OperatorAllowlist *operatorAllowlist
+
+	// AllowGreyRoutes permits enabling a route with a grey compliance standing.
+	// Off unless the deployment says otherwise; see the config field for why.
+	AllowGreyRoutes bool
+
 	// SignupInviteCode, when set, is required by POST /v1/auth/signup. Empty
 	// leaves self-registration open.
 	SignupInviteCode string
@@ -109,6 +117,9 @@ func NewRouter(s *Server) http.Handler {
 	// request can record the device it was minted on.
 	r.Use(withClientInfo)
 	r.Use(requestLogger(s.Logger, s.Metrics))
+	// Before authenticate, so a caller outside the allowlist cannot even attempt
+	// an operator login.
+	r.Use(s.restrictOperatorNetwork)
 	r.Use(s.authenticate)
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

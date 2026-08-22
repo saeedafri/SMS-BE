@@ -394,10 +394,19 @@ func tenantActionError[T any](err error, notFound func(gen.Error) T) (T, error) 
 // an operator prices against. Disabled routes are excluded deliberately: a
 // cheap route nobody is allowed to use is not a cost floor, and including it
 // would make a margin look healthier than it is.
+//
+// The comparison is against the contract's own constant, not a literal.
+// It used to read `!= "enabled"`, and routes have held 'active' or 'disabled'
+// since migration 00029 renamed the status — so the filter excluded EVERY
+// route, and the cost reference came back null on all fourteen rates. That was
+// reported as missing carrier data, and the data had been there the whole time:
+// the same invented word cost the console its status column once already, and
+// this is the second place it hid.
 func routeCostReference(routes []store.Route, country, channel string) *int {
 	var lowest *int
 	for _, route := range routes {
-		if route.Country != country || route.Channel != channel || route.Status != "enabled" {
+		if route.Country != country || route.Channel != channel ||
+			route.Status != string(gen.RouteStatusActive) {
 			continue
 		}
 		cost := int(route.CostPerSegmentMinor)
@@ -588,6 +597,17 @@ func (s *Server) routeAction(ctx context.Context, id string, action string,
 		nil, "", routeID.String(), "")
 }
 
+// routeBeforeChange reads a route so a handler can refuse the change. It stays
+// separate from routeAfterChange so a caller cannot accidentally decide on
+// state it already overwrote.
+func (s *Server) routeBeforeChange(ctx context.Context, id string) (store.Route, error) {
+	routeID, valid := parsePathID(id)
+	if !valid {
+		return store.Route{}, store.ErrNotFound
+	}
+	return store.GetRoute(ctx, s.DB, routeID)
+}
+
 // routeAfterChange re-reads the route so the response reflects the database
 // rather than what the handler believes it just wrote — priorities in
 // particular are rewritten by a neighbour swap.
@@ -615,8 +635,116 @@ func toGenRoute(route store.Route) gen.Route {
 	}
 }
 
+// CreateRoute adds a path to a corridor.
+//
+// Until this existed a corridor could only be changed by editing the table by
+// hand: the console listed routes, reordered them and toggled them, and had no
+// way to add the one an operator had just signed a carrier contract for. The
+// route arrives disabled and last — see store.CreateRoute for why both.
+func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequestObject) (
+	gen.CreateRouteResponseObject, error) {
+
+	operator, err := s.requireOperator(ctx)
+	if err != nil {
+		return gen.CreateRoute401JSONResponse(
+			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
+	}
+	if request.Body == nil {
+		return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
+			"A route needs a country, channel, carrier, label, standing, cost and currency.")), nil
+	}
+
+	// Checked here rather than trusted from the binder: oapi-codegen renders
+	// the contract's enums as plain Go string aliases, so an out-of-enum value
+	// reaches the database and turns a typo into a 500.
+	route := store.Route{
+		Country: string(request.Body.Country), Channel: string(request.Body.Channel),
+		Carrier:             string(request.Body.Carrier),
+		Label:               strings.TrimSpace(request.Body.Label),
+		ComplianceStanding:  string(request.Body.ComplianceStanding),
+		CostPerSegmentMinor: int64(request.Body.CostPerSegmentMinor),
+		Currency:            string(request.Body.Currency),
+	}
+	for _, check := range []struct {
+		value   string
+		allowed []string
+		field   string
+	}{
+		{route.Country, validCountries, "country"},
+		{route.Channel, validChannels, "channel"},
+		{route.Carrier, validCarriers, "carrier"},
+		{route.ComplianceStanding, validStandings, "complianceStanding"},
+		{route.Currency, validCurrencies, "currency"},
+	} {
+		if !oneOf(check.value, check.allowed) {
+			return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
+				enumMessage(check.field, check.allowed))), nil
+		}
+	}
+	if route.Label == "" {
+		return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
+			"A route needs a label — it is how an operator tells two paths to the "+
+				"same carrier apart.")), nil
+	}
+	if route.CostPerSegmentMinor < 0 {
+		return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
+			"Cost per segment cannot be negative.")), nil
+	}
+
+	created, err := store.CreateRoute(ctx, s.DB, route)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "route.create",
+		nil, "", created.ID.String(), created.Label); err != nil {
+		return nil, err
+	}
+	return gen.CreateRoute201JSONResponse(toGenRoute(created)), nil
+}
+
+// DeleteRoute removes a path from a corridor.
+func (s *Server) DeleteRoute(ctx context.Context, request gen.DeleteRouteRequestObject) (
+	gen.DeleteRouteResponseObject, error) {
+
+	if err := s.routeAction(ctx, request.Id, "route.delete", func(id uuid.UUID) error {
+		return store.DeleteRoute(ctx, s.DB, id)
+	}); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.DeleteRoute404JSONResponse(errorBody("not_found", "No such route.")), nil
+		}
+		if errors.Is(err, store.ErrConflict) {
+			return gen.DeleteRoute422JSONResponse(errorBody(codeValidation,
+				"This route is active. Disable it and watch the corridor before "+
+					"removing it.")), nil
+		}
+		return nil, err
+	}
+	return gen.DeleteRoute204Response{}, nil
+}
+
 func (s *Server) EnableRoute(ctx context.Context, request gen.EnableRouteRequestObject) (
 	gen.EnableRouteResponseObject, error) {
+
+	// A grey route is one whose traffic reaches handsets without being
+	// registered with the operator behind it. It delivers until the carrier
+	// notices, and then it does not: messages are filtered with no report, the
+	// sender id is blocked, and under DLT the penalty lands on the customer's
+	// principal entity rather than on us.
+	//
+	// So enabling one is not an ordinary toggle, and the console offered it as
+	// though it were. Two grey routes were found active on production on
+	// 2026-08-21, both with registered alternatives in the same corridor —
+	// nobody chose that, it was just the easiest button to press. Turning one on
+	// now requires the deployment to say so out loud.
+	if !s.AllowGreyRoutes {
+		route, err := s.routeBeforeChange(ctx, request.Id)
+		if err == nil && route.ComplianceStanding == "grey" {
+			return gen.EnableRoute422JSONResponse(errorBody(codeValidation,
+				"This route is unregistered (grey) traffic. Enabling it risks the "+
+					"customer's sender registration, so it is refused unless the "+
+					"deployment sets ALLOW_GREY_ROUTES.")), nil
+		}
+	}
 
 	if err := s.routeAction(ctx, request.Id, "route.enable", func(id uuid.UUID) error {
 		// "active", not "enabled". The contract's RouteStatus enum is
@@ -1642,12 +1770,17 @@ func (s *Server) GetOperatorMargin(ctx context.Context,
 		return nil, err
 	}
 
-	// Cheapest enabled route per channel and per country: the best case cost,
+	// Cheapest ACTIVE route per channel and per country: the best case cost,
 	// which is the honest floor to measure margin against.
+	//
+	// Same stale word as routeCostReference — see the note there. Here it was
+	// worse than a null: with every route excluded, both maps stayed empty, so
+	// margin was measured against a cost of zero and every corridor reported a
+	// margin of 100%.
 	channelCost := map[string]int64{}
 	countryCost := map[string]int64{}
 	for _, route := range routes {
-		if route.Status != "enabled" {
+		if route.Status != string(gen.RouteStatusActive) {
 			continue
 		}
 		if existing, ok := channelCost[route.Channel]; !ok || route.CostPerSegmentMinor < existing {

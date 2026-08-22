@@ -25,7 +25,6 @@ func errNotImplemented(operation string) error {
 // wrong answer is worse than an honest failure.
 var errClickHouseUnavailable = errors.New("message logs require ClickHouse")
 
-
 // errDependencyUnmet is returned when an action is legitimate but its
 // preconditions are not yet satisfied — approving an email sender whose domain
 // is not authenticated, or a voice sender whose caller-ID was never verified.

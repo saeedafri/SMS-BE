@@ -397,5 +397,6 @@ func (s *Server) sendingService(ctx context.Context) *sending.Service {
 	if err != nil || s.Connector == nil {
 		return nil
 	}
-	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector}
+	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
+		Logger: s.Logger}
 }

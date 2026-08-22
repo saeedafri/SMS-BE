@@ -161,3 +161,49 @@ func SetCampaignStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return err
 	})
 }
+
+// StuckCampaign is a campaign that started sending and never landed.
+type StuckCampaign struct {
+	ID        uuid.UUID
+	Name      string
+	StartedAt time.Time
+}
+
+// FindStuckCampaigns lists campaigns left in 'sending' since before cutoff.
+//
+// Fan-out sets 'sending' and then sets a terminal status when it finishes. Any
+// path between those two that does not return normally — a ClickHouse blip
+// mid-page, a deploy, a panic — leaves the row at 'sending' with nothing left
+// running to move it. The customer sees a campaign that has been sending for
+// days, and the delivered-versus-failed split they are billed against never
+// appears.
+func FindStuckCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	cutoff time.Time, limit int) ([]StuckCampaign, error) {
+
+	var stuck []StuckCampaign
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, name, COALESCE(send_started_at, updated_at)
+			  FROM campaigns
+			 WHERE status = 'sending'
+			   AND COALESCE(send_started_at, updated_at) < $1
+			 ORDER BY COALESCE(send_started_at, updated_at)
+			 LIMIT $2`, cutoff, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var row StuckCampaign
+			if err := rows.Scan(&row.ID, &row.Name, &row.StartedAt); err != nil {
+				return err
+			}
+			stuck = append(stuck, row)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: find stuck campaigns: %w", err)
+	}
+	return stuck, nil
+}

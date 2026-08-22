@@ -33,6 +33,10 @@ var (
 	validFrequencies  = []string{"daily", "weekly", "monthly"}
 	validCardBrands   = []string{"visa", "mastercard", "amex"}
 	validRoles        = []string{"owner", "admin", "member"}
+	validCountries    = []string{"IN", "US", "GB", "AE"}
+	validStandings    = []string{"registered", "grey"}
+	validCarriers     = []string{"JIO", "AIRTEL", "VI", "BSNL", "VERIZON", "ATT",
+		"TMOBILE", "EE", "O2", "VODAFONE_UK", "THREE", "ETISALAT", "DU"}
 )
 
 // oneOf reports whether value is one of allowed, comparing exactly.

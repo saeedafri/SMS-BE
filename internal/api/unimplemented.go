@@ -300,6 +300,10 @@ func (Unimplemented) ListMessages(ctx context.Context, request gen.ListMessagesR
 	return nil, errNotImplemented("ListMessages")
 }
 
+func (Unimplemented) SendMessage(ctx context.Context, request gen.SendMessageRequestObject) (gen.SendMessageResponseObject, error) {
+	return nil, errNotImplemented("SendMessage")
+}
+
 func (Unimplemented) GetAbuseQueue(ctx context.Context, request gen.GetAbuseQueueRequestObject) (gen.GetAbuseQueueResponseObject, error) {
 	return nil, errNotImplemented("GetAbuseQueue")
 }
@@ -354,6 +358,14 @@ func (Unimplemented) RejectRegistrationItem(ctx context.Context, request gen.Rej
 
 func (Unimplemented) GetRoutes(ctx context.Context, request gen.GetRoutesRequestObject) (gen.GetRoutesResponseObject, error) {
 	return nil, errNotImplemented("GetRoutes")
+}
+
+func (Unimplemented) CreateRoute(ctx context.Context, request gen.CreateRouteRequestObject) (gen.CreateRouteResponseObject, error) {
+	return nil, errNotImplemented("CreateRoute")
+}
+
+func (Unimplemented) DeleteRoute(ctx context.Context, request gen.DeleteRouteRequestObject) (gen.DeleteRouteResponseObject, error) {
+	return nil, errNotImplemented("DeleteRoute")
 }
 
 func (Unimplemented) DisableRoute(ctx context.Context, request gen.DisableRouteRequestObject) (gen.DisableRouteResponseObject, error) {

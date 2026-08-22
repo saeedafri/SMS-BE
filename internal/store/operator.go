@@ -408,6 +408,90 @@ func MoveRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, up bool) e
 	return tx.Commit(ctx)
 }
 
+// CreateRoute adds a route at the end of its carrier's order in a corridor.
+//
+// Always last and always disabled. Priority ranks the ways of reaching ONE
+// carrier, so a new path has to be tried after the ones already proven, and a
+// route that went live the moment it was typed would put real traffic on an
+// untested carrier connection before anybody looked at it.
+func CreateRoute(ctx context.Context, pool *pgxpool.Pool, route Route) (Route, error) {
+	var created Route
+	err := pool.QueryRow(ctx, `
+		INSERT INTO routes (country, channel, carrier, label, priority,
+		                    compliance_standing, cost_per_segment_minor, currency, status)
+		SELECT $1, $2, $3, $4,
+		       COALESCE(MAX(priority), 0) + 1,
+		       $5, $6, $7, 'disabled'
+		  FROM routes
+		 WHERE country = $1 AND channel = $2 AND carrier = $3
+		RETURNING id, country, channel, carrier, label, priority,
+		          compliance_standing, cost_per_segment_minor, currency, status`,
+		route.Country, route.Channel, route.Carrier, route.Label,
+		route.ComplianceStanding, route.CostPerSegmentMinor, route.Currency,
+	).Scan(&created.ID, &created.Country, &created.Channel, &created.Carrier,
+		&created.Label, &created.Priority, &created.ComplianceStanding,
+		&created.CostPerSegmentMinor, &created.Currency, &created.Status)
+	if err != nil {
+		return Route{}, fmt.Errorf("store: create route: %w", err)
+	}
+	return created, nil
+}
+
+// DeleteRoute removes a route and closes the gap it leaves.
+//
+// The priorities in a carrier's group are 1..n with no holes — the console
+// renders them as an order, and a jump from 1 to 3 reads as a route somebody
+// cannot see. Deleting the middle of three without this left exactly that.
+//
+// Refuses an active route. Removing the path traffic is currently taking is not
+// a tidy-up, and the operator should have to disable it first and watch what
+// happens before the row disappears.
+func DeleteRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: delete route: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var country, channel, carrier, status string
+	var priority int
+	if err := tx.QueryRow(ctx,
+		`SELECT country, channel, carrier, priority, status FROM routes WHERE id = $1`, id,
+	).Scan(&country, &channel, &carrier, &priority, &status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("store: delete route: %w", err)
+	}
+	if status == "active" {
+		return ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM routes WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("store: delete route: %w", err)
+	}
+	// Everything below the hole moves up one, via the negative range.
+	//
+	// The direct `priority = priority - 1` reads correctly and is not safe: the
+	// unique constraint is checked per row as the statement runs, and Postgres
+	// updates rows in physical order, so moving 3 to 2 before 2 has moved to 1
+	// raises a duplicate key on an update that ends up perfectly valid. Negating
+	// first is collision-free because negation is one-to-one, and no route ever
+	// holds a negative priority outside a transaction like this one.
+	if _, err := tx.Exec(ctx, `
+		UPDATE routes SET priority = -priority
+		 WHERE country = $1 AND channel = $2 AND carrier = $3 AND priority > $4`,
+		country, channel, carrier, priority); err != nil {
+		return fmt.Errorf("store: close route priority gap: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE routes SET priority = (-priority) - 1
+		 WHERE country = $1 AND channel = $2 AND carrier = $3 AND priority < 0`,
+		country, channel, carrier); err != nil {
+		return fmt.Errorf("store: close route priority gap: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
 // RateOverride is what one tenant pays instead of the default rate.
 type RateOverride struct {
 	ID              uuid.UUID

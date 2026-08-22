@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -26,6 +27,10 @@ type Service struct {
 	DB         *pgxpool.Pool
 	ClickHouse driver.Conn
 	Connector  connector.Connector
+	// Logger is optional. It exists for the paths that must not fail loudly and
+	// must not fail silently either — landing a campaign that fan-out abandoned
+	// is the one that matters.
+	Logger *slog.Logger
 }
 
 // SendRequest is one message to send.
