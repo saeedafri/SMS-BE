@@ -132,6 +132,13 @@ func (s *Server) UpdateTeamMemberRole(ctx context.Context, request gen.UpdateTea
 	}
 	s.recordActivity(ctx, identity, store.ActivityTeamRoleChange,
 		fmt.Sprintf("Changed %s to %s", member.Email, member.Role))
+	// The promoted or demoted member is very likely looking at the app right
+	// now, with a nav built from the role they had a second ago. Their id rides
+	// along so the browser can tell "my own role moved" from "a colleague's
+	// did" — one needs a reload of what they are allowed to see, the other only
+	// refreshes the roster.
+	s.publishTenantEvent(ctx, identity.TenantID, "team.role_changed",
+		member.ID.String(), "")
 	return gen.UpdateTeamMemberRole200JSONResponse(teamMemberResponse(member)), nil
 }
 

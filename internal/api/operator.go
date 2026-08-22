@@ -188,6 +188,9 @@ func (s *Server) operatorAction(ctx context.Context, id string, action string,
 	if err := apply(tenantID); err != nil {
 		return err
 	}
+	// Suspension, throttling and reinstatement all land here, and every one of
+	// them changes what the customer is allowed to do right now.
+	s.publishTenantEvent(ctx, tenantID, "tenant.status_changed", "", "")
 	return store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
 		&tenantID, tenant.Name, tenant.Name, "")
 }
@@ -1079,6 +1082,8 @@ func (s *Server) ApproveRegistrationItem(ctx context.Context,
 		reg.Country+" "+reg.ObjectKey, ""); err != nil {
 		return nil, err
 	}
+	// The customer is watching a screen that said "in review". Tell it.
+	s.publishTenantEvent(ctx, reg.TenantID, "registration.decided", "", reg.ID.String())
 	return gen.ApproveRegistrationItem200JSONResponse(operatorRegistrationResponse(reg)), nil
 }
 
@@ -1121,6 +1126,7 @@ func (s *Server) RejectRegistrationItem(ctx context.Context,
 		reg.Country+" "+reg.ObjectKey, reason); err != nil {
 		return nil, err
 	}
+	s.publishTenantEvent(ctx, reg.TenantID, "registration.decided", "", reg.ID.String())
 	return gen.RejectRegistrationItem200JSONResponse(operatorRegistrationResponse(reg)), nil
 }
 
@@ -1192,6 +1198,7 @@ func (s *Server) decideSender(ctx context.Context, id string, status, reason str
 	if status == "rejected" {
 		action = "sender.reject"
 	}
+	s.publishTenantEvent(ctx, sender.TenantID, "sender.decided", "", sender.ID.String())
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
 		&sender.TenantID, sender.TenantName, sender.Header, reason); err != nil {
 		return store.PendingSender{}, err
@@ -1286,6 +1293,7 @@ func (s *Server) decideTemplate(ctx context.Context, id string, status, reason s
 	if status == "rejected" {
 		action = "template.reject"
 	}
+	s.publishTenantEvent(ctx, template.TenantID, "template.decided", "", template.ID.String())
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
 		&template.TenantID, template.TenantName, template.Name, reason); err != nil {
 		return store.PendingTemplate{}, err

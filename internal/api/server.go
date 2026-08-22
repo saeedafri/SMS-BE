@@ -134,6 +134,12 @@ func NewRouter(s *Server) http.Handler {
 		s.mountDevRoutes(r)
 	}
 
+	// The live-update stream. Mounted directly rather than through the generated
+	// handler because oapi-codegen models request/response pairs and this is a
+	// response that never ends. It sits after authenticate, so it resolves the
+	// caller's tenant exactly like every other route.
+	s.mountEventRoutes(r)
+
 	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
 		// A request the generated binder rejects — bad JSON, a malformed
 		// parameter, a field failing its format — is reported as 422
