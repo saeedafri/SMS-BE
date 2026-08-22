@@ -44,7 +44,15 @@ type TenantEvent struct {
 	UserID string `json:"userId,omitempty"`
 	// ObjectID is whatever was decided: a registration, sender or template id.
 	ObjectID string `json:"objectId,omitempty"`
-	At       string `json:"at"`
+	// ActorUserID is who made the change, when a tenant user made it.
+	//
+	// A client must not react to its own action. The person who just changed a
+	// role has already seen the result — their own request re-rendered the page
+	// — and reloading them again throws away whatever they were doing next.
+	// Empty for operator-driven changes, which no tenant session caused, so
+	// those always reach everyone.
+	ActorUserID string `json:"actorUserId,omitempty"`
+	At          string `json:"at"`
 }
 
 // publishTenantEvent tells every open stream for a tenant that something moved.
@@ -54,14 +62,18 @@ type TenantEvent struct {
 // would be the wrong trade. The screen falls back to what it did before this
 // existed — showing the change on the next load.
 func (s *Server) publishTenantEvent(ctx context.Context, tenantID uuid.UUID,
-	eventType string, userID, objectID string) {
+	eventType string, userID, objectID string, actorUserID ...string) {
 
 	if s.Redis == nil {
 		return
 	}
+	actor := ""
+	if len(actorUserID) > 0 {
+		actor = actorUserID[0]
+	}
 	payload, err := json.Marshal(TenantEvent{
 		Type: eventType, TenantID: tenantID.String(),
-		UserID: userID, ObjectID: objectID,
+		UserID: userID, ObjectID: objectID, ActorUserID: actor,
 		At: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {

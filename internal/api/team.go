@@ -138,7 +138,7 @@ func (s *Server) UpdateTeamMemberRole(ctx context.Context, request gen.UpdateTea
 	// did" — one needs a reload of what they are allowed to see, the other only
 	// refreshes the roster.
 	s.publishTenantEvent(ctx, identity.TenantID, "team.role_changed",
-		member.ID.String(), "")
+		member.ID.String(), "", identity.UserID.String())
 	return gen.UpdateTeamMemberRole200JSONResponse(teamMemberResponse(member)), nil
 }
 
