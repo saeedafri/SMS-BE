@@ -179,8 +179,12 @@ func TestChangePasswordRequiresTheCurrentPassword(t *testing.T) {
 	wrong := h.do(http.MethodPatch, "/v1/auth/password", acct.Token, map[string]string{
 		"currentPassword": "not-the-current-password", "newPassword": "a-new-password-here",
 	})
-	if wrong.Code != http.StatusForbidden {
-		t.Fatalf("wrong current password: status = %d, want 403; body = %s", wrong.Code, wrong.Body)
+	// 401, per the contract: it declares 401 "Current password is incorrect" and
+	// reserves 403 for "Member role has no access to settings". This asserted 403
+	// and so demanded that a wrong password be reported as a role problem, which
+	// would tell an owner they lack access to their own settings.
+	if wrong.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong current password: status = %d, want 401; body = %s", wrong.Code, wrong.Body)
 	}
 
 	right := h.do(http.MethodPatch, "/v1/auth/password", acct.Token, map[string]string{
