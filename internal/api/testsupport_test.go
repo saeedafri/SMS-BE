@@ -57,11 +57,25 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(admin.Close)
 
+	// The operator console's pool, carrying app.operator=on.
+	//
+	// Without it every /v1/operator route in these tests reads through the plain
+	// tenant pool, where row-level security correctly refuses cross-tenant rows —
+	// so an operator handler that works in production returns an empty queue or a
+	// 404 here, and looks like a bug in the handler rather than a missing pool.
+	operator, err := store.OpenOperatorPool(ctx, url)
+	if err != nil {
+		t.Fatalf("open operator pool: %v", err)
+	}
+	t.Cleanup(operator.Close)
+
 	logs := &bytes.Buffer{}
 	h := &harness{t: t, pool: pool, admin: admin, logs: logs}
 	h.router = api.NewRouter(&api.Server{
-		DB:     pool,
-		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		DB:         pool,
+		OperatorDB: operator,
+		AdminDB:    admin,
+		Logger:     slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	return h
 }
@@ -316,4 +330,51 @@ func (h *harness) doWithHeaders(method, path, token string, body any,
 	rec := httptest.NewRecorder()
 	h.router.ServeHTTP(rec, req)
 	return response{Code: rec.Code, Body: rec.Body.Bytes()}
+}
+
+// operatorToken signs in as platform staff.
+//
+// Operators are a separate identity system with their own table and endpoint, so
+// there is no way to derive one from newAccount — a tenant token is refused on
+// every /v1/operator route, which is the property those routes exist to have.
+func (h *harness) operatorToken() string {
+	h.t.Helper()
+	const email, password = "harness-ops@relay.internal", "harness-ops-password"
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		h.t.Fatalf("hash operator password: %v", err)
+	}
+	if _, err := h.admin.Exec(context.Background(), `
+		INSERT INTO operator_users (email, name, password_hash, role)
+		VALUES ($1, 'Harness Ops', $2, 'admin')
+		ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+		email, hash); err != nil {
+		h.t.Fatalf("seed operator: %v", err)
+	}
+	res := h.do(http.MethodPost, "/v1/operator/login", "",
+		map[string]any{"email": email, "password": password})
+	if res.Code != http.StatusOK {
+		h.t.Fatalf("operator login = %d\n%s", res.Code, res.Body)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	res.decode(h.t, &out)
+	return out.Token
+}
+
+// createRegistration submits one compliance registration and returns its id.
+func (h *harness) createRegistration(token string) string {
+	h.t.Helper()
+	res := h.do(http.MethodPost, "/v1/registrations", token, map[string]any{
+		"country": "IN", "objectKey": "pe_rtm_entity", "fields": indiaEntityFields(),
+	})
+	if res.Code != http.StatusCreated && res.Code != http.StatusOK {
+		h.t.Fatalf("create registration = %d\n%s", res.Code, res.Body)
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	res.decode(h.t, &out)
+	return out.ID
 }

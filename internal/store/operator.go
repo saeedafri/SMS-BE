@@ -913,3 +913,87 @@ func ListRecentSessions(ctx context.Context, pool *pgxpool.Pool, limit int) (
 	}
 	return out, rows.Err()
 }
+
+// PendingRegistration is one compliance registration awaiting an operator
+// decision, joined to the tenant that submitted it.
+type PendingRegistration struct {
+	ID              uuid.UUID
+	TenantID        uuid.UUID
+	TenantName      string
+	Country         string
+	ObjectKey       string
+	Status          string
+	RejectionReason *string
+	ExternalID      *string
+	Fields          []byte
+	CreatedAt       time.Time
+}
+
+// ListPendingRegistrations returns compliance registrations needing a decision.
+//
+// This did not exist, and neither did anything that called it. The operator
+// approval queue merged senders and templates only, so a customer who submitted
+// a DLT or EIN registration sat in pending_review with NO path to approval — no
+// screen showed it and no endpoint could act on it. The e2e suite hid that by
+// advancing registrations through the /v1/dev/advance-registration test hook,
+// which stood in for an operator workflow that was never built.
+//
+// Same shape as ListPendingTemplates directly above, including the COALESCE
+// default, so the three queues in one console behave identically.
+func ListPendingRegistrations(ctx context.Context, pool *pgxpool.Pool, status *string) (
+	[]PendingRegistration, error) {
+
+	rows, err := pool.Query(ctx, `
+		SELECT r.id, r.tenant_id, t.name, r.country, r.object_key, r.status,
+		       r.rejection_reason, r.external_id, r.fields, r.created_at
+		FROM registrations r JOIN tenants t ON t.id = r.tenant_id
+		WHERE r.status = COALESCE($1, 'pending_review')
+		ORDER BY r.created_at`, status)
+	if err != nil {
+		return nil, fmt.Errorf("store: list pending registrations: %w", err)
+	}
+	defer rows.Close()
+	out := []PendingRegistration{}
+	for rows.Next() {
+		var reg PendingRegistration
+		if err := rows.Scan(&reg.ID, &reg.TenantID, &reg.TenantName, &reg.Country,
+			&reg.ObjectKey, &reg.Status, &reg.RejectionReason, &reg.ExternalID,
+			&reg.Fields, &reg.CreatedAt); err != nil {
+			return nil, fmt.Errorf("store: scan pending registration: %w", err)
+		}
+		out = append(out, reg)
+	}
+	return out, rows.Err()
+}
+
+// DecideRegistration approves or rejects a compliance registration across
+// tenants — an operator action, so like DecideSender it does not run inside a
+// tenant context.
+//
+// Approving stamps external_id when the regime issues one. A real DLT or TCR
+// approval carries the regulator's own identifier, and a registration marked
+// approved without it cannot be quoted back to the carrier later.
+func DecideRegistration(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
+	status, reason, externalID string) (PendingRegistration, error) {
+
+	var reg PendingRegistration
+	err := pool.QueryRow(ctx, `
+		UPDATE registrations
+		   SET status = $2,
+		       rejection_reason = NULLIF($3,''),
+		       external_id = COALESCE(NULLIF($4,''), external_id),
+		       updated_at = now()
+		 WHERE id = $1
+		RETURNING id, tenant_id, country, object_key, status, rejection_reason,
+		          external_id, fields, created_at`,
+		id, status, reason, externalID,
+	).Scan(&reg.ID, &reg.TenantID, &reg.Country, &reg.ObjectKey, &reg.Status,
+		&reg.RejectionReason, &reg.ExternalID, &reg.Fields, &reg.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PendingRegistration{}, ErrNotFound
+	}
+	if err != nil {
+		return PendingRegistration{}, fmt.Errorf("store: decide registration: %w", err)
+	}
+	return reg, nil
+}

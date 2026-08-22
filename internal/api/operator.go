@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -917,6 +918,16 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 	if err != nil {
 		return nil, err
 	}
+	// Compliance registrations are the third thing that needs a decision, and
+	// they were missing from this queue entirely. A customer who submitted a DLT
+	// or EIN registration sat in pending_review with nothing able to approve it,
+	// which meant they could never send. The e2e suite hid it by advancing
+	// registrations through /v1/dev/advance-registration — a test hook standing
+	// in for a workflow that did not exist.
+	registrations, err := store.ListPendingRegistrations(ctx, s.operatorPool(), queueStatus)
+	if err != nil {
+		return nil, err
+	}
 
 	// Senders and templates share one queue because an operator works through
 	// "what needs a decision", not "what kind of thing needs a decision".
@@ -947,7 +958,7 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 			(wantCountry == "" || wantCountry == country)
 	}
 
-	items := make([]gen.ApprovalQueueItem, 0, len(senders)+len(templates))
+	items := make([]gen.ApprovalQueueItem, 0, len(senders)+len(templates)+len(registrations))
 	for _, sender := range senders {
 		if !keep("sender", sender.Country, sender.Status) {
 			continue
@@ -995,7 +1006,135 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		}
 		items = append(items, item)
 	}
+	for _, reg := range registrations {
+		if !keep("registration", reg.Country, reg.Status) {
+			continue
+		}
+		entry := gen.ApprovalQueueRegistrationItem{
+			Id: reg.ID, ItemType: gen.ApprovalQueueRegistrationItemItemTypeRegistration,
+			TenantId: reg.TenantID, TenantName: reg.TenantName,
+			ObjectKey: reg.ObjectKey,
+			Country:   gen.CountryCode(reg.Country),
+			Status:    gen.ApprovalStatus(reg.Status), CreatedAt: reg.CreatedAt,
+			RejectionReason: reg.RejectionReason,
+			RegistrationId:  reg.ExternalID,
+			// The submitted values are the whole point of the review: an
+			// operator judging a DLT entity needs the PAN and entity name in
+			// front of them, not just the fact that something was submitted.
+			Fields: decodeRegistrationFields(reg.Fields),
+		}
+		var item gen.ApprovalQueueItem
+		if err := item.FromApprovalQueueRegistrationItem(entry); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
 	return gen.GetApprovalQueue200JSONResponse{Items: items}, nil
+}
+
+// decodeRegistrationFields turns the stored jsonb into the map the contract
+// declares. A registration whose fields cannot be read is still worth showing —
+// the operator can see who submitted what and when, and chase the rest — so a
+// decode failure yields an empty map rather than failing the whole queue.
+func decodeRegistrationFields(raw []byte) map[string]any {
+	fields := map[string]any{}
+	if len(raw) == 0 {
+		return fields
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return map[string]any{}
+	}
+	return fields
+}
+
+// ApproveRegistrationItem records a compliance decision.
+//
+// Approving a registration is what unblocks a tenant's ability to send in that
+// country, so until this existed the compliance step was a dead end: submitted,
+// visible to the customer as "in review", and impossible for anyone to advance.
+func (s *Server) ApproveRegistrationItem(ctx context.Context,
+	request gen.ApproveRegistrationItemRequestObject) (
+	gen.ApproveRegistrationItemResponseObject, error) {
+
+	operator, err := s.requireOperator(ctx)
+	if err != nil {
+		return gen.ApproveRegistrationItem401JSONResponse(
+			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
+	}
+	id, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.ApproveRegistrationItem404JSONResponse(
+			errorBody(codeNotFound, "No such registration.")), nil
+	}
+	reg, err := store.DecideRegistration(ctx, s.operatorPool(), id, "approved", "", "")
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.ApproveRegistrationItem404JSONResponse(
+			errorBody(codeNotFound, "No such registration.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RecordOperatorAction(ctx, s.operatorPool(), operator.Email,
+		"registration.approve", &reg.TenantID, "",
+		reg.Country+" "+reg.ObjectKey, ""); err != nil {
+		return nil, err
+	}
+	return gen.ApproveRegistrationItem200JSONResponse(operatorRegistrationResponse(reg)), nil
+}
+
+// RejectRegistrationItem refuses one, with the reason the customer will read.
+func (s *Server) RejectRegistrationItem(ctx context.Context,
+	request gen.RejectRegistrationItemRequestObject) (
+	gen.RejectRegistrationItemResponseObject, error) {
+
+	operator, err := s.requireOperator(ctx)
+	if err != nil {
+		return gen.RejectRegistrationItem401JSONResponse(
+			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
+	}
+	id, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.RejectRegistrationItem404JSONResponse(
+			errorBody(codeNotFound, "No such registration.")), nil
+	}
+	// A rejection the customer cannot act on is worse than none: they resubmit
+	// the same thing and wait again. The sender and template rejections already
+	// demand a reason, and compliance is the one where "why" matters most.
+	reason := ""
+	if request.Body != nil {
+		reason = strings.TrimSpace(request.Body.Reason)
+	}
+	if reason == "" {
+		return gen.RejectRegistrationItem422JSONResponse(errorBody(codeValidation,
+			"Give a reason the customer can act on.")), nil
+	}
+	reg, err := store.DecideRegistration(ctx, s.operatorPool(), id, "rejected", reason, "")
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.RejectRegistrationItem404JSONResponse(
+			errorBody(codeNotFound, "No such registration.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RecordOperatorAction(ctx, s.operatorPool(), operator.Email,
+		"registration.reject", &reg.TenantID, "",
+		reg.Country+" "+reg.ObjectKey, reason); err != nil {
+		return nil, err
+	}
+	return gen.RejectRegistrationItem200JSONResponse(operatorRegistrationResponse(reg)), nil
+}
+
+// operatorRegistrationResponse is the queue's row shape rendered as the same
+// Registration the customer sees. Separate from registrationResponse in
+// registrations.go only because the operator queries carry a joined tenant name
+// and raw jsonb, where the tenant-side query returns a decoded struct.
+func operatorRegistrationResponse(reg store.PendingRegistration) gen.Registration {
+	return gen.Registration{
+		Id: reg.ID, Country: gen.CountryCode(reg.Country), ObjectKey: reg.ObjectKey,
+		Status: gen.ApprovalStatus(reg.Status), RejectionReason: reg.RejectionReason,
+		RegistrationId: reg.ExternalID, Fields: decodeRegistrationFields(reg.Fields),
+		CreatedAt: reg.CreatedAt, UpdatedAt: time.Now(),
+	}
 }
 
 func (s *Server) GetAbuseQueue(ctx context.Context, _ gen.GetAbuseQueueRequestObject) (
