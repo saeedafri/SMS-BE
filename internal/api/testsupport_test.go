@@ -35,6 +35,24 @@ type harness struct {
 	// logs captures the server's structured output so tests can read tokens
 	// the API deliberately never returns in a response.
 	logs *bytes.Buffer
+	// operatorPool carries app.operator=on, for rebuilding the router in
+	// variants like newHarnessWithInviteCode.
+	operatorPool *pgxpool.Pool
+}
+
+// newHarnessWithInviteCode builds a server that gates self-registration, which
+// is what a public deployment looks like.
+func newHarnessWithInviteCode(t *testing.T, code string) *harness {
+	t.Helper()
+	h := newHarness(t)
+	h.router = api.NewRouter(&api.Server{
+		DB: h.pool, OperatorDB: h.operatorPool, AdminDB: h.admin,
+		EnableDevEndpoints: true, Gateway: billing.ManualGateway{},
+		SignupInviteCode: code,
+		Logger: slog.New(slog.NewJSONHandler(h.logs,
+			&slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+	return h
 }
 
 func newHarness(t *testing.T) *harness {
@@ -71,7 +89,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(operator.Close)
 
 	logs := &bytes.Buffer{}
-	h := &harness{t: t, pool: pool, admin: admin, logs: logs}
+	h := &harness{t: t, pool: pool, admin: admin, logs: logs, operatorPool: operator}
 	h.router = api.NewRouter(&api.Server{
 		DB:                 pool,
 		EnableDevEndpoints: true,
