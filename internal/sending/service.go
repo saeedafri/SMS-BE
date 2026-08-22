@@ -169,13 +169,30 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 		return SendResult{}, err
 	}
 
-	// 7. Record as queued, then submit.
+	// 7. Pick the path, record as queued, then submit.
+	//
+	// The routes table described the network and nothing read it: priorities
+	// could be reordered and routes enabled or disabled without one message
+	// changing, and every live message was recorded with no carrier, so the
+	// deliverability-by-carrier screens worked only for seeded history.
+	//
+	// Absence is normal, not an error — Email and WhatsApp do not go over a
+	// carrier — so a corridor with no active route sends exactly as before and
+	// records no carrier.
+	carrier, routeID := "", (*string)(nil)
+	if route, routeErr := store.SelectRoute(ctx, s.DB, sender.Country, sender.Channel); routeErr == nil {
+		carrier = route.Carrier
+		id := route.ID.String()
+		routeID = &id
+	}
+
 	if err := s.record(ctx, identity, store.MessageRecord{
 		ID: messageID, Channel: sender.Channel, Country: sender.Country,
 		SenderHeader: sender.Header, TemplateID: request.TemplateID,
 		Msisdn: msisdn, Status: string(messaging.StateQueued),
 		Segments: uint8(segments), CostMinor: cost, Currency: rate.Currency,
-		CampaignID: request.CampaignID, CreatedAt: now, UpdatedAt: now, Version: 1,
+		CampaignID: request.CampaignID, Carrier: carrier, RouteID: routeID,
+		CreatedAt: now, UpdatedAt: now, Version: 1,
 	}, "", string(messaging.StateQueued), ""); err != nil {
 		return SendResult{}, err
 	}
@@ -214,6 +231,7 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 		SenderHeader: sender.Header, TemplateID: request.TemplateID, Msisdn: msisdn,
 		Status: string(state), Segments: uint8(segments), Currency: rate.Currency,
 		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: carrierRef,
+		Carrier: carrier, RouteID: routeID,
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
 	}
 	if errorCode != "" {

@@ -162,22 +162,25 @@ func run() error {
 		logger.Error("OPERATOR_IP_ALLOWLIST is not a list of addresses or CIDRs", "error", err)
 		os.Exit(1)
 	}
-	if cfg.OperatorIPAllowlist == "" {
-		logger.Warn("operator console is reachable from any address — set OPERATOR_IP_ALLOWLIST")
-	}
+
+	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger,
+		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
+		EnableDevEndpoints: cfg.EnableDevEndpoints,
+		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
+		AllowGreyRoutes:   cfg.AllowGreyRoutes,
+		OperatorAllowlist: operatorAllowlist,
+		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
+		Mail: &mailer.Mailer{
+			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
+		}}
+
+	// Said at every boot, because "rotate the seeded password" is exactly the
+	// kind of task that stays open forever when nothing mentions it again.
+	api.WarnOnPublishedOperatorPassword(ctx, apiServer)
 
 	server := &http.Server{
-		Addr: cfg.ControlAPIAddr,
-		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
-			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
-			EnableDevEndpoints: cfg.EnableDevEndpoints,
-			SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
-			AllowGreyRoutes:   cfg.AllowGreyRoutes,
-			OperatorAllowlist: operatorAllowlist,
-			OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
-			Mail: &mailer.Mailer{
-				APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
-			}}),
+		Addr:              cfg.ControlAPIAddr,
+		Handler:           api.NewRouter(apiServer),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

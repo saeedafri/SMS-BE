@@ -1081,3 +1081,60 @@ func DecideRegistration(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
 	}
 	return reg, nil
 }
+
+// ListOperatorEmails returns every staff address. Used by the boot-time check
+// that looks for accounts still holding the password published in this
+// repository.
+func ListOperatorEmails(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	rows, err := pool.Query(ctx, `SELECT email FROM operator_users ORDER BY email`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list operator emails: %w", err)
+	}
+	defer rows.Close()
+	var emails []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, fmt.Errorf("store: scan operator email: %w", err)
+		}
+		emails = append(emails, email)
+	}
+	return emails, rows.Err()
+}
+
+// SelectRoute picks the path a message takes: the highest-priority ACTIVE route
+// for a corridor, cheapest first among equals.
+//
+// The routes table described the network and nothing read it. Priorities could
+// be reordered, routes enabled and disabled, and not one message changed —
+// every live message was recorded with no carrier at all, so the deliverability
+// screens worked only for seeded history. This is the read that makes the
+// console's routing decisions real.
+//
+// Carrier is deliberately not part of the ordering key. Priority ranks the ways
+// of reaching ONE carrier (Jio direct ahead of Jio via an aggregator), so
+// picking across carriers falls to cost, which is the only honest tiebreak
+// between two paths a customer cannot tell apart.
+//
+// ErrNotFound is a normal answer, not a failure: Email and WhatsApp do not go
+// over a carrier at all, and no corridor is required to have a route yet.
+func SelectRoute(ctx context.Context, pool *pgxpool.Pool, country, channel string) (Route, error) {
+	var route Route
+	err := pool.QueryRow(ctx, `
+		SELECT id, country, channel, carrier, label, priority, compliance_standing,
+		       cost_per_segment_minor, currency, status
+		  FROM routes
+		 WHERE country = $1 AND channel = $2 AND status = 'active'
+		 ORDER BY priority, cost_per_segment_minor, carrier
+		 LIMIT 1`, country, channel,
+	).Scan(&route.ID, &route.Country, &route.Channel, &route.Carrier,
+		&route.Label, &route.Priority, &route.ComplianceStanding,
+		&route.CostPerSegmentMinor, &route.Currency, &route.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	if err != nil {
+		return Route{}, fmt.Errorf("store: select route: %w", err)
+	}
+	return route, nil
+}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
@@ -199,18 +200,37 @@ func TestSendsAreThrottledToTheTierTheCustomerIsShown(t *testing.T) {
 	// two hundred sends at ClickHouse.
 	secret := h.apiKey(tenant, []string{"send:sms"})
 
+	// Fired concurrently, not in a loop.
+	//
+	// The window is one second, so a sequential loop only trips the limit while
+	// the machine is fast enough to finish 30 sends inside it. Alone it was; run
+	// as part of the full suite it was not, and the test failed on load rather
+	// than on behaviour. Concurrency makes the burst a burst regardless.
+	const burst = 30
+	codes := make(chan int, burst)
+	var wg sync.WaitGroup
+	for attempt := 0; attempt < burst; attempt++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := h.do(http.MethodPost, "/v1/messages", secret, map[string]any{
+				"senderId": sender, "to": "9876543210", "body": "Hello",
+			})
+			codes <- res.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+
 	throttled := 0
-	for attempt := 0; attempt < 30; attempt++ {
-		res := h.do(http.MethodPost, "/v1/messages", secret, map[string]any{
-			"senderId": sender, "to": "9876543210", "body": "Hello",
-		})
-		if res.Code == http.StatusTooManyRequests {
+	for code := range codes {
+		if code == http.StatusTooManyRequests {
 			throttled++
 		}
 	}
 	if throttled == 0 {
-		t.Fatal("30 sends in a burst and not one was throttled — the rate limit the " +
-			"developer settings page advertises is not enforced")
+		t.Fatalf("%d concurrent sends and not one was throttled — the rate limit the "+
+			"developer settings page advertises is not enforced", burst)
 	}
 }
 

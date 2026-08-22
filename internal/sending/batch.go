@@ -30,10 +30,10 @@ type sendPlan struct {
 	// than by phone number. Recorded alongside msisdn rather than instead of
 	// it: a contact has both, and the logs explorer and campaign detail show
 	// whichever one the message was actually sent to.
-	email string
-	body  string
-	cost      int64
-	segments  int
+	email    string
+	body     string
+	cost     int64
+	segments int
 	// refusal is set when the gate refused this recipient. Refused messages
 	// are still recorded — a tenant asking "why didn't this arrive" deserves an
 	// answer — but no money is held for them.
@@ -174,6 +174,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Status: string(state), ErrorCode: errorCode,
 			FraudFlag: "none", Segments: uint8(plan.segments), CostMinor: cost,
 			Currency: context.rate.Currency, CampaignID: context.campaignID,
+			Carrier: context.carrier, RouteID: context.routeID,
 			CreatedAt: now, UpdatedAt: now, Version: 1,
 		}
 		records = append(records, record)
@@ -255,6 +256,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			ErrorClass: errorClass, FraudFlag: "none", Segments: uint8(plan.segments),
 			CostMinor: cost, Currency: context.rate.Currency,
 			CampaignID: context.campaignID, CarrierRef: carrierRef,
+			Carrier: context.carrier, RouteID: context.routeID,
 			CreatedAt: now, SentAt: &settled, UpdatedAt: settled, Version: 2,
 		})
 		events = append(events, store.MessageEvent{
@@ -310,6 +312,12 @@ type batchContext struct {
 	tenantStatus   string
 	balance        int64
 	campaignID     *uuid.UUID
+	// carrier and routeID are the path this campaign takes, resolved ONCE with
+	// everything else that is identical across recipients. Empty when the
+	// corridor has no active route, which is normal — Email and WhatsApp do not
+	// go over a carrier at all.
+	carrier string
+	routeID *string
 }
 
 // emailForChannel returns the address to record as the recipient, and only for

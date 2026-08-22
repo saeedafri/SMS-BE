@@ -362,9 +362,16 @@ func (h *harness) doWithHeaders(method, path, token string, body any,
 // Operators are a separate identity system with their own table and endpoint, so
 // there is no way to derive one from newAccount — a tenant token is refused on
 // every /v1/operator route, which is the property those routes exist to have.
+// The harness's own operator. Exported as constants because the MFA specs sign
+// this account in more than once and must present the same credentials.
+const (
+	harnessOperatorEmail    = "harness-ops@relay.internal"
+	harnessOperatorPassword = "harness-ops-password"
+)
+
 func (h *harness) operatorToken() string {
 	h.t.Helper()
-	const email, password = "harness-ops@relay.internal", "harness-ops-password"
+	email, password := harnessOperatorEmail, harnessOperatorPassword
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		h.t.Fatalf("hash operator password: %v", err)
@@ -381,11 +388,21 @@ func (h *harness) operatorToken() string {
 	if res.Code != http.StatusOK {
 		h.t.Fatalf("operator login = %d\n%s", res.Code, res.Body)
 	}
+	// Operator login answers a discriminated union, exactly like tenant login:
+	// a session, or a second-factor challenge when the operator has MFA
+	// enrolled. Reading `token` off the top level silently returned "" the day
+	// that landed, and every operator spec failed with a 401 that looked like an
+	// authorisation bug.
 	var out struct {
-		Token string `json:"token"`
+		Session struct {
+			Token string `json:"token"`
+		} `json:"session"`
 	}
 	res.decode(h.t, &out)
-	return out.Token
+	if out.Session.Token == "" {
+		h.t.Fatalf("operator login returned no session: %s", res.Body)
+	}
+	return out.Session.Token
 }
 
 // createRegistration submits one compliance registration and returns its id.

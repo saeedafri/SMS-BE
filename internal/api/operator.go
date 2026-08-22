@@ -80,16 +80,57 @@ func (s *Server) OperatorLogin(ctx context.Context, request gen.OperatorLoginReq
 		return unauthorized, nil
 	}
 
+	var result gen.OperatorLoginResult
+
+	// The password alone is not a session when a second factor is enrolled.
+	// Same shape as tenant login, because the frontend already knows how to read
+	// it and because the two flows differing would be a reason for one of them
+	// to be got wrong.
+	state, err := store.LoadOperatorForMfa(ctx, s.DB, operator.OperatorID)
+	if err != nil {
+		return nil, err
+	}
+	if state.Enabled {
+		challenge, err := s.issueOperatorMfaChallenge(ctx, operator.OperatorID)
+		if err != nil {
+			return nil, err
+		}
+		if err := result.FromOperatorLoginMfaChallengeResult(gen.OperatorLoginMfaChallengeResult{
+			Kind: "mfa_challenge", Challenge: challenge,
+		}); err != nil {
+			return nil, err
+		}
+		return gen.OperatorLogin200JSONResponse(result), nil
+	}
+
+	session, err := s.issueOperatorSession(ctx, operator.OperatorID)
+	if err != nil {
+		return nil, err
+	}
+	if err := result.FromOperatorLoginSessionResult(gen.OperatorLoginSessionResult{
+		Kind: "session", Session: session,
+	}); err != nil {
+		return nil, err
+	}
+	return gen.OperatorLogin200JSONResponse(result), nil
+}
+
+// issueOperatorSession mints a console session. Separate from the tenant
+// issueSession for the same reason every other pair here is separate: the two
+// identity systems must not share a token namespace.
+func (s *Server) issueOperatorSession(ctx context.Context, operatorID uuid.UUID) (
+	gen.AuthSession, error) {
+
 	raw, tokenHash, err := auth.NewToken()
 	if err != nil {
-		return nil, err
+		return gen.AuthSession{}, err
 	}
-	expiresAt, err := store.CreateOperatorSession(ctx, s.DB, operator.OperatorID,
+	expiresAt, err := store.CreateOperatorSession(ctx, s.DB, operatorID,
 		tokenHash, sessionLifetime)
 	if err != nil {
-		return nil, err
+		return gen.AuthSession{}, err
 	}
-	return gen.OperatorLogin200JSONResponse{Token: raw, ExpiresAt: expiresAt}, nil
+	return gen.AuthSession{Token: raw, ExpiresAt: expiresAt}, nil
 }
 
 func (s *Server) GetOperatorMe(ctx context.Context, _ gen.GetOperatorMeRequestObject) (
@@ -100,11 +141,19 @@ func (s *Server) GetOperatorMe(ctx context.Context, _ gen.GetOperatorMeRequestOb
 		return gen.GetOperatorMe401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
+	// Read rather than assumed: the security screen renders enrolled or not, and
+	// a console that shows "not enrolled" to somebody who is would send them to
+	// re-enrol and invalidate the codes they already have.
+	state, err := store.LoadOperatorForMfa(ctx, s.DB, operator.OperatorID)
+	if err != nil {
+		return nil, err
+	}
 	return gen.GetOperatorMe200JSONResponse{
 		OperatorId: operator.OperatorID,
 		Name:       operator.Name,
 		Email:      openapi_types.Email(operator.Email),
 		Role:       gen.OperatorMeRole(operator.Role),
+		MfaEnabled: state.Enabled,
 	}, nil
 }
 
