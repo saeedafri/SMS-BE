@@ -36,6 +36,16 @@ type Config struct {
 	// caller. They default to OFF and must stay off in production: one of them
 	// changes the caller's own role, and another zeroes a balance.
 	EnableDevEndpoints bool
+
+	// SignupInviteCode gates public self-registration.
+	//
+	// Empty means signup is open to anyone, which is the right default for a
+	// development instance and the wrong one for a deployment on the public
+	// internet: a stranger self-registering was one half of a go-live blocker
+	// reported on 2026-08-21 (the other half being that they could then fund
+	// their own wallet for nothing). Set it and callers must present the same
+	// value to create an account.
+	SignupInviteCode string
 }
 
 // ClickHouseURL is deliberately not required: message logs arrive in Stage 5,
@@ -90,6 +100,8 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: %s is required", name)
 		}
 	}
+	cfg.SignupInviteCode = strings.TrimSpace(os.Getenv("SIGNUP_INVITE_CODE"))
+
 	return cfg, nil
 }
 

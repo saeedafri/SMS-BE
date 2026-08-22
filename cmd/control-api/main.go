@@ -148,7 +148,8 @@ func run() error {
 		Addr: cfg.ControlAPIAddr,
 		Handler: api.NewRouter(&api.Server{DB: pool, Redis: rdb, Logger: logger,
 			ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
-			EnableDevEndpoints: cfg.EnableDevEndpoints, AdminDB: adminPool,
+			EnableDevEndpoints: cfg.EnableDevEndpoints,
+			SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
 			OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL,
 			Mail: &mailer.Mailer{
 				APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,

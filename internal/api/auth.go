@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"strings"
 	"time"
@@ -70,6 +71,28 @@ func (s *Server) Signup(ctx context.Context, request gen.SignupRequestObject) (g
 	case len(body.Password) < minPasswordLen:
 		return gen.Signup422JSONResponse(errorBody(codeValidation,
 			"Password must be at least 8 characters.")), nil
+	}
+
+	// Self-registration is gated when an invite code is configured.
+	//
+	// Open signup on a public deployment was half of a go-live blocker reported
+	// on 2026-08-21: a stranger could self-register, and at the time could then
+	// fund their own wallet for nothing and send. The funding half is closed;
+	// this closes the other.
+	//
+	// Read from a header rather than the body so the contract's 151 operations
+	// are untouched — a client that does not know about the code sends nothing
+	// and is refused, which is the correct outcome for a stranger.
+	//
+	// Constant-time compare: the code is a shared secret, and a byte-by-byte
+	// comparison leaks its prefix to anyone willing to time the responses.
+	if s.SignupInviteCode != "" {
+		offered := request.Params.XInviteCode
+		if offered == nil || subtle.ConstantTimeCompare(
+			[]byte(strings.TrimSpace(*offered)), []byte(s.SignupInviteCode)) != 1 {
+			return gen.Signup403JSONResponse(errorBody(codeForbidden,
+				"Relay is invite-only right now. Ask your account manager for an invite code.")), nil
+		}
 	}
 
 	hash, err := auth.HashPassword(body.Password)

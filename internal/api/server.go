@@ -35,6 +35,10 @@ type Server struct {
 	// Off unless the deployment opts in.
 	EnableDevEndpoints bool
 
+	// SignupInviteCode, when set, is required by POST /v1/auth/signup. Empty
+	// leaves self-registration open.
+	SignupInviteCode string
+
 	// OperatorDB sees across tenants and is used ONLY by operator-console
 	// handlers. Tenant handlers must keep using DB: that split is what stops a
 	// mistake in one handler from becoming a cross-tenant leak.
