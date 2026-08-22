@@ -773,7 +773,6 @@ func UsageByChannel(ctx context.Context, pool *pgxpool.Pool, id Identity, curren
 	return out, nil
 }
 
-
 // applyAutoRecharge tops a wallet back up when a charge has taken it under the
 // tenant's configured threshold.
 //
