@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
@@ -24,11 +26,22 @@ func newSendHarness(t *testing.T) *harness {
 		t.Skip("TEST_CLICKHOUSE_URL not set")
 	}
 	h := newHarness(t)
+	// Redis is optional here and the send path treats it that way: without it
+	// the rate limiter fails open, which is the deployment's own stance.
+	var rdb *redis.Client
+	if url := os.Getenv("REDIS_URL"); url != "" {
+		client, err := store.OpenRedis(context.Background(), url)
+		if err == nil {
+			rdb = client
+			t.Cleanup(func() { _ = client.Close() })
+		}
+	}
 	h.router = api.NewRouter(&api.Server{
 		DB: h.pool, OperatorDB: h.operatorPool, AdminDB: h.admin,
 		EnableDevEndpoints: true, Gateway: billing.ManualGateway{},
 		ClickHouse: store.NewClickHousePool(chURL, nil),
 		Connector:  connector.NewSandbox(0),
+		Redis:      rdb,
 		Logger:     slog.New(slog.NewJSONHandler(h.logs, nil)),
 	})
 	return h
@@ -165,4 +178,38 @@ func (h *harness) apiKey(tenant account, scopes []string) string {
 		h.t.Fatalf("create api key: %v", err)
 	}
 	return key.Secret
+}
+
+// A public send endpoint with no throttle is a leaked key or a retry loop away
+// from draining a wallet as fast as the network allows.
+//
+// GetRateLimit has always told customers their budget — 100 a second on live,
+// 10 on test — and until now nothing enforced it. The numbers here are that
+// same tier: a limit a customer is shown and a limit that is applied have to be
+// one number.
+func TestSendsAreThrottledToTheTierTheCustomerIsShown(t *testing.T) {
+	if os.Getenv("REDIS_URL") == "" {
+		t.Skip("REDIS_URL not set — the limiter fails open without Redis, by design")
+	}
+	h := newSendHarness(t)
+	tenant := h.newAccount("owner")
+	sender := h.approvedSender(tenant)
+	h.fundWallet(tenant)
+	// A test key: burst 20, so the limit is reachable in a test without firing
+	// two hundred sends at ClickHouse.
+	secret := h.apiKey(tenant, []string{"send:sms"})
+
+	throttled := 0
+	for attempt := 0; attempt < 30; attempt++ {
+		res := h.do(http.MethodPost, "/v1/messages", secret, map[string]any{
+			"senderId": sender, "to": "9876543210", "body": "Hello",
+		})
+		if res.Code == http.StatusTooManyRequests {
+			throttled++
+		}
+	}
+	if throttled == 0 {
+		t.Fatal("30 sends in a burst and not one was throttled — the rate limit the " +
+			"developer settings page advertises is not enforced")
+	}
 }

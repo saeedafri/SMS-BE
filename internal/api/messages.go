@@ -207,6 +207,12 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 		}
 	}
 
+	if !s.allowSend(ctx, identity.TenantID, keyEnvironment(ctx)) {
+		return gen.SendMessage429JSONResponse(errorBody("rate_limited",
+			"Too many sends. See GET /v1/developer/rate-limit for this "+
+				"environment's budget, and retry in a moment.")), nil
+	}
+
 	service := s.sendingService(ctx)
 	if service == nil {
 		return gen.SendMessage422JSONResponse(errorBody(codeValidation,

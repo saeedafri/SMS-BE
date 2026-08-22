@@ -166,7 +166,12 @@ func RevokeAPIKey(ctx context.Context, pool *pgxpool.Pool, id Identity, keyID uu
 // ResolveAPIKey authenticates a bearer key. It calls a SECURITY DEFINER
 // function for the same reason session resolution does: RLS cannot be satisfied
 // before the tenant is known, and this key is what establishes it.
-func ResolveAPIKey(ctx context.Context, pool *pgxpool.Pool, secret string) (Identity, []string, error) {
+// The environment is returned, not discarded: a test key and a live key are
+// throttled differently, so whoever enforces the limit has to know which one
+// this is.
+func ResolveAPIKey(ctx context.Context, pool *pgxpool.Pool, secret string) (
+	Identity, []string, string, error) {
+
 	sum := sha256.Sum256([]byte(secret))
 	var identity Identity
 	var scopes []string
@@ -175,12 +180,12 @@ func ResolveAPIKey(ctx context.Context, pool *pgxpool.Pool, secret string) (Iden
 		`SELECT key_id, tenant_id, scopes, environment FROM resolve_api_key($1)`, sum[:],
 	).Scan(&identity.SessionID, &identity.TenantID, &scopes, &environment)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Identity{}, nil, ErrNotFound
+		return Identity{}, nil, "", ErrNotFound
 	}
 	if err != nil {
-		return Identity{}, nil, fmt.Errorf("store: resolve api key: %w", err)
+		return Identity{}, nil, "", fmt.Errorf("store: resolve api key: %w", err)
 	}
-	return identity, scopes, nil
+	return identity, scopes, environment, nil
 }
 
 // WebhookEndpoint is where we POST delivery events.
