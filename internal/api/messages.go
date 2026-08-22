@@ -223,7 +223,10 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 		SenderID: request.Body.SenderId, TemplateID: request.Body.TemplateId,
 		Msisdn: to, Body: body,
 	})
-	if err != nil {
+	// Send returns a populated result AND the gate's error when it declines,
+	// because a refused send is still a recorded message with a reason. Only a
+	// failure of the send path itself is a 500 — a refusal is an answer.
+	if err != nil && !messaging.IsRefusal(err) {
 		return nil, err
 	}
 
