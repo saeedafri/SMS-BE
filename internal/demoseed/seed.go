@@ -8,6 +8,7 @@ package demoseed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,6 +21,10 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
 )
+
+// errHistoryDrift is the fixture disagreeing with itself: the campaign rows
+// claim a recipient count the seeded message history does not contain.
+var errHistoryDrift = errors.New("fixture drift")
 
 const (
 	// TenantID is exported because the dev test hooks fall back to it when a
@@ -43,13 +48,22 @@ const (
 	// exactly these values. A seed with freshly generated uuids leaves every one
 	// of those specs looking at a 404, which reads as a broken feature rather
 	// than a missing fixture. Keep them in step with src/mocks/*-state.ts.
-	listID        = "11110000-0000-0000-0000-000000000001"
-	smsTemplate   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	otpTemplate   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	rcsTemplate   = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	campaignOne   = "ca000001-0000-0000-0000-000000000001"
-	campaignTwo   = "ca000002-0000-0000-0000-000000000002"
-	campaignThree = "ca000003-0000-0000-0000-000000000003"
+	listID      = "11110000-0000-0000-0000-000000000001"
+	smsTemplate = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	otpTemplate = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	rcsTemplate = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	campaignOne = "ca000001-0000-0000-0000-000000000001"
+	campaignTwo = "ca000002-0000-0000-0000-000000000002"
+
+	// historyMessagesPerCampaign is how many messages seedMessageHistory writes
+	// for each of the two campaigns it attributes traffic to.
+	//
+	// Stated rather than derived because the fast reset path rebuilds the
+	// campaign rows WITHOUT rewriting history, so the number has to be known
+	// without asking ClickHouse. seedMessageHistory checks its own output
+	// against it, so the two cannot drift apart in silence.
+	historyMessagesPerCampaign = 414
+	campaignThree              = "ca000003-0000-0000-0000-000000000003"
 	// NOT the frontend's ids. Their fixtures use "jo000001-…" and "cv000003-…",
 	// which are not valid uuids — j, o and v are not hex digits. MSW never
 	// noticed because it does not validate the format, but the contract declares
@@ -668,20 +682,26 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	// Two campaigns in different states: one finished, one mid-flight. The
 	// campaign specs assert on both, and a fixture with only completed rows
 	// would let a broken in-progress view pass unnoticed.
+	//
+	// Recipients match the message history that actually exists for each — see
+	// historyMessagesPerCampaign. They used to be round numbers somebody typed
+	// (1,840 and 1,200) against 414 seeded messages apiece, so the finished
+	// campaign reported 1,426 messages that were never sent and the in-flight
+	// one 786. That was read, reasonably, as messages being lost in fan-out.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO campaigns (id, tenant_id, name, channel, country, list_id, sender_id,
 		                       template_id, status, send_started_at, scheduled_at, recipients,
 		                       segments_per_message, cost_minor_min, cost_minor_max, currency)
 		VALUES ($1, $3, 'Festive flash sale', 'SMS', 'IN', $4, $5, $6,
-		        'sent', '2026-06-20T10:05:00Z', NULL, 1840, 1, 22080, 22080, 'INR'),
+		        'sent', '2026-06-20T10:05:00Z', NULL, $10, 1, $10 * 12, $10 * 12, 'INR'),
 		       ($2, $3, 'Weekend RCS promo',  'RCS', 'IN', $4, $7, $8,
-		        'sending', now() - interval '20 seconds', NULL, 1200, 1, 25200, 54000, 'INR'),
+		        'sending', now() - interval '20 seconds', NULL, $10, 1, $10 * 21, $10 * 45, 'INR'),
 		       ($9, $3, 'Payment reminders',  'SMS', 'IN', $4, $5, $6,
 		        -- Scheduled in the future so it stays scheduled: a past date would
 		        -- describe a campaign that should already have sent.
 		        'scheduled', NULL, now() + interval '3 days', 900, 1, 21600, 21600, 'INR')`,
 		campaignOne, campaignTwo, tenantID, listID, smsID, smsTemplate,
-		rcsID, rcsTemplate, campaignThree); err != nil {
+		rcsID, rcsTemplate, campaignThree, historyMessagesPerCampaign); err != nil {
 		return fmt.Errorf("seed campaigns: %w", err)
 	}
 
@@ -841,6 +861,13 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	// the charts, not the whole fixture.
 	if url := os.Getenv("CLICKHOUSE_URL"); includeHistory && url != "" {
 		if err := seedMessageHistory(ctx, url, tenantID); err != nil {
+			// A fixture that disagrees with itself is fatal; an unreachable
+			// warehouse is not. The first ships a demo where a campaign reports
+			// messages nobody sent, and warning about that would put it exactly
+			// where the last one hid — in a line nobody reads.
+			if errors.Is(err, errHistoryDrift) {
+				return err
+			}
 			fmt.Fprintln(os.Stderr, "warning: message history not seeded:", err)
 		}
 	}
@@ -1607,6 +1634,11 @@ func seedMessageHistory(ctx context.Context, url, tenant string) error {
 
 	now := time.Now().UTC()
 	counts := map[[4]string]struct{ messages, segments, cost int64 }{}
+	// Counted so the campaign rows and the history cannot drift apart. The
+	// campaigns are written by a different function with a hardcoded recipient
+	// count, which is the only way the fast reset path can rebuild them without
+	// rewriting 30 days of ClickHouse — so this is where the two are reconciled.
+	perCampaign := map[string]int{}
 	step := 0
 	for day := 29; day >= 0; day-- {
 		// More traffic on recent days so the trend line slopes rather than
@@ -1711,7 +1743,19 @@ func seedMessageHistory(ctx context.Context, url, tenant string) error {
 					break // rejected is both the attempt and the outcome
 				}
 			}
+			if campaign.id != "" {
+				perCampaign[campaign.id]++
+			}
 			step++
+		}
+	}
+	for _, id := range []string{campaignOne, campaignTwo} {
+		if perCampaign[id] != historyMessagesPerCampaign {
+			return fmt.Errorf("%w: history wrote %d messages for campaign %s but "+
+				"the campaign row claims "+
+				"%d recipients — update historyMessagesPerCampaign, or the fixture "+
+				"reports messages that were never sent",
+				errHistoryDrift, perCampaign[id], id, historyMessagesPerCampaign)
 		}
 	}
 	if err := messages.Send(); err != nil {
