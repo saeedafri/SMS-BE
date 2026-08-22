@@ -213,6 +213,34 @@ func (s *Server) devAdvanceRegistration(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	// "not_started" removes the record rather than setting a status, because
+	// there is no such status — a country a tenant has not registered in has no
+	// row at all, and the compliance screen reads the absence.
+	//
+	// The fixture seeds India's principal entity APPROVED, because the demo
+	// tenant's IN senders are approved and an approved sender with no entity
+	// behind it is a state the product must not be able to reach. That is the
+	// right fixture and the wrong starting point for the specs that exercise
+	// the registration lifecycle itself, which need a tenant that has not
+	// registered yet. This is how they get one.
+	if body.To == "not_started" {
+		// Not routed through devExec, which 404s when nothing matched. Here
+		// nothing matching is the goal already met: "ensure this tenant has not
+		// registered" has to be safe to call twice, or a beforeEach fails the
+		// second time it runs.
+		if err := store.WithTenant(r.Context(), s.DB, identity.TenantID, func(tx pgx.Tx) error {
+			_, execErr := tx.Exec(r.Context(),
+				`DELETE FROM registrations
+				  WHERE tenant_id = $1 AND country = $2 AND object_key = $3`,
+				identity.TenantID, body.Country, body.ObjectKey)
+			return execErr
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal", err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	s.devExec(w, r, identity,
 		`UPDATE registrations SET status = $1, updated_at = now(),
 		        -- The exact wording a rejected registration shows the customer.

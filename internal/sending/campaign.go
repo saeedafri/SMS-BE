@@ -121,12 +121,23 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 	}
 
+	// The path this campaign's traffic takes, resolved once with everything else
+	// that is identical across recipients. Absence is normal — see the comment
+	// on the single-send path in service.go.
+	carrier, routeID := "", (*string)(nil)
+	if route, routeErr := store.SelectRoute(ctx, s.DB, sender.Country, sender.Channel); routeErr == nil {
+		carrier = route.Carrier
+		id := route.ID.String()
+		routeID = &id
+	}
+
 	campaignID := campaign.ID
 	batch := batchContext{
 		sender: sender, templateID: campaign.TemplateID,
 		templateStatus: template.Status, templateSender: template.SenderID.String(),
 		body: body, rate: rate, tenantStatus: tenantStatus,
 		balance: balance, campaignID: &campaignID,
+		carrier: carrier, routeID: routeID,
 	}
 
 	if err := store.MarkCampaignSending(ctx, s.DB, identity, campaign.ID); err != nil {

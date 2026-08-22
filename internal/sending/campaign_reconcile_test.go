@@ -129,3 +129,64 @@ func (f *fixture) campaignStatus(id uuid.UUID) string {
 	}
 	return status
 }
+
+// The routes table described the network and nothing read it.
+//
+// Priorities could be reordered and routes enabled or disabled without one
+// message changing: every live message was recorded with no carrier at all, so
+// the deliverability-by-carrier screens worked only for the seeded history.
+func TestASendTakesTheHighestPriorityActiveRouteAndRecordsIt(t *testing.T) {
+	f := newFixture(t)
+
+	// Two paths to the same corridor. The cheap one is disabled — a route
+	// nobody is allowed to use is not a path — so the send must take the other.
+	cheapDisabled := f.seedRoute("VI", "Vi via Aggregator Z", 1, 1, "disabled")
+	expected := f.seedRoute("AIRTEL", "Airtel Direct Z", 2, 9, "active")
+	_ = cheapDisabled
+
+	result, err := f.send("9876543210", "Routed")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var carrier string
+	for {
+		carrier = f.messageCarrier(result.MessageID)
+		if carrier != "" || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if carrier != "AIRTEL" {
+		t.Fatalf("message recorded carrier %q, want AIRTEL (route %s)", carrier, expected)
+	}
+}
+
+func (f *fixture) seedRoute(carrier, label string, priority int, cost int, status string) string {
+	f.t.Helper()
+	id := uuid.New()
+	if _, err := f.service.DB.Exec(context.Background(), `
+		INSERT INTO routes (id, country, channel, carrier, label, priority,
+		                    compliance_standing, cost_per_segment_minor, currency, status)
+		VALUES ($1, 'IN', 'SMS', $2, $3, $4, 'registered', $5, 'INR', $6)`,
+		id, carrier, label, priority, cost, status); err != nil {
+		f.t.Fatalf("seed route: %v", err)
+	}
+	f.t.Cleanup(func() {
+		_, _ = f.service.DB.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, id)
+	})
+	return id.String()
+}
+
+func (f *fixture) messageCarrier(id uuid.UUID) string {
+	f.t.Helper()
+	var carrier string
+	row := f.service.ClickHouse.QueryRow(context.Background(),
+		`SELECT carrier FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
+		f.identity.TenantID, id)
+	if err := row.Scan(&carrier); err != nil {
+		return ""
+	}
+	return carrier
+}

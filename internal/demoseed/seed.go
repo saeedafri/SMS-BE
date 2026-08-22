@@ -880,13 +880,24 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	if err != nil {
 		return err
 	}
+	// The second factor is reset with everything else. The fixture's operator
+	// signs in with a password alone, and a run that enrolled them — the MFA spec
+	// does exactly that — would otherwise leave every later operator spec facing
+	// a challenge it has no code for.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO operator_users (id, email, name, password_hash, role)
-		VALUES ($1, 'ops@relay.internal', 'Ops Team', $2, 'admin')
+		INSERT INTO operator_users (id, email, name, password_hash, role,
+		                            mfa_secret, mfa_enabled)
+		VALUES ($1, 'ops@relay.internal', 'Ops Team', $2, 'admin', NULL, false)
 		ON CONFLICT (email) DO UPDATE
-		  SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role`,
+		  SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role,
+		      mfa_secret = NULL, mfa_enabled = false`,
 		operatorID, operatorHash); err != nil {
 		return fmt.Errorf("seed operator: %w", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM operator_recovery_codes WHERE operator_id = $1`,
+		operatorID); err != nil {
+		return fmt.Errorf("clear operator recovery codes: %w", err)
 	}
 
 	// Upserted rather than deleted and recreated: these tenants are referenced
@@ -975,6 +986,26 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 			return fmt.Errorf("seed approval sender %s: %w", sender.header, err)
 		}
 	}
+	// A pending US compliance registration for Northwind Logistics.
+	//
+	// The queue has three item types and the fixture only ever contained two, so
+	// the registration row — the one with no channel, because a compliance
+	// registration unblocks every channel in a country — was never rendered by
+	// anything that runs here. The deployed console crashed on exactly that
+	// shape: <ChannelTag channel={undefined}> threw, and the whole page became
+	// "Approvals could not be loaded".
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO registrations (id, tenant_id, country, object_key, status, fields, created_at)
+		VALUES ('d3d3d3d3-0000-4000-8000-000000000005',
+		        'aaaaaaaa-1111-1111-1111-111111111111', 'US', 'tcr_brand', 'pending_review',
+		        '{"legalName":"Northwind Logistics Inc","website":"https://northwind.example.com",
+		          "supportEmail":"support@northwind.example.com"}'::jsonb,
+		        '2026-08-17T11:20:00Z')
+		ON CONFLICT (id) DO UPDATE
+		  SET status = EXCLUDED.status, rejection_reason = NULL`); err != nil {
+		return fmt.Errorf("seed approval registration: %w", err)
+	}
+
 	// A pending GB template for Bluewave Retail, hung off their approved sender
 	// — a template cannot exist without one, and the reject flow needs a target.
 	if _, err := pool.Exec(ctx, `

@@ -320,12 +320,28 @@ func (Unimplemented) OperatorLogin(ctx context.Context, request gen.OperatorLogi
 	return nil, errNotImplemented("OperatorLogin")
 }
 
+func (Unimplemented) OperatorVerifyMfa(ctx context.Context, request gen.OperatorVerifyMfaRequestObject) (gen.OperatorVerifyMfaResponseObject, error) {
+	return nil, errNotImplemented("OperatorVerifyMfa")
+}
+
 func (Unimplemented) GetOperatorMargin(ctx context.Context, request gen.GetOperatorMarginRequestObject) (gen.GetOperatorMarginResponseObject, error) {
 	return nil, errNotImplemented("GetOperatorMargin")
 }
 
 func (Unimplemented) GetOperatorMe(ctx context.Context, request gen.GetOperatorMeRequestObject) (gen.GetOperatorMeResponseObject, error) {
 	return nil, errNotImplemented("GetOperatorMe")
+}
+
+func (Unimplemented) OperatorConfirmMfa(ctx context.Context, request gen.OperatorConfirmMfaRequestObject) (gen.OperatorConfirmMfaResponseObject, error) {
+	return nil, errNotImplemented("OperatorConfirmMfa")
+}
+
+func (Unimplemented) OperatorDisableMfa(ctx context.Context, request gen.OperatorDisableMfaRequestObject) (gen.OperatorDisableMfaResponseObject, error) {
+	return nil, errNotImplemented("OperatorDisableMfa")
+}
+
+func (Unimplemented) OperatorEnrollMfa(ctx context.Context, request gen.OperatorEnrollMfaRequestObject) (gen.OperatorEnrollMfaResponseObject, error) {
+	return nil, errNotImplemented("OperatorEnrollMfa")
 }
 
 func (Unimplemented) GetRateCard(ctx context.Context, request gen.GetRateCardRequestObject) (gen.GetRateCardResponseObject, error) {
