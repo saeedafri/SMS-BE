@@ -19,6 +19,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
+	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -72,7 +73,13 @@ func newHarness(t *testing.T) *harness {
 	logs := &bytes.Buffer{}
 	h := &harness{t: t, pool: pool, admin: admin, logs: logs}
 	h.router = api.NewRouter(&api.Server{
-		DB:         pool,
+		DB:                 pool,
+		EnableDevEndpoints: true,
+		// A capture gateway, because production now refuses a tenant top-up when
+		// none is configured — fail closed, since the manual gateway hands out
+		// money for free. Tests that exercise a successful capture have to say
+		// which processor took it, exactly as a real deployment does.
+		Gateway:    billing.ManualGateway{},
 		OperatorDB: operator,
 		AdminDB:    admin,
 		Logger:     slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),

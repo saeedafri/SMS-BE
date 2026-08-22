@@ -132,6 +132,27 @@ func (s *Server) TopUpWallet(ctx context.Context, request gen.TopUpWalletRequest
 		return gen.TopUpWallet422JSONResponse(
 			errorBody(codeValidation, "That payment method does not exist.")), nil
 	}
+	// A tenant cannot capture their own money through the manual gateway.
+	//
+	// ManualGateway is not a stub — prepaid balances settled by bank transfer are
+	// how much of Indian A2P actually works — but its own contract is that "an
+	// operator confirms the transfer and the balance moves". This endpoint had no
+	// operator in it. Capture() accepts any positive amount and returns a receipt
+	// for the full sum, so a customer could fund themselves for nothing and send
+	// for free. Reported as a go-live blocker on 2026-08-21; confirmed by reading
+	// Capture rather than by crediting a live ledger.
+	//
+	// Refusing here fails CLOSED: with no real processor configured, the answer to
+	// "take money from this card" is that we cannot, not that we pretend we did.
+	// Configure s.Gateway with a real provider and this lifts itself.
+	// Keyed on the gateway alone, NOT on EnableDevEndpoints — that flag is true
+	// on the deployment this was reported against, so gating on it would have
+	// left the hole exactly where it was found.
+	if s.Gateway == nil {
+		return gen.TopUpWallet422JSONResponse(errorBody(codeValidation,
+			"Card top-up is not available on this deployment. "+
+				"Ask your account manager to credit the wallet by bank transfer.")), nil
+	}
 	method, err := store.GetPaymentMethod(ctx, s.DB, identity, methodID)
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.TopUpWallet422JSONResponse(
