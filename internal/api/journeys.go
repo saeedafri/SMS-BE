@@ -355,6 +355,47 @@ func (s *Server) ArchiveJourney(ctx context.Context, request gen.ArchiveJourneyR
 	return gen.ArchiveJourney200JSONResponse(journey), nil
 }
 
+// UnarchiveJourney restores an archived journey.
+//
+// Sits beside ArchiveJourney and shares its authentication, tenant scoping and
+// serializer — but not transitionJourney, and that is the point. Every other
+// verb moves to one named status; this one lands on draft or paused depending
+// on whether the journey ever ran, and it decides that inside the same
+// statement that writes it. See store.UnarchiveJourney.
+//
+// Archived was terminal until now: a customer who archived a journey by mistake
+// had no route back, in the product or the API.
+func (s *Server) UnarchiveJourney(ctx context.Context, request gen.UnarchiveJourneyRequestObject) (
+	gen.UnarchiveJourneyResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return gen.UnarchiveJourney401JSONResponse(
+			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
+	}
+	journeyID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.UnarchiveJourney404JSONResponse(
+			errorBody(codeNotFound, "No such journey.")), nil
+	}
+
+	// Scoped to the caller's tenant by WithTenant, so another tenant's journey
+	// is not found rather than forbidden — a 403 would confirm it exists.
+	journey, err := store.UnarchiveJourney(ctx, s.DB, identity, journeyID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return gen.UnarchiveJourney404JSONResponse(
+			errorBody(codeNotFound, "No such journey.")), nil
+	case errors.Is(err, store.ErrConflict):
+		// Read by a person, not parsed by a machine.
+		return gen.UnarchiveJourney422JSONResponse(errorBody("invalid_status",
+			"Only an archived journey can be unarchived.")), nil
+	case err != nil:
+		return nil, err
+	}
+	return gen.UnarchiveJourney200JSONResponse(s.toJourney(ctx, identity, journey)), nil
+}
+
 // UpdateJourney renames a journey or replaces its steps or trigger.
 //
 // Every field is optional, so the automation screen can rename without

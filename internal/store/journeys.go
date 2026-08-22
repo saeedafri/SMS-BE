@@ -181,3 +181,58 @@ func UpdateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	}
 	return journey, nil
 }
+
+// UnarchiveJourney restores an archived journey, and decides where it lands.
+//
+// Two transitions, not one: a journey that never ran goes back to draft, one
+// that had already been activated goes back to PAUSED. Never to active —
+// returning it to active would resume sending to a live list on a single click
+// with no confirmation. Restoring and resuming are two decisions, and the
+// operator makes them separately.
+//
+// activated_at is deliberately not written. Unarchiving is not a
+// re-activation, and every derived reading — the enrollment funnel, per-step
+// "currently here" counts, the message trajectory — is computed from elapsed
+// time since the ORIGINAL activation instant. Rewriting it to now() would
+// corrupt all of them.
+//
+// The status check and the write are one conditional UPDATE rather than a read
+// followed by a write, so two concurrent unarchives, or an unarchive racing an
+// archive, cannot both pass the guard. Zero rows means either not-found or
+// not-archived, so the existence lookup that tells those apart runs in the SAME
+// transaction — asking afterwards would reintroduce the race it just closed.
+func UnarchiveJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	journeyID uuid.UUID) (Journey, error) {
+
+	var journey Journey
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var scanErr error
+		journey, scanErr = scanJourney(tx.QueryRow(ctx, `
+			UPDATE journeys
+			   SET status = CASE WHEN activated_at IS NULL THEN 'draft' ELSE 'paused' END,
+			       updated_at = now()
+			 WHERE id = $1 AND status = 'archived'
+			RETURNING `+journeyColumns, journeyID))
+		if !errors.Is(scanErr, pgx.ErrNoRows) {
+			return scanErr
+		}
+		// Nothing moved. Tell "no such journey" from "wrong state" — a caller
+		// that cannot distinguish them cannot report either one usefully.
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT true FROM journeys WHERE id = $1`, journeyID).Scan(&exists); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return ErrConflict
+	})
+	switch {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrConflict):
+		return Journey{}, err
+	case err != nil:
+		return Journey{}, fmt.Errorf("store: unarchive journey: %w", err)
+	}
+	return journey, nil
+}

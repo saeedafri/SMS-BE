@@ -120,6 +120,10 @@ func (Unimplemented) ResumeJourney(ctx context.Context, request gen.ResumeJourne
 	return nil, errNotImplemented("ResumeJourney")
 }
 
+func (Unimplemented) UnarchiveJourney(ctx context.Context, request gen.UnarchiveJourneyRequestObject) (gen.UnarchiveJourneyResponseObject, error) {
+	return nil, errNotImplemented("UnarchiveJourney")
+}
+
 func (Unimplemented) EstimateCost(ctx context.Context, request gen.EstimateCostRequestObject) (gen.EstimateCostResponseObject, error) {
 	return nil, errNotImplemented("EstimateCost")
 }
