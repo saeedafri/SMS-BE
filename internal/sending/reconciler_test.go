@@ -29,15 +29,23 @@ func TestReconcilerExpiresSilentMessagesAndRefunds(t *testing.T) {
 
 	// A window this message is not yet old enough for: it is still in flight,
 	// and expiring it early would refund a message that may still arrive.
-	expired, err := f.service.Reconcile(context.Background(), time.Hour, 100)
-	if err != nil {
+	if _, err := f.service.Reconcile(context.Background(), time.Hour, 100); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if expired != 0 {
-		t.Fatalf("reconciler expired %d messages inside the validity window, want 0", expired)
-	}
+	// Asserted through THIS tenant's balance, not the sweep's global count.
+	//
+	// Reconcile sweeps every tenant, and the warehouse is shared: rows left by
+	// earlier runs of this suite age past any window eventually, so a count of
+	// zero is a claim about the whole machine's history rather than about this
+	// message. It held for a fresh warehouse and failed after a day of runs —
+	// 363 messages across 59 tenants, the oldest three hours old — which reads
+	// as a reconciler bug and is not one.
+	//
+	// The balance is the honest test of the same behaviour: this message is
+	// inside its validity period, so its hold must still be held.
 	if held := f.balance(); held != before-12 {
-		t.Fatalf("balance moved to %d during a no-op reconcile", held)
+		t.Fatalf("balance moved to %d during a no-op reconcile — a message inside "+
+			"its validity window was expired and refunded", held)
 	}
 
 	// Wait for the message to become visible to a RANGE scan. A point lookup by

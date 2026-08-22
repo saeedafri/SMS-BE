@@ -65,8 +65,14 @@ func newFixture(t *testing.T) *fixture {
 		// ClickHouse rows must go too. The reconciler sweeps every tenant, so a
 		// test tenant left behind in ClickHouse but deleted from Postgres is an
 		// orphan that fails to settle forever and pollutes every later run.
+		// mutations_sync so the delete has actually happened when this returns.
+		// ClickHouse mutations are asynchronous by default, so the rows outlived
+		// the test that made them and piled up across a day of runs — 363 across
+		// 59 tenants — until they aged past a validity window and broke a sweep
+		// test that had nothing to do with them.
 		_ = ch.Exec(context.Background(),
-			"ALTER TABLE messages DELETE WHERE tenant_id = ?", tenantID)
+			"ALTER TABLE messages DELETE WHERE tenant_id = ? SETTINGS mutations_sync = 1",
+			tenantID)
 	})
 
 	identity := store.Identity{TenantID: tenantID}
