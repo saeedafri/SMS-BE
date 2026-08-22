@@ -1256,7 +1256,19 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		       ('IN','VOICE','MARKETING',     60,'INR'),
 		       ('IN','WHATSAPP','AUTHENTICATION', 70,'INR'),
 		       ('IN','WHATSAPP','UTILITY',        55,'INR'),
-		       ('IN','WHATSAPP','MARKETING',      90,'INR')
+		       ('IN','WHATSAPP','MARKETING',      90,'INR'),
+		       -- Corridors that had a route and no price.
+		       --
+		       -- A send there was refused with "no_rate" — the product advertised
+		       -- a path it then would not price, so a GB Voice or AE RCS campaign
+		       -- could not send at all. Priced above their route cost (EE Voice 6,
+		       -- EE RCS 8, Etisalat Voice 8, Etisalat RCS 9, Verizon Voice 5) so
+		       -- the margin panels read positive rather than inverted.
+		       ('US','VOICE','',    25,'USD'),
+		       ('GB','RCS','',      30,'GBP'),
+		       ('GB','VOICE','',    25,'GBP'),
+		       ('AE','RCS','',      30,'AED'),
+		       ('AE','VOICE','',    25,'AED')
 		ON CONFLICT (country, channel, category) DO UPDATE
 		  SET per_segment_minor = EXCLUDED.per_segment_minor`); err != nil {
 		return fmt.Errorf("seed category rates: %w", err)
@@ -1399,6 +1411,36 @@ func verifyFixtureCompliance(ctx context.Context, pool *pgxpool.Pool,
 				"sender %s (%s, tenant %s) is approved with no approved %s registration",
 				sender.header, sender.country, sender.tenant, entity))
 		}
+	}
+
+	// A corridor with an active route and no price is one the product offers and
+	// then refuses: the send is rejected with "no_rate". Five of them shipped —
+	// US Voice, GB RCS, GB Voice, AE RCS, AE Voice — so a campaign on those
+	// corridors could not send at all while the routes page showed a live path.
+	routableUnpriced, err := pool.Query(ctx, `
+		SELECT DISTINCT r.country, r.channel
+		  FROM routes r
+		 WHERE r.status = 'active'
+		   AND NOT EXISTS (
+		         SELECT 1 FROM pricing_rates p
+		          WHERE p.country = r.country AND p.channel = r.channel)
+		 ORDER BY r.country, r.channel`)
+	if err != nil {
+		return fmt.Errorf("verify fixture: read routable corridors: %w", err)
+	}
+	for routableUnpriced.Next() {
+		var country, channel string
+		if err := routableUnpriced.Scan(&country, &channel); err != nil {
+			routableUnpriced.Close()
+			return fmt.Errorf("verify fixture: scan corridor: %w", err)
+		}
+		offenders = append(offenders, fmt.Sprintf(
+			"%s/%s has an active route and no price — a send there is refused with no_rate",
+			country, channel))
+	}
+	routableUnpriced.Close()
+	if err := routableUnpriced.Err(); err != nil {
+		return fmt.Errorf("verify fixture: read routable corridors: %w", err)
 	}
 
 	var greyActive int
