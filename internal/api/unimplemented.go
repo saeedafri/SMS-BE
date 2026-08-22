@@ -344,6 +344,14 @@ func (Unimplemented) EditRateOverride(ctx context.Context, request gen.EditRateO
 	return nil, errNotImplemented("EditRateOverride")
 }
 
+func (Unimplemented) ApproveRegistrationItem(ctx context.Context, request gen.ApproveRegistrationItemRequestObject) (gen.ApproveRegistrationItemResponseObject, error) {
+	return nil, errNotImplemented("ApproveRegistrationItem")
+}
+
+func (Unimplemented) RejectRegistrationItem(ctx context.Context, request gen.RejectRegistrationItemRequestObject) (gen.RejectRegistrationItemResponseObject, error) {
+	return nil, errNotImplemented("RejectRegistrationItem")
+}
+
 func (Unimplemented) GetRoutes(ctx context.Context, request gen.GetRoutesRequestObject) (gen.GetRoutesResponseObject, error) {
 	return nil, errNotImplemented("GetRoutes")
 }
