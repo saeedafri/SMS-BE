@@ -1,8 +1,10 @@
 package api_test
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // Self-registration must be closed when the deployment says so.
@@ -14,7 +16,10 @@ func TestSignupIsGatedByAnInviteCode(t *testing.T) {
 	h := newHarnessWithInviteCode(t, "let-me-in-please")
 
 	body := map[string]any{
-		"fullName": "A Stranger", "email": "stranger@newco.test",
+		// Unique per run: a leftover account from a previous run turns the
+		// control below into a 409 and hides whether the gate works.
+		"fullName": "A Stranger",
+		"email":    fmt.Sprintf("stranger-%d@newco.test", time.Now().UnixNano()),
 		"password": "a-good-password", "orgName": "Newco", "country": "IN",
 	}
 
@@ -43,7 +48,8 @@ func TestSignupIsGatedByAnInviteCode(t *testing.T) {
 func TestSignupIsOpenWhenNoCodeIsConfigured(t *testing.T) {
 	h := newHarness(t)
 	res := h.do(http.MethodPost, "/v1/auth/signup", "", map[string]any{
-		"fullName": "Open Signup", "email": "open@newco.test",
+		"fullName": "Open Signup",
+		"email":    fmt.Sprintf("open-%d@newco.test", time.Now().UnixNano()),
 		"password": "a-good-password", "orgName": "Open Co", "country": "IN",
 	})
 	if res.Code == http.StatusForbidden {
