@@ -544,7 +544,12 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		{otpTemplate, smsID, "OTP", "SMS",
 			"{{code}} is your Acme verification code.", "", "pending_review", `{code}`, "", ""},
 
-		{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "", "approved", `{first_name}`, "", `{
+		// Categorised, unlike the SMS pair above, because an RCS template cannot
+		// be registered with a carrier without one: the carrier needs a use
+		// case, and a promotional template under a transactional agent is
+		// auto-rejected. An uncategorised fixture could not demonstrate carrier
+		// registration at all.
+		{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "UTILITY", "approved", `{first_name}`, "", `{
 			"kind": "text",
 			"text": "Welcome to Acme, {{first_name}}.",
 			"suggestions": [
@@ -553,7 +558,7 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 			]
 		}`},
 		{"dddddddd-dddd-dddd-dddd-dddddddddddd", rcsID, "Product launch", "RCS",
-			"", "", "pending_review", `{product}`, "", `{
+			"", "MARKETING", "pending_review", `{product}`, "", `{
 			"kind": "card",
 			"card": {
 				"mediaUrl": "https://acme.example.com/launch.jpg",

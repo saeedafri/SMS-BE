@@ -157,10 +157,56 @@ func run() error {
 
 	// Parsed before the server starts: a malformed allowlist must stop the
 	// process, not silently leave the console open to everyone.
-	operatorAllowlist, err := api.ParseOperatorAllowlist(cfg.OperatorIPAllowlist)
+	operatorAllowlist, err := api.ParseIPAllowlist(cfg.OperatorIPAllowlist)
 	if err != nil {
 		logger.Error("OPERATOR_IP_ALLOWLIST is not a list of addresses or CIDRs", "error", err)
 		os.Exit(1)
+	}
+	carrierWebhookAllowlist, err := api.ParseIPAllowlist(cfg.CarrierWebhookIPAllowlist)
+	if err != nil {
+		logger.Error("RCS_WEBHOOK_IP_ALLOWLIST is not a list of addresses or CIDRs", "error", err)
+		os.Exit(1)
+	}
+
+	// Left nil when no carrier is configured, which is the honest state for a
+	// deployment without a commercial RCS agreement: capability discovery then
+	// says so, rather than answering "unreachable" for every handset in India.
+	var rcsCarrier connector.RCSCapabilityChecker
+	switch cfg.RCSCarrierName() {
+	case "airtel":
+		rcsCarrier = &connector.AirtelRCS{
+			BaseURL:      cfg.RCSAirtelBaseURL,
+			AuthToken:    cfg.RCSAirtelAuthToken,
+			AgentID:      cfg.RCSAirtelAgentID,
+			CustomerID:   cfg.RCSAirtelCustomerID,
+			SubAccountID: cfg.RCSAirtelSubAccountID,
+		}
+	case "vi":
+		rcsCarrier = &connector.ViRCS{
+			BaseURL:      cfg.RCSViBaseURL,
+			TokenURL:     cfg.RCSViTokenURL,
+			ClientID:     cfg.RCSViClientID,
+			ClientSecret: cfg.RCSViClientSecret,
+			BotID:        cfg.RCSViBotID,
+		}
+	}
+	// The same carrier serves capability discovery, template registration and
+	// sending. Registering it per channel is what keeps an SMS from being handed
+	// to an RCS gateway that would 400 every message.
+	carriers := connector.Registry{Default: sandbox}
+	if rcsCarrier != nil {
+		logger.Info("rcs carrier enabled", "vendor", rcsCarrier.Vendor())
+		if sender, ok := rcsCarrier.(connector.Connector); ok {
+			carriers.ByChannel = map[string]connector.Connector{"RCS": sender}
+		}
+		// Without a webhook nothing ever settles: every RCS message sits in
+		// flight until the reconciler expires it and refunds a message that may
+		// well have arrived. Said at boot because it is invisible otherwise —
+		// sending looks perfect and the money comes back hours later.
+		if cfg.CarrierWebhookToken == "" {
+			logger.Warn("rcs carrier is configured but RCS_WEBHOOK_TOKEN is not: " +
+				"no delivery reports or template decisions will be accepted")
+		}
 	}
 
 	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger,
@@ -170,6 +216,10 @@ func run() error {
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
+		RCSCarrier:              rcsCarrier,
+		Carriers:                carriers,
+		CarrierWebhookToken:     cfg.CarrierWebhookToken,
+		CarrierWebhookAllowlist: carrierWebhookAllowlist,
 		Mail: &mailer.Mailer{
 			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 		}}

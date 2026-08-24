@@ -10,13 +10,25 @@ import (
 // it — "blocked" with no reason is exactly the opaque behaviour the PRD
 // criticises incumbents for.
 var (
-	ErrTenantSuspended        = errors.New("messaging: tenant is suspended")
-	ErrSenderNotApproved      = errors.New("messaging: sender is not approved")
-	ErrTemplateNotApproved    = errors.New("messaging: template is not approved")
-	ErrSenderTemplateMismatch = errors.New("messaging: template does not belong to that sender")
-	ErrSuppressed             = errors.New("messaging: recipient is suppressed")
-	ErrInsufficientFunds      = errors.New("messaging: insufficient balance")
-	ErrInvalidRecipient       = errors.New("messaging: recipient is not a valid number")
+	ErrTenantSuspended     = errors.New("messaging: tenant is suspended")
+	ErrSenderNotApproved   = errors.New("messaging: sender is not approved")
+	ErrTemplateNotApproved = errors.New("messaging: template is not approved")
+
+	// ErrCarrierTemplateNotApproved is a DIFFERENT refusal from
+	// ErrTemplateNotApproved and is deliberately not folded into it.
+	//
+	// An RCS template has two approvals: ours, which says the content meets
+	// Relay's compliance rules, and the carrier's, which is a separate review
+	// by Airtel or a Vi admin. A template approved here and unknown to the
+	// carrier is refused at the gateway — after the hold has been taken. The
+	// two errors go to different people to fix, so telling a customer "your
+	// template is not approved" when we approved it ourselves last week sends
+	// them arguing with the wrong team.
+	ErrCarrierTemplateNotApproved = errors.New("messaging: the carrier has not approved this template")
+	ErrSenderTemplateMismatch     = errors.New("messaging: template does not belong to that sender")
+	ErrSuppressed                 = errors.New("messaging: recipient is suppressed")
+	ErrInsufficientFunds          = errors.New("messaging: insufficient balance")
+	ErrInvalidRecipient           = errors.New("messaging: recipient is not a valid number")
 )
 
 // GateInput is everything the gate needs to decide. It is a plain struct with
@@ -29,10 +41,16 @@ type GateInput struct {
 	SenderID       string
 	TemplateStatus string
 	TemplateSender string
-	Suppressed     bool
-	BalanceMinor   int64
-	CostMinor      int64
-	RecipientValid bool
+
+	// CarrierTemplateStatus is the carrier's own verdict: not_submitted,
+	// pending, approved or rejected. Empty means the channel has no carrier
+	// template registry — every channel except RCS today — and the check is
+	// skipped entirely rather than defaulting to a refusal.
+	CarrierTemplateStatus string
+	Suppressed            bool
+	BalanceMinor          int64
+	CostMinor             int64
+	RecipientValid        bool
 }
 
 // Check runs the gate. Order matters and is deliberate: compliance failures
@@ -56,6 +74,13 @@ func Check(input GateInput) error {
 		if input.TemplateSender != "" && input.TemplateSender != input.SenderID {
 			return ErrSenderTemplateMismatch
 		}
+	}
+	// After our own approval, because a template neither side has approved
+	// should say so in the order the customer would fix it: our review first,
+	// then the carrier's, which cannot even begin until ours has passed.
+	if input.CarrierTemplateStatus != "" && input.CarrierTemplateStatus != "approved" {
+		return fmt.Errorf("%w (status %s)", ErrCarrierTemplateNotApproved,
+			input.CarrierTemplateStatus)
 	}
 	// Suppression is checked before balance so an opted-out recipient is never
 	// billed for, not even momentarily.
@@ -83,7 +108,7 @@ func IsRefusal(err error) bool {
 	for _, refusal := range []error{
 		ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
 		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
-		ErrInvalidRecipient,
+		ErrInvalidRecipient, ErrCarrierTemplateNotApproved,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -98,6 +123,8 @@ func GateFailureCode(err error) string {
 		return "tenant_suspended"
 	case errors.Is(err, ErrSenderNotApproved):
 		return "sender_not_approved"
+	case errors.Is(err, ErrCarrierTemplateNotApproved):
+		return "carrier_template_not_approved"
 	case errors.Is(err, ErrTemplateNotApproved):
 		return "template_not_approved"
 	case errors.Is(err, ErrSenderTemplateMismatch):

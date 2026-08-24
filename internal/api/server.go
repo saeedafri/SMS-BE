@@ -37,7 +37,7 @@ type Server struct {
 
 	// OperatorAllowlist restricts /v1/operator to known networks. Nil or empty
 	// means no restriction.
-	OperatorAllowlist *operatorAllowlist
+	OperatorAllowlist *ipAllowlist
 
 	// AllowGreyRoutes permits enabling a route with a grey compliance standing.
 	// Off unless the deployment says otherwise; see the config field for why.
@@ -62,6 +62,33 @@ type Server struct {
 	// plane, so campaign and send endpoints refuse rather than silently
 	// accepting messages nothing will ever deliver.
 	Connector connector.Connector
+
+	// Carriers routes a channel to its own gateway — RCS to Airtel or Vi, and
+	// everything else to Connector. Zero value sends everything to Connector,
+	// which is how this behaved before RCS had a real carrier.
+	Carriers connector.Registry
+
+	// CarrierWebhookToken authenticates the RCS delivery and template webhooks.
+	//
+	// Neither vendor signs its callbacks and neither lets us set a header on
+	// them, so the shared secret travels in the path. That is the weakest of
+	// the usual options and it is chosen because the alternatives are not
+	// available: a URL lands in access logs, so this is paired with an optional
+	// IP allowlist and the token is rotated by changing one environment
+	// variable. Empty means the webhook routes are not mounted at all.
+	CarrierWebhookToken string
+
+	// CarrierWebhookAllowlist restricts who may post a carrier webhook. Airtel
+	// documents IP whitelisting in both directions and this is our half of it.
+	// Nil means no restriction.
+	CarrierWebhookAllowlist *ipAllowlist
+
+	// RCSCarrier answers handset capability discovery — whether a number can
+	// receive RCS at all, and which rich features will render on it. Nil means
+	// the deployment has no RCS carrier credentials, and the endpoint says so
+	// rather than reporting every handset as unreachable, which would look
+	// identical to a country with no RCS and quietly disable the channel.
+	RCSCarrier connector.RCSCapabilityChecker
 
 	// Gateway captures payments. Nil means the manual gateway, which records a
 	// capture without contacting anyone — correct for bank-transfer and
@@ -154,6 +181,14 @@ func NewRouter(s *Server) http.Handler {
 	// response that never ends. It sits after authenticate, so it resolves the
 	// caller's tenant exactly like every other route.
 	s.mountEventRoutes(r)
+
+	// Carrier callbacks, mounted only when a token is configured. Left off
+	// entirely otherwise, for the same reason the dev hooks are: an endpoint
+	// that settles messages and approves templates should not exist on a
+	// deployment that has no carrier to receive them from.
+	if s.CarrierWebhookToken != "" {
+		s.mountCarrierWebhookRoutes(r)
+	}
 
 	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
 		// A request the generated binder rejects — bad JSON, a malformed

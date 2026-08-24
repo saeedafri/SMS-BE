@@ -219,9 +219,17 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 			"Sending is not available on this deployment.")), nil
 	}
 
+	// Variables matter on RCS and are inert elsewhere: the carrier holds the
+	// approved template and renders it from these, so a body without them
+	// reaches the handset with empty slots.
+	variables := map[string]string{}
+	if request.Body.Variables != nil {
+		variables = *request.Body.Variables
+	}
+
 	result, err := service.Send(ctx, identity, sending.SendRequest{
 		SenderID: request.Body.SenderId, TemplateID: request.Body.TemplateId,
-		Msisdn: to, Body: body,
+		Msisdn: to, Body: body, Variables: variables,
 	})
 	// Send returns a populated result AND the gate's error when it declines,
 	// because a refused send is still a recorded message with a reason. Only a

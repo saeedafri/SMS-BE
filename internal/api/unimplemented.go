@@ -480,6 +480,10 @@ func (Unimplemented) ListPricing(ctx context.Context, request gen.ListPricingReq
 	return nil, errNotImplemented("ListPricing")
 }
 
+func (Unimplemented) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsCapabilitiesRequestObject) (gen.CheckRcsCapabilitiesResponseObject, error) {
+	return nil, errNotImplemented("CheckRcsCapabilities")
+}
+
 func (Unimplemented) ListRegistrations(ctx context.Context, request gen.ListRegistrationsRequestObject) (gen.ListRegistrationsResponseObject, error) {
 	return nil, errNotImplemented("ListRegistrations")
 }
@@ -582,6 +586,10 @@ func (Unimplemented) CreateTemplate(ctx context.Context, request gen.CreateTempl
 
 func (Unimplemented) GetTemplate(ctx context.Context, request gen.GetTemplateRequestObject) (gen.GetTemplateResponseObject, error) {
 	return nil, errNotImplemented("GetTemplate")
+}
+
+func (Unimplemented) RegisterTemplateWithCarrier(ctx context.Context, request gen.RegisterTemplateWithCarrierRequestObject) (gen.RegisterTemplateWithCarrierResponseObject, error) {
+	return nil, errNotImplemented("RegisterTemplateWithCarrier")
 }
 
 func (Unimplemented) UpdateTenant(ctx context.Context, request gen.UpdateTenantRequestObject) (gen.UpdateTenantResponseObject, error) {

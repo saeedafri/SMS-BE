@@ -226,15 +226,27 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 // LoadMessageState reads one message's current state, for applying a receipt.
 func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.UUID) (MessageRecord, error) {
 	var record MessageRecord
+	// Every column a later version has to carry forward.
+	//
+	// A settled message REPLACES its previous row, so whatever this does not
+	// read is erased the moment a delivery report lands. That is how carrier,
+	// route_id and carrier_ref used to vanish from every delivered message:
+	// the deliverability-by-carrier report only ever saw messages that never
+	// settled, and — worse — a second webhook for the same message could no
+	// longer find it, because carrier_ref is the only key an Airtel callback
+	// carries.
 	err := conn.QueryRow(ctx, `
-		SELECT id, status, segments, cost_minor, currency, campaign_id, channel,
-		       country, sender_header, msisdn, email, created_at, version
+		SELECT id, status, segments, cost_minor, currency, campaign_id,
+		       campaign_name, channel, country, sender_header, template_id,
+		       msisdn, email, route_id, carrier_ref, carrier,
+		       created_at, sent_at, version
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
-		&record.Currency, &record.CampaignID, &record.Channel, &record.Country,
-		&record.SenderHeader, &record.Msisdn, &record.Email, &record.CreatedAt,
-		&record.Version)
+		&record.Currency, &record.CampaignID, &record.CampaignName,
+		&record.Channel, &record.Country, &record.SenderHeader, &record.TemplateID,
+		&record.Msisdn, &record.Email, &record.RouteID, &record.CarrierRef,
+		&record.Carrier, &record.CreatedAt, &record.SentAt, &record.Version)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
@@ -376,4 +388,40 @@ func FindMessageTenant(ctx context.Context, conn driver.Conn, messageID uuid.UUI
 		return uuid.Nil, ErrNotFound
 	}
 	return tenantID, nil
+}
+
+// FindMessageByCarrierRef resolves a message from the carrier's OWN id.
+//
+// This exists because Airtel's webhooks carry no field we control. Their
+// delivery events quote the messageRequestId they issued at submit time and
+// nothing else, so the only way back to a Relay message — and therefore to the
+// tenant whose wallet is holding money against it — is the carrier reference we
+// stored alongside it.
+//
+// Vi needs none of this: it lets the sender supply the message id, so Relay
+// sends its own uuid and gets it back. Both paths end in the same settlement
+// code; only the lookup differs.
+//
+// An empty carrier reference matches nothing on purpose. Every message that has
+// not reached a carrier has a null one, and a blank lookup would otherwise pick
+// an arbitrary unsent message and settle it.
+func FindMessageByCarrierRef(ctx context.Context, conn driver.Conn,
+	carrierRef string) (tenantID uuid.UUID, messageID uuid.UUID, err error) {
+
+	if carrierRef == "" {
+		return uuid.Nil, uuid.Nil, ErrNotFound
+	}
+	// ReplacingMergeTree keeps every version until a merge runs, so an
+	// un-merged message has several rows and an unqualified read could return
+	// the pre-submit one, whose carrier_ref is null. Ordering by version picks
+	// the newest.
+	err = conn.QueryRow(ctx, `
+		SELECT tenant_id, id FROM messages
+		 WHERE carrier_ref = ?
+		 ORDER BY version DESC
+		 LIMIT 1`, carrierRef).Scan(&tenantID, &messageID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, ErrNotFound
+	}
+	return tenantID, messageID, nil
 }

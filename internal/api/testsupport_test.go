@@ -38,6 +38,14 @@ type harness struct {
 	// operatorPool carries app.operator=on, for rebuilding the router in
 	// variants like newHarnessWithInviteCode.
 	operatorPool *pgxpool.Pool
+	// tenants is every tenant this harness seeded, so a variant that also
+	// writes to ClickHouse can clean up there — the warehouse has no foreign
+	// keys and would otherwise keep rows for tenants Postgres has dropped.
+	tenants []uuid.UUID
+	// server is the same value the router dispatches to. Handlers are methods
+	// on the pointer, so a test can swap a dependency in place — a carrier
+	// stub, say — without rebuilding the router or copying this literal again.
+	server *api.Server
 }
 
 // newHarnessWithInviteCode builds a server that gates self-registration, which
@@ -90,7 +98,7 @@ func newHarness(t *testing.T) *harness {
 
 	logs := &bytes.Buffer{}
 	h := &harness{t: t, pool: pool, admin: admin, logs: logs, operatorPool: operator}
-	h.router = api.NewRouter(&api.Server{
+	h.server = &api.Server{
 		DB:                 pool,
 		EnableDevEndpoints: true,
 		// A capture gateway, because production now refuses a tenant top-up when
@@ -101,8 +109,17 @@ func newHarness(t *testing.T) *harness {
 		OperatorDB: operator,
 		AdminDB:    admin,
 		Logger:     slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-	})
+	}
+	h.router = api.NewRouter(h.server)
 	return h
+}
+
+// rebuildRouter re-mounts the routes from the CURRENT server. Needed only for
+// dependencies read at router-build time — the carrier webhook token decides
+// whether those routes exist at all — since everything else is read per request
+// off the same Server pointer.
+func (h *harness) rebuildRouter() {
+	h.router = api.NewRouter(h.server)
 }
 
 type account struct {
@@ -154,9 +171,33 @@ func (h *harness) newAccount(role string) account {
 		h.t.Fatalf("seed session: %v", err)
 	}
 
+	h.tenants = append(h.tenants, tenantID)
+
+	h.tenants = append(h.tenants, tenantID)
+
 	h.t.Cleanup(func() {
-		_, _ = h.admin.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
-		_, _ = h.admin.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+		ctx := context.Background()
+		// The wallet ledger is append-only, and its trigger fires on the
+		// CASCADE from tenants — so any tenant that ever funded a wallet could
+		// not be deleted, and the delete failed silently because the error was
+		// discarded. Tenants and their messages accumulated across every run:
+		// enough of them that a reconciler test asserting on a global count
+		// started failing after a day of use, and long enough for a fixed test
+		// id to collide with its own previous run.
+		//
+		// Disabled for this statement only, exactly as the demo reseed does,
+		// and restored immediately whether or not the delete succeeds.
+		if _, err := h.admin.Exec(ctx,
+			`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err == nil {
+			defer func() {
+				_, _ = h.admin.Exec(ctx,
+					`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`)
+			}()
+		}
+		if _, err := h.admin.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+			h.t.Logf("tenant %s was not cleaned up: %v", tenantID, err)
+		}
+		_, _ = h.admin.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	})
 
 	return account{TenantID: tenantID, UserID: userID, Email: email, Token: raw, Role: role}

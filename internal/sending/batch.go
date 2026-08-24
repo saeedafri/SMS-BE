@@ -34,6 +34,12 @@ type sendPlan struct {
 	body     string
 	cost     int64
 	segments int
+	// fields are the contact's own values, kept so an RCS submission can fill
+	// the CARRIER's template with the same values that personalised the body.
+	// Without them a campaign renders "Hi Priya" in the log and sends the
+	// handset "Hi " — the carrier holds the template, and it fills the slots
+	// from what we pass, not from the body.
+	fields map[string]string
 	// refusal is set when the gate refused this recipient. Refused messages
 	// are still recorded — a tenant asking "why didn't this arrive" deserves an
 	// answer — but no money is held for them.
@@ -103,13 +109,20 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		email := contactEmail(contact)
 		plan := sendPlan{
 			messageID: uuid.New(), msisdn: msisdn, email: email, body: body,
-			cost: cost, segments: segments,
+			cost: cost, segments: segments, fields: contact.Fields,
 		}
 
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, SenderStatus: context.sender.Status,
 			SenderID: context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
+			// The carrier's own approval, which is separate from ours. Checked
+			// per recipient like everything else in the gate, even though it is
+			// identical across the page — the gate's whole value is that no
+			// message skips a rule because it looked the same as its
+			// neighbour's.
+			CarrierTemplateStatus: s.carrierTemplateStatusFor(
+				context.sender.Channel, context.template),
 			// The balance check uses the running total for this batch, so a
 			// wallet that runs dry mid-page refuses the rest instead of going
 			// negative.
@@ -164,6 +177,13 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
 				Sender: context.sender.Header, Body: plan.body,
 				Channel: context.sender.Channel, Country: context.sender.Country,
+				CarrierTemplateID: context.carrierTemplateID(),
+				// The SAME contact fields that personalised the body above.
+				// The carrier holds the template and renders it from these, so
+				// a campaign that personalises its body and sends the carrier
+				// nothing would put "Hi Priya" in our log and "Hi " on the
+				// handset.
+				TemplateVariables: TemplateVariables(context.template, plan.fields),
 			})
 		}
 		record := store.MessageRecord{
@@ -199,7 +219,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		return 0, failed, nil
 	}
 
-	receipts, err := s.Connector.Submit(ctx, submissions)
+	receipts, err := s.carrierFor(context.sender.Channel).Submit(ctx, submissions)
 	if err != nil {
 		return 0, failed, fmt.Errorf("sending: submit batch: %w", err)
 	}
@@ -307,11 +327,14 @@ type batchContext struct {
 	templateID     uuid.UUID
 	templateStatus string
 	templateSender string
-	body           string
-	rate           store.PricingRate
-	tenantStatus   string
-	balance        int64
-	campaignID     *uuid.UUID
+	// template carries the carrier's registration — its id and its separate
+	// approval. Resolved once with everything else identical across recipients.
+	template     store.Template
+	body         string
+	rate         store.PricingRate
+	tenantStatus string
+	balance      int64
+	campaignID   *uuid.UUID
 	// carrier and routeID are the path this campaign takes, resolved ONCE with
 	// everything else that is identical across recipients. Empty when the
 	// corridor has no active route, which is normal — Email and WhatsApp do not
@@ -350,4 +373,13 @@ func contactEmail(contact store.Contact) string {
 		return ""
 	}
 	return *contact.Email
+}
+
+// carrierTemplateID is the id the carrier issued for this campaign's template,
+// empty when it has none.
+func (c batchContext) carrierTemplateID() string {
+	if c.template.CarrierTemplateID == nil {
+		return ""
+	}
+	return *c.template.CarrierTemplateID
 }

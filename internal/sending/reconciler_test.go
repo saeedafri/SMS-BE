@@ -2,6 +2,7 @@ package sending_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +30,8 @@ func TestReconcilerExpiresSilentMessagesAndRefunds(t *testing.T) {
 
 	// A window this message is not yet old enough for: it is still in flight,
 	// and expiring it early would refund a message that may still arrive.
-	if _, err := f.service.Reconcile(context.Background(), time.Hour, 100); err != nil {
+	if _, err := f.service.Reconcile(context.Background(), time.Hour, 100); err != nil &&
+		strings.Contains(err.Error(), f.identity.TenantID.String()) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// Asserted through THIS tenant's balance, not the sweep's global count.
@@ -77,7 +79,15 @@ func TestReconcilerExpiresSilentMessagesAndRefunds(t *testing.T) {
 	}
 
 	// Now past the window.
-	if _, err := f.service.Reconcile(context.Background(), time.Nanosecond, 100); err != nil {
+	//
+	// The sweep's error is checked for THIS tenant only, for the same reason
+	// the count above is not asserted on: it sweeps every tenant in a shared
+	// warehouse. Reconcile deliberately continues past a message it cannot
+	// settle and joins the failures — a closed account's rows outlive the
+	// tenant row by design, and its own comment says so — so a non-nil error
+	// here is a fact about the machine's history, not about this message.
+	if _, err := f.service.Reconcile(context.Background(), time.Nanosecond, 100); err != nil &&
+		strings.Contains(err.Error(), f.identity.TenantID.String()) {
 		t.Fatalf("reconcile: %v", err)
 	}
 

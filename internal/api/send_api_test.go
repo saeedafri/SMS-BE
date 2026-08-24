@@ -2,17 +2,15 @@ package api_test
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/connector"
-	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -37,13 +35,38 @@ func newSendHarness(t *testing.T) *harness {
 			t.Cleanup(func() { _ = client.Close() })
 		}
 	}
-	h.router = api.NewRouter(&api.Server{
-		DB: h.pool, OperatorDB: h.operatorPool, AdminDB: h.admin,
-		EnableDevEndpoints: true, Gateway: billing.ManualGateway{},
-		ClickHouse: store.NewClickHousePool(chURL, nil),
-		Connector:  connector.NewSandbox(0),
-		Redis:      rdb,
-		Logger:     slog.New(slog.NewJSONHandler(h.logs, nil)),
+	// Mutated in place rather than rebuilt: handlers are methods on the Server
+	// pointer the router already holds, so adding a dependency here needs no
+	// second copy of that literal to keep in step with newHarness.
+	pool := store.NewClickHousePool(chURL, nil)
+	h.server.ClickHouse = pool
+	h.server.Connector = connector.NewSandbox(0)
+	h.server.Redis = rdb
+
+	// ClickHouse has no foreign keys, so a message survives the tenant that
+	// sent it. Once the Postgres cleanup started actually working, those
+	// orphans became the reconciler's problem: it found them stale, tried to
+	// refund a wallet whose tenant was gone, and failed on the foreign key —
+	// in a DIFFERENT package's test, hours of confusion away from the cause.
+	//
+	// Registered last so it runs FIRST: t.Cleanup is a stack, and the messages
+	// have to go before the tenants they belong to.
+	t.Cleanup(func() {
+		conn, err := pool.Conn(context.Background())
+		if err != nil {
+			return
+		}
+		for _, tenantID := range h.tenants {
+			// mutations_sync = 1 because ClickHouse deletes are asynchronous by
+			// default: without it the statement returns before anything is
+			// gone and the next run finds them all still there.
+			_ = conn.Exec(context.Background(),
+				`ALTER TABLE messages DELETE WHERE tenant_id = ? SETTINGS mutations_sync = 1`,
+				tenantID)
+			_ = conn.Exec(context.Background(),
+				`ALTER TABLE message_events DELETE WHERE tenant_id = ? SETTINGS mutations_sync = 1`,
+				tenantID)
+		}
 	})
 	return h
 }
@@ -329,4 +352,91 @@ func (h *harness) templateForOtherSender(tenant account) string {
 		h.t.Fatalf("seed template: %v", err)
 	}
 	return template
+}
+
+// walletBalance reads the tenant's INR balance straight from the ledger, which
+// is the only place money is authoritative. Reading it through the API would
+// test the wallet endpoint at the same time and confuse a failure there with a
+// failure in what is actually under test.
+func (h *harness) walletBalance(tenant account) int64 {
+	h.t.Helper()
+	balances, err := store.ListWalletBalances(context.Background(), h.pool,
+		store.Identity{TenantID: tenant.TenantID})
+	if err != nil {
+		h.t.Fatalf("read balances: %v", err)
+	}
+	for _, entry := range balances {
+		if entry.Currency == "INR" {
+			return entry.BalanceMinor
+		}
+	}
+	return 0
+}
+
+// messageStatus reads one message's current state out of the warehouse.
+//
+// Ordered by version because ReplacingMergeTree keeps every version until a
+// merge runs — an unqualified read returns whichever row it finds first, which
+// is often the pre-submit one, and the test then fails describing a state the
+// message left milliseconds ago.
+func (h *harness) messageStatus(tenant account, messageID uuid.UUID) string {
+	h.t.Helper()
+	conn, err := store.NewClickHousePool(os.Getenv("TEST_CLICKHOUSE_URL"), nil).
+		Conn(context.Background())
+	if err != nil {
+		h.t.Fatalf("clickhouse: %v", err)
+	}
+	var status string
+	if err := conn.QueryRow(context.Background(), `
+		SELECT status FROM messages
+		 WHERE tenant_id = ? AND id = ?
+		 ORDER BY version DESC LIMIT 1`,
+		tenant.TenantID, messageID).Scan(&status); err != nil {
+		h.t.Fatalf("read message status: %v", err)
+	}
+	return status
+}
+
+// messageCarrierRef reads the two fields a later carrier callback depends on.
+func (h *harness) messageCarrierRef(tenant account, messageID uuid.UUID) (carrierRef, templateID string) {
+	h.t.Helper()
+	conn, err := store.NewClickHousePool(os.Getenv("TEST_CLICKHOUSE_URL"), nil).
+		Conn(context.Background())
+	if err != nil {
+		h.t.Fatalf("clickhouse: %v", err)
+	}
+	var ref, template *string
+	if err := conn.QueryRow(context.Background(), `
+		SELECT carrier_ref, toString(template_id) FROM messages
+		 WHERE tenant_id = ? AND id = ?
+		 ORDER BY version DESC LIMIT 1`,
+		tenant.TenantID, messageID).Scan(&ref, &template); err != nil {
+		h.t.Fatalf("read carrier ref: %v", err)
+	}
+	deref := func(p *string) string {
+		if p == nil {
+			return ""
+		}
+		return *p
+	}
+	return deref(ref), deref(template)
+}
+
+// messageCarrier reads which carrier the log says carried a message.
+func (h *harness) messageCarrier(tenant account, messageID uuid.UUID) string {
+	h.t.Helper()
+	conn, err := store.NewClickHousePool(os.Getenv("TEST_CLICKHOUSE_URL"), nil).
+		Conn(context.Background())
+	if err != nil {
+		h.t.Fatalf("clickhouse: %v", err)
+	}
+	var carrier string
+	if err := conn.QueryRow(context.Background(), `
+		SELECT carrier FROM messages
+		 WHERE tenant_id = ? AND id = ?
+		 ORDER BY version DESC LIMIT 1`,
+		tenant.TenantID, messageID).Scan(&carrier); err != nil {
+		h.t.Fatalf("read carrier: %v", err)
+	}
+	return carrier
 }

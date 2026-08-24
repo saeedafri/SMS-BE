@@ -13,7 +13,7 @@ import (
 // internet behind one password that had been a constant in the repository.
 func TestTheOperatorConsoleIsUnreachableOffTheAllowlist(t *testing.T) {
 	h := newHarness(t)
-	allowlist, err := api.ParseOperatorAllowlist("198.51.100.0/24, 203.0.113.7")
+	allowlist, err := api.ParseIPAllowlist("198.51.100.0/24, 203.0.113.7")
 	if err != nil {
 		t.Fatalf("parse allowlist: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestTheOperatorConsoleIsUnreachableOffTheAllowlist(t *testing.T) {
 // process warns about it at startup rather than pretending it is configured.
 func TestAnEmptyAllowlistRestrictsNothing(t *testing.T) {
 	h := newHarness(t)
-	allowlist, err := api.ParseOperatorAllowlist("")
+	allowlist, err := api.ParseIPAllowlist("")
 	if err != nil {
 		t.Fatalf("parse empty allowlist: %v", err)
 	}
@@ -83,8 +83,8 @@ func TestAnEmptyAllowlistRestrictsNothing(t *testing.T) {
 // looks closed.
 func TestAMalformedAllowlistIsAnError(t *testing.T) {
 	for _, raw := range []string{"not-an-address", "198.51.100.0/33", "198.51.100.1, oops"} {
-		if _, err := api.ParseOperatorAllowlist(raw); err == nil {
-			t.Errorf("ParseOperatorAllowlist(%q) accepted a malformed entry", raw)
+		if _, err := api.ParseIPAllowlist(raw); err == nil {
+			t.Errorf("ParseIPAllowlist(%q) accepted a malformed entry", raw)
 		}
 	}
 }
