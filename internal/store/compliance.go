@@ -296,17 +296,32 @@ type Template struct {
 	RCSContent   []byte
 	WAContent    []byte
 	EmailContent []byte
+
+	// The carrier's own approval, which is not the same approval as Status.
+	// See db/migrations/00037_rcs_carrier_templates.sql — a template can be
+	// approved here and unknown to Airtel, and every send of it then fails at
+	// the gateway.
+	CarrierVendor          *string
+	CarrierTemplateID      *string
+	CarrierStatus          string
+	CarrierRejectionReason *string
+	CarrierSubmittedAt     *time.Time
+	CarrierUpdatedAt       *time.Time
 }
 
 const templateColumns = `id, sender_id, name, channel, country, body, category,
 	variables, cta_url, status, rejection_reason, created_at,
-	rcs_content, wa_content, email_content`
+	rcs_content, wa_content, email_content,
+	carrier_vendor, carrier_template_id, carrier_status,
+	carrier_rejection_reason, carrier_submitted_at, carrier_updated_at`
 
 func scanTemplate(row pgx.Row) (Template, error) {
 	var t Template
 	err := row.Scan(&t.ID, &t.SenderID, &t.Name, &t.Channel, &t.Country, &t.Body,
 		&t.Category, &t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt,
-		&t.RCSContent, &t.WAContent, &t.EmailContent)
+		&t.RCSContent, &t.WAContent, &t.EmailContent,
+		&t.CarrierVendor, &t.CarrierTemplateID, &t.CarrierStatus,
+		&t.CarrierRejectionReason, &t.CarrierSubmittedAt, &t.CarrierUpdatedAt)
 	return t, err
 }
 
@@ -568,4 +583,76 @@ func ClearSenderVoiceCode(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return fmt.Errorf("store: clear voice code: %w", err)
 	}
 	return nil
+}
+
+// SaveCarrierTemplateRegistration records what a carrier said about one of our
+// templates — either the id it issued when we submitted it, or a code the
+// customer obtained in the carrier's own portal.
+//
+// Scoped to the tenant like every other template write. The webhook path, which
+// arrives with no tenant at all, uses ApplyCarrierTemplateStatus instead.
+func SaveCarrierTemplateRegistration(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	templateID uuid.UUID, vendor, carrierTemplateID, status, rejectionReason string) (Template, error) {
+
+	var updated Template
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		updated, err = scanTemplate(tx.QueryRow(ctx, `
+			UPDATE templates
+			   SET carrier_vendor           = $2,
+			       carrier_template_id      = $3,
+			       carrier_status           = $4,
+			       carrier_rejection_reason = NULLIF($5, ''),
+			       carrier_submitted_at     = COALESCE(carrier_submitted_at, now()),
+			       carrier_updated_at       = now()
+			 WHERE id = $1
+			RETURNING `+templateColumns,
+			templateID, vendor, carrierTemplateID, status, rejectionReason))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Template{}, ErrNotFound
+	}
+	// Two tenants cannot hold the same carrier template id: the unique index
+	// exists so a status webhook, which matches on that id alone, can never
+	// deliver one tenant's approval to another.
+	if isUniqueViolation(err) {
+		return Template{}, ErrConflict
+	}
+	if err != nil {
+		return Template{}, fmt.Errorf("store: save carrier template registration: %w", err)
+	}
+	return updated, nil
+}
+
+// ApplyCarrierTemplateStatus records an approval or rejection that arrived on a
+// carrier webhook.
+//
+// It runs on the OPERATOR pool, not a tenant one, because the payload carries
+// the carrier's template id and nothing else — there is no tenant to scope to
+// until the row itself is found. That is exactly why the (vendor, id) pair is
+// unique: without it this would be a cross-tenant write with a guessable key.
+//
+// Returns ErrNotFound for an id we do not hold. Callers must treat that as an
+// ordinary outcome and still answer the carrier 200: a webhook for a template
+// registered by some other system is not our error to retry forever.
+func ApplyCarrierTemplateStatus(ctx context.Context, operatorPool *pgxpool.Pool,
+	vendor, carrierTemplateID, status, rejectionReason string) (uuid.UUID, error) {
+
+	var templateID uuid.UUID
+	err := operatorPool.QueryRow(ctx, `
+		UPDATE templates
+		   SET carrier_status           = $3,
+		       carrier_rejection_reason = NULLIF($4, ''),
+		       carrier_updated_at       = now()
+		 WHERE carrier_vendor = $1 AND carrier_template_id = $2
+		RETURNING id`,
+		vendor, carrierTemplateID, status, rejectionReason).Scan(&templateID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("store: apply carrier template status: %w", err)
+	}
+	return templateID, nil
 }

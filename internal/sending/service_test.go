@@ -61,7 +61,22 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("seed sender: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID)
+		// The wallet ledger is append-only and its trigger fires on the CASCADE
+		// from tenants, so a tenant that funded a wallet — which this fixture
+		// always does — could not be deleted at all, and the error was
+		// discarded. Disabled for this statement only, exactly as the demo
+		// reseed does.
+		if _, err := admin.Exec(context.Background(),
+			`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err == nil {
+			defer func() {
+				_, _ = admin.Exec(context.Background(),
+					`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`)
+			}()
+		}
+		if _, err := admin.Exec(context.Background(),
+			`DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+			t.Logf("tenant %s was not cleaned up: %v", tenantID, err)
+		}
 		// ClickHouse rows must go too. The reconciler sweeps every tenant, so a
 		// test tenant left behind in ClickHouse but deleted from Postgres is an
 		// orphan that fails to settle forever and pollutes every later run.

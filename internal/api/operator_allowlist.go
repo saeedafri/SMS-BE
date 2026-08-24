@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// operatorAllowlist restricts the operator console to known networks.
+// ipAllowlist restricts the operator console to known networks.
 //
 // An operator account is not scoped to a tenant — the whole point of the role is
 // that it sees every customer — so /v1/operator is the most valuable surface on
@@ -21,19 +21,25 @@ import (
 // The check runs before authentication, so a caller outside the allowlist cannot
 // even attempt a login — no password guessing, no user enumeration, and nothing
 // to rate limit.
-type operatorAllowlist struct {
+type ipAllowlist struct {
 	networks []*net.IPNet
 }
 
-// parseAllowlist accepts addresses and CIDRs, comma or space separated:
+// ParseIPAllowlist accepts addresses and CIDRs, comma or space separated:
 //
 //	203.0.113.7, 198.51.100.0/24, 2001:db8::/32
 //
 // A malformed entry is an error rather than a silent skip. A typo in an
 // allowlist that quietly drops one range is how a control ends up looking
 // enforced while a hole stays open.
-func ParseOperatorAllowlist(raw string) (*operatorAllowlist, error) {
-	list := &operatorAllowlist{}
+//
+// Named for what it is rather than for its first caller: the operator console
+// was the first surface to need one, and the RCS carrier webhooks are the
+// second — Airtel documents IP whitelisting in both directions, and a callback
+// nobody signs is worth restricting to the networks it can legitimately come
+// from.
+func ParseIPAllowlist(raw string) (*ipAllowlist, error) {
+	list := &ipAllowlist{}
 	for _, entry := range strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\t' || r == '\n'
 	}) {
@@ -59,7 +65,7 @@ func ParseOperatorAllowlist(raw string) (*operatorAllowlist, error) {
 	return list, nil
 }
 
-func (a *operatorAllowlist) permits(address string) bool {
+func (a *ipAllowlist) permits(address string) bool {
 	if a == nil || len(a.networks) == 0 {
 		return true
 	}

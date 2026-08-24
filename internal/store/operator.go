@@ -1138,3 +1138,35 @@ func SelectRoute(ctx context.Context, pool *pgxpool.Pool, country, channel strin
 	}
 	return route, nil
 }
+
+// SelectRouteForCarrier picks the active route for one specific carrier in a
+// corridor.
+//
+// Needed because a channel can have its gateway fixed by deployment
+// configuration rather than by the routes table — RCS goes to whichever of
+// Airtel or Vi this deployment holds credentials for. Recording the
+// highest-priority route's carrier in that case attributes Airtel's traffic to
+// Jio, and the deliverability-by-carrier report then blames the wrong network
+// for every failure.
+func SelectRouteForCarrier(ctx context.Context, pool *pgxpool.Pool,
+	country, channel, carrier string) (Route, error) {
+
+	var route Route
+	err := pool.QueryRow(ctx, `
+		SELECT id, country, channel, carrier, label, priority, compliance_standing,
+		       cost_per_segment_minor, currency, status
+		  FROM routes
+		 WHERE country = $1 AND channel = $2 AND carrier = $3 AND status = 'active'
+		 ORDER BY priority, cost_per_segment_minor
+		 LIMIT 1`, country, channel, carrier,
+	).Scan(&route.ID, &route.Country, &route.Channel, &route.Carrier,
+		&route.Label, &route.Priority, &route.ComplianceStanding,
+		&route.CostPerSegmentMinor, &route.Currency, &route.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	if err != nil {
+		return Route{}, fmt.Errorf("store: select route for carrier: %w", err)
+	}
+	return route, nil
+}

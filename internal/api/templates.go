@@ -26,6 +26,10 @@ func templateResponse(t store.Template) gen.Template {
 		Status:          gen.ApprovalStatus(t.Status),
 		RejectionReason: t.RejectionReason,
 		CreatedAt:       t.CreatedAt,
+		// The carrier's separate approval, on RCS only. A template can be
+		// approved here and unknown to the carrier, and this is the field that
+		// says which of the two is blocking a send.
+		CarrierRegistration: carrierRegistrationResponse(t),
 	}
 	if t.Category != nil {
 		// Nullable oneOf in the contract, so a generated union type rather than

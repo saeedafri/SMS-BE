@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -27,10 +28,26 @@ type Service struct {
 	DB         *pgxpool.Pool
 	ClickHouse driver.Conn
 	Connector  connector.Connector
+
+	// Carriers routes a channel to its own gateway. Zero value means every
+	// channel goes to Connector, which is how this behaved before RCS had a
+	// real carrier and is still right for a deployment with only the sandbox.
+	Carriers connector.Registry
 	// Logger is optional. It exists for the paths that must not fail loudly and
 	// must not fail silently either — landing a campaign that fan-out abandoned
 	// is the one that matters.
 	Logger *slog.Logger
+}
+
+// carrierFor picks the gateway for a channel.
+//
+// The registry's Default is only consulted when it is set, so a Service built
+// the old way — one Connector, no registry — behaves exactly as it did.
+func (s *Service) carrierFor(channel string) connector.Connector {
+	if carrier := s.Carriers.For(channel); carrier != nil {
+		return carrier
+	}
+	return s.Connector
 }
 
 // SendRequest is one message to send.
@@ -40,6 +57,11 @@ type SendRequest struct {
 	Msisdn     string
 	Body       string
 	CampaignID *uuid.UUID
+
+	// Variables fill a template's named slots. Ignored on channels that carry a
+	// plain body; required on RCS, where the carrier holds the template and we
+	// send it nothing but the id and these values.
+	Variables map[string]string
 }
 
 // SendResult is what happened.
@@ -90,8 +112,10 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 
 	// 4. Gather the rest of the gate's inputs.
 	templateStatus, templateSender := "", ""
+	var template store.Template
 	if request.TemplateID != nil {
-		template, err := store.GetTemplate(ctx, s.DB, identity, *request.TemplateID)
+		var err error
+		template, err = store.GetTemplate(ctx, s.DB, identity, *request.TemplateID)
 		if errors.Is(err, store.ErrNotFound) {
 			return SendResult{Status: "rejected", FailureCode: "template_not_found"},
 				messaging.ErrTemplateNotApproved
@@ -132,7 +156,8 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 		TenantStatus: tenantStatus, SenderStatus: sender.Status,
 		SenderID: sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,
-		BalanceMinor: balance, CostMinor: cost, RecipientValid: recipientValid,
+		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
+		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
 	})
 
 	messageID := uuid.New()
@@ -175,16 +200,7 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 	// could be reordered and routes enabled or disabled without one message
 	// changing, and every live message was recorded with no carrier, so the
 	// deliverability-by-carrier screens worked only for seeded history.
-	//
-	// Absence is normal, not an error — Email and WhatsApp do not go over a
-	// carrier — so a corridor with no active route sends exactly as before and
-	// records no carrier.
-	carrier, routeID := "", (*string)(nil)
-	if route, routeErr := store.SelectRoute(ctx, s.DB, sender.Country, sender.Channel); routeErr == nil {
-		carrier = route.Carrier
-		id := route.ID.String()
-		routeID = &id
-	}
+	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel)
 
 	if err := s.record(ctx, identity, store.MessageRecord{
 		ID: messageID, Channel: sender.Channel, Country: sender.Country,
@@ -197,9 +213,16 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 		return SendResult{}, err
 	}
 
-	receipts, err := s.Connector.Submit(ctx, []connector.Submission{{
+	carrierTemplateID := ""
+	if template.CarrierTemplateID != nil {
+		carrierTemplateID = *template.CarrierTemplateID
+	}
+
+	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
 		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
+		CarrierTemplateID: carrierTemplateID,
+		TemplateVariables: TemplateVariables(template, request.Variables),
 	}})
 	if err != nil {
 		return SendResult{}, fmt.Errorf("sending: submit: %w", err)
@@ -308,13 +331,24 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 	if occurred.IsZero() {
 		occurred = time.Now().UTC()
 	}
+	// Carried forward, not dropped: this row REPLACES the previous version, so
+	// anything not set here is erased rather than left alone.
+	//
+	// The carrier fields are the ones that used to go missing. Losing `carrier`
+	// emptied the deliverability-by-carrier report of everything that had
+	// actually been delivered, and losing `carrier_ref` broke the SECOND
+	// webhook for a message: Airtel sends SENT, then DELIVERED, then sometimes
+	// READ, and its payload carries no id of ours — the reference is the only
+	// way back. After the first settle there was nothing left to match on.
 	record := store.MessageRecord{
 		ID: messageID, Channel: current.Channel, Country: current.Country,
 		SenderHeader: current.SenderHeader, Msisdn: current.Msisdn,
-		// Carried forward, not dropped: this row REPLACES the previous version,
-		// so anything not set here is erased rather than left alone.
-		Email:  current.Email,
-		Status: string(to), Segments: current.Segments, Currency: current.Currency,
+		Email:      current.Email,
+		TemplateID: current.TemplateID,
+		Carrier:    current.Carrier, RouteID: current.RouteID,
+		CarrierRef: current.CarrierRef, SentAt: current.SentAt,
+		CampaignName: current.CampaignName,
+		Status:       string(to), Segments: current.Segments, Currency: current.Currency,
 		CostMinor: current.CostMinor, CampaignID: current.CampaignID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 	}
@@ -378,4 +412,89 @@ func (s *Service) record(ctx context.Context, identity store.Identity,
 		MessageCount: 1, SegmentCount: uint64(record.Segments),
 		CostMinor: record.CostMinor, Currency: record.Currency,
 	}})
+}
+
+// carrierTemplateStatusFor returns the carrier's verdict on a template, and
+// only where that verdict is a real precondition for the send.
+//
+// Two conditions, and both matter. Returning it for every channel would refuse
+// every WhatsApp and Email send the moment the column defaulted to
+// 'not_submitted', which is what it defaults to for every existing row. And
+// returning it when no real gateway is configured would refuse every RCS send
+// on a sandbox-only deployment — where there is no carrier to have approved
+// anything, and the send is going nowhere near one.
+//
+// So: the carrier's approval is required exactly when a carrier will receive
+// the message.
+func (s *Service) carrierTemplateStatusFor(channel string, template store.Template) string {
+	if template.ID == uuid.Nil {
+		return ""
+	}
+	if _, dedicated := s.Carriers.Dedicated(channel); !dedicated {
+		return ""
+	}
+	return template.CarrierStatus
+}
+
+// TemplateVariables puts a caller's named values into the order the template
+// declares them.
+//
+// The order is the template's, not the caller's map iteration, because Airtel's
+// placeholders are positional: {{1}} is whichever variable the template listed
+// first, and filling them in Go's randomised map order would put the discount
+// code in the customer's name — differently on every send.
+//
+// A variable the caller did not supply becomes an empty string rather than
+// being skipped, so positions never shift. Airtel refuses a send with fewer
+// values than the template declares, and a silently shortened list would move
+// every later variable one slot to the left.
+func TemplateVariables(template store.Template, values map[string]string) []connector.TemplateVariable {
+	if len(template.Variables) == 0 {
+		return nil
+	}
+	filled := make([]connector.TemplateVariable, 0, len(template.Variables))
+	for _, name := range template.Variables {
+		filled = append(filled, connector.TemplateVariable{
+			Name: name, Value: values[name],
+		})
+	}
+	return filled
+}
+
+// resolvePath records which carrier is about to carry this message, and over
+// which route row.
+//
+// Two sources, and they are not equal. When a channel has its own gateway —
+// RCS goes to whichever of Airtel or Vi this deployment holds credentials for —
+// that gateway IS the carrier, whatever the routes table would have picked. The
+// routes table is consulted second, only to find the row describing that same
+// carrier so the corridor's commercial terms stay attached.
+//
+// Recording the routes table's highest-priority carrier instead was wrong in a
+// way that hides: the message goes to Airtel and the log says Jio, so the
+// deliverability-by-carrier report blames the wrong network for every failure.
+//
+// Absence is normal, not an error. Email and WhatsApp do not go over a carrier
+// at all, and a corridor with no active route sends exactly as before.
+func (s *Service) resolvePath(ctx context.Context, country, channel string) (string, *string) {
+	if dedicated, ok := s.Carriers.Dedicated(channel); ok {
+		carrier := strings.ToUpper(dedicated.Name())
+		route, err := store.SelectRouteForCarrier(ctx, s.DB, country, channel, carrier)
+		if err != nil {
+			// No route row for this carrier is worth recording as-is rather
+			// than falling back to another carrier's row: the message really
+			// did go through this gateway, and a route id pointing at a
+			// different carrier would be worse than none.
+			return carrier, nil
+		}
+		id := route.ID.String()
+		return carrier, &id
+	}
+
+	route, err := store.SelectRoute(ctx, s.DB, country, channel)
+	if err != nil {
+		return "", nil
+	}
+	id := route.ID.String()
+	return route.Carrier, &id
 }
