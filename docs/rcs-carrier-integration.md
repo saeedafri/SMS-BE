@@ -196,6 +196,17 @@ first exposed the second: the warehouse has no foreign keys, so messages
 outlived the tenants that sent them and the reconciler failed trying to refund
 wallets that no longer existed.
 
+### Exercising it without a carrier account
+
+`scripts/rcs-stubs/` holds stand-ins for both vendors. They are not
+return-a-fixed-blob mocks: they reproduce the behaviours that actually cost work
+here — Airtel's GET-with-body, its success-flag envelope, its unreachable-handset
+failure wrapping a Google 404, and its 500-number bulk floor; Vi's OAuth on a
+separate host (refusing past five token mints, so an uncached client fails loudly
+rather than quietly eating the real 60-per-minute budget), its 200-with-`{}`
+answer for a handset with no RCS, and its Pub/Sub-shaped callbacks. See the
+README there.
+
 ### Deliberately not done yet
 
 - **Nothing routes on the answer.** `campaigns.fallback_channel` still is not
@@ -288,6 +299,17 @@ it.** Route selection takes the highest-priority active route in a corridor, but
 an RCS send goes to whichever of Airtel or Vi the deployment holds credentials
 for. A message went to Airtel and the log said Jio. `resolvePath` now records
 the gateway that actually carried it and looks up that carrier's own route row.
+
+### Exercising it without a carrier account
+
+`scripts/rcs-stubs/` holds stand-ins for both vendors. They are not
+return-a-fixed-blob mocks: they reproduce the behaviours that actually cost work
+here — Airtel's GET-with-body, its success-flag envelope, its unreachable-handset
+failure wrapping a Google 404, and its 500-number bulk floor; Vi's OAuth on a
+separate host (refusing past five token mints, so an uncached client fails loudly
+rather than quietly eating the real 60-per-minute budget), its 200-with-`{}`
+answer for a handset with no RCS, and its Pub/Sub-shaped callbacks. See the
+README there.
 
 ### Deliberately not done
 
