@@ -420,7 +420,8 @@ func (h *harness) operatorToken() string {
 	if _, err := h.admin.Exec(context.Background(), `
 		INSERT INTO operator_users (email, name, password_hash, role)
 		VALUES ($1, 'Harness Ops', $2, 'admin')
-		ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+		ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+		                                  mfa_enabled = false, mfa_secret = NULL`,
 		email, hash); err != nil {
 		h.t.Fatalf("seed operator: %v", err)
 	}

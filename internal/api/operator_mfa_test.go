@@ -219,3 +219,46 @@ func (h *harness) operatorSessionWithRecovery(code string) string {
 	res.decode(h.t, &body)
 	return body.Token
 }
+
+// The shipped operator console predates the discriminated union: it casts the
+// login body straight to AuthSession and reads .token. When the union landed
+// without this mirror, that read produced undefined, the console stored an
+// empty cookie, and every request after sign-in came back unauthenticated —
+// staff were locked out of the console entirely and it looked like a password
+// problem. Deleting either mirror below reproduces that outage.
+func TestOperatorLoginStaysReadableByAFlatAuthSessionClient(t *testing.T) {
+	h := newHarness(t)
+	h.operatorToken() // seeds the account with MFA off
+
+	res := h.do(http.MethodPost, "/v1/operator/login", "", map[string]any{
+		"email": harnessOperatorEmail, "password": harnessOperatorPassword,
+	})
+	if res.Code != http.StatusOK {
+		t.Fatalf("login = %d\n%s", res.Code, res.Body)
+	}
+
+	// Exactly what the console does: no knowledge of kind or session.
+	var flat struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expiresAt"`
+	}
+	res.decode(t, &flat)
+	if flat.Token == "" || flat.ExpiresAt == "" {
+		t.Fatalf("a flat AuthSession client reads nothing usable: %s", res.Body)
+	}
+	if me := h.do(http.MethodGet, "/v1/operator/me", flat.Token, nil); me.Code != http.StatusOK {
+		t.Fatalf("the top-level token does not authenticate: %d\n%s", me.Code, me.Body)
+	}
+
+	// The mirror must not disagree with the value it mirrors.
+	var union struct {
+		Session struct {
+			Token string `json:"token"`
+		} `json:"session"`
+	}
+	res.decode(t, &union)
+	if union.Session.Token != flat.Token {
+		t.Fatalf("mirror disagrees with session.token: %q vs %q",
+			flat.Token, union.Session.Token)
+	}
+}
