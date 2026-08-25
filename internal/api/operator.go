@@ -107,8 +107,21 @@ func (s *Server) OperatorLogin(ctx context.Context, request gen.OperatorLoginReq
 	if err != nil {
 		return nil, err
 	}
+	// token and expiresAt repeat session.* verbatim.
+	//
+	// This endpoint used to answer a flat AuthSession, and the shipped operator
+	// console still reads it that way — it casts the body to AuthSession and
+	// takes .token. When the union landed, that read produced undefined, the
+	// console wrote an empty cookie, and every request after sign-in came back
+	// unauthenticated: staff could not get into the console at all.
+	//
+	// Mirroring costs two fields and keeps both readings true, which is worth
+	// more than a tidy body. The MFA branch above deliberately has no mirror —
+	// a challenge is not a session, and a client that cannot see that must fail
+	// to sign in rather than proceed on a token that was never issued.
 	if err := result.FromOperatorLoginSessionResult(gen.OperatorLoginSessionResult{
 		Kind: "session", Session: session,
+		Token: &session.Token, ExpiresAt: &session.ExpiresAt,
 	}); err != nil {
 		return nil, err
 	}
