@@ -56,8 +56,9 @@ type UserActivityFilter struct {
 	TenantID  *uuid.UUID
 	EventType *string
 	// Since bounds how far back to look. Zero means no lower bound.
-	Since time.Time
-	Limit int
+	Since  time.Time
+	Cursor string
+	Limit  int
 }
 
 // RecordUserActivity appends one event.
@@ -99,11 +100,15 @@ func RecordUserActivity(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // tenant filter below is therefore a genuine filter, not a security boundary;
 // the boundary is that only an authenticated operator reaches this code.
 func ListUserActivity(ctx context.Context, pool *pgxpool.Pool,
-	filter UserActivityFilter) ([]UserActivityEntry, error) {
+	filter UserActivityFilter) ([]UserActivityEntry, int, string, error) {
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
+	if err != nil {
+		return nil, 0, "", err
 	}
 	var tenantID *uuid.UUID
 	if filter.TenantID != nil {
@@ -114,6 +119,19 @@ func ListUserActivity(ctx context.Context, pool *pgxpool.Pool,
 		since = &filter.Since
 	}
 
+	// Counted with the filters and without the cursor: it is the denominator of
+	// the console's "Showing 1 to 20 of 54", so it must not move as the operator
+	// pages and must track what they filtered to.
+	var total int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM user_activity a
+		WHERE ($1::uuid IS NULL OR a.tenant_id = $1)
+		  AND ($2::text IS NULL OR a.event_type = $2)
+		  AND ($3::timestamptz IS NULL OR a.occurred_at >= $3)`,
+		tenantID, filter.EventType, since).Scan(&total); err != nil {
+		return nil, 0, "", fmt.Errorf("store: count user activity: %w", err)
+	}
+
 	rows, err := pool.Query(ctx, `
 		SELECT a.id, a.tenant_id, t.name, a.user_name, a.user_email,
 		       a.event_type, a.detail, a.occurred_at
@@ -122,10 +140,11 @@ func ListUserActivity(ctx context.Context, pool *pgxpool.Pool,
 		WHERE ($1::uuid IS NULL OR a.tenant_id = $1)
 		  AND ($2::text IS NULL OR a.event_type = $2)
 		  AND ($3::timestamptz IS NULL OR a.occurred_at >= $3)
+		  AND ($5::timestamptz IS NULL OR (a.occurred_at, a.id) < ($5, $6))
 		ORDER BY a.occurred_at DESC, a.id DESC
-		LIMIT $4`, tenantID, filter.EventType, since, limit)
+		LIMIT $4`, tenantID, filter.EventType, since, limit+1, cursorTime, cursorID)
 	if err != nil {
-		return nil, fmt.Errorf("store: list user activity: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list user activity: %w", err)
 	}
 	defer rows.Close()
 
@@ -135,11 +154,20 @@ func ListUserActivity(ctx context.Context, pool *pgxpool.Pool,
 		if err := rows.Scan(&entry.ID, &entry.TenantID, &entry.TenantName,
 			&entry.UserName, &entry.UserEmail, &entry.EventType,
 			&entry.Detail, &entry.OccurredAt); err != nil {
-			return nil, fmt.Errorf("store: scan user activity: %w", err)
+			return nil, 0, "", fmt.Errorf("store: scan user activity: %w", err)
 		}
 		out = append(out, entry)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, "", err
+	}
+
+	next := ""
+	if len(out) > limit {
+		next = encodeLedgerCursor(out[limit-1].OccurredAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
 }
 
 // RecordLogin appends a login event, resolving the user's name and email from

@@ -123,6 +123,16 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.SQLState() == "23505"
 }
 
+// isForeignKeyViolation reports a row still referenced by another table.
+//
+// Used where the reference is the answer rather than an internal failure:
+// deleting a connection that routes still point at must tell the operator to
+// repoint them, not return a 500 with a constraint name in it.
+func isForeignKeyViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	return errors.As(err, &pgErr) && pgErr.SQLState() == "23503"
+}
+
 // SessionSummary is one row of GET /v1/sessions.
 type SessionSummary struct {
 	ID           uuid.UUID

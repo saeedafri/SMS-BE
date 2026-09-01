@@ -39,6 +39,15 @@ func templateResponse(t store.Template) gen.Template {
 		_ = category.FromTemplateCategory(gen.TemplateCategory(*t.Category))
 		template.Category = &category
 	}
+	// The customer's own DLT content-template id, handed back exactly as they
+	// supplied it. A blank one stays blank: an approved template with no id is
+	// the honest answer when DLT has not issued one.
+	template.RegistrationId = t.ExternalID
+	if t.DltCategory != nil {
+		var dltCategory gen.Template_DltCategory
+		_ = dltCategory.FromDltCategory(gen.DltCategory(*t.DltCategory))
+		template.DltCategory = &dltCategory
+	}
 	if template.Variables == nil {
 		template.Variables = []string{}
 	}
@@ -221,6 +230,23 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 		}
 	}
 
+	// India's taxonomy, kept apart from Meta's above.
+	//
+	// Both enums spell TRANSACTIONAL and mean different things: Meta's is an
+	// ordinary category, DLT's is restricted to banking and OTP traffic. A
+	// value outside the four is refused rather than stored, because a template
+	// mis-filed under DLT is not rejected by us — it is scrubbed by the carrier,
+	// silently, after the customer believes they are live.
+	var dltCategory *string
+	if request.Body.DltCategory != nil {
+		if !oneOf(string(*request.Body.DltCategory), validDltCategories) {
+			return gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
+				enumMessage("dltCategory", validDltCategories))), nil
+		}
+		value := string(*request.Body.DltCategory)
+		dltCategory = &value
+	}
+
 	// Rich content is accepted only for the channel that has it. The sender
 	// decides the channel, so a request that sends WhatsApp buttons through an
 	// SMS sender is rejected here rather than stored and rejected later by the
@@ -250,12 +276,16 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 	}
 
 	created, err := store.CreateTemplate(ctx, s.DB, identity, store.Template{
-		SenderID:     sender.ID,
-		Name:         name,
-		Channel:      sender.Channel,
-		Country:      sender.Country,
-		Body:         body,
-		Category:     category,
+		SenderID: sender.ID,
+		Name:     name,
+		Channel:  sender.Channel,
+		Country:  sender.Country,
+		Body:     body,
+		Category: category,
+		// Both come from the customer's own DLT registration and are stored
+		// verbatim. Nothing here mints one.
+		ExternalID:   request.Body.RegistrationId,
+		DltCategory:  dltCategory,
 		Variables:    variables,
 		CtaURL:       request.Body.CtaUrl,
 		RCSContent:   rcsContent,

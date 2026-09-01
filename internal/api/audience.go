@@ -464,7 +464,11 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 		}
 	}
 
-	suppressions, next, err := store.ListSuppressions(ctx, s.DB, identity, cursor, limit)
+	suppressions, total, next, err := store.ListSuppressions(ctx, s.DB, identity, cursor, limit)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.ListSuppressions422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +482,7 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 			CreatedAt: suppression.CreatedAt,
 		})
 	}
-	page := gen.SuppressionPage{Suppressions: out}
+	page := gen.SuppressionPage{Suppressions: out, Total: total}
 	if next != "" {
 		page.NextCursor = &next
 	}

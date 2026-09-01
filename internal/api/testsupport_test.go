@@ -3,7 +3,9 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"io"
 	"log/slog"
 	"net/http"
@@ -108,7 +110,10 @@ func newHarness(t *testing.T) *harness {
 		Gateway:    billing.ManualGateway{},
 		OperatorDB: operator,
 		AdminDB:    admin,
-		Logger:     slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		// A fixed key, so the connection specs exercise the real encrypt path
+		// rather than the no-key refusal.
+		Secrets: testSecretsBox(t),
+		Logger:  slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	h.router = api.NewRouter(h.server)
 	return h
@@ -461,4 +466,14 @@ func (h *harness) createRegistration(token string) string {
 	}
 	res.decode(h.t, &out)
 	return out.ID
+}
+
+// testSecretsBox builds the encryption box the connection routes need.
+func testSecretsBox(t *testing.T) *secrets.Box {
+	t.Helper()
+	box, err := secrets.NewBox(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("test secrets box: %v", err)
+	}
+	return box
 }

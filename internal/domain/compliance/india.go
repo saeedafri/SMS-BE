@@ -1,6 +1,9 @@
 package compliance
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // shortenerHosts is not exhaustive and is not meant to be a complete defence —
 // DLT's real control is the CTA whitelist held by the operator. This catches
@@ -16,6 +19,11 @@ func (india) Country() string  { return "IN" }
 func (india) Label() string    { return "India (DLT)" }
 func (india) Currency() string { return "INR" }
 func (india) Stub() bool       { return false }
+
+// Every DLT tier carries an identifier the customer is issued on their operator
+// portal: the principal-entity id, the header id, and the content-template id
+// that must travel with every submit.
+func (india) RequiresRegistrationID(Tier) bool { return true }
 
 func (r india) Object(key string) (RegistrationObject, bool) {
 	return findObject(r.RegistrationObjects(), key)
@@ -84,6 +92,20 @@ func (india) ValidateCtaURL(rawURL string) ValidationResult {
 		if host == shortener || strings.HasSuffix(host, "."+shortener) {
 			return invalid("URL shorteners are not allowed under DLT — use the full URL.")
 		}
+	}
+	return valid()
+}
+
+// DLT headers are exactly six alphanumeric characters. Case is not enforced
+// here — the operator portal issues uppercase and we uppercase on submit — but
+// length and character set are, because a header outside that shape cannot
+// correspond to anything DLT ever approved.
+var indiaHeaderPattern = regexp.MustCompile(`^[A-Za-z0-9]{6}$`)
+
+func (india) ValidateHeader(header string) ValidationResult {
+	if !indiaHeaderPattern.MatchString(strings.TrimSpace(header)) {
+		return invalid("An India DLT header is exactly six letters or digits, " +
+			"matching the header approved on your DLT account.")
 	}
 	return valid()
 }

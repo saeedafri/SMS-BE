@@ -18,6 +18,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/mailer"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/resilience"
+	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -209,10 +210,24 @@ func run() error {
 		}
 	}
 
+	// A bad key is fatal rather than degraded: a deployment that meant to
+	// encrypt bind passwords and silently could not is worse than one that
+	// refuses to start.
+	connectionSecrets, err := secrets.NewBox(cfg.ConnectionEncryptionKey)
+	if err != nil {
+		logger.Error("connection encryption key is not usable", "error", err)
+		os.Exit(1)
+	}
+	if connectionSecrets == nil {
+		logger.Warn("no CONNECTION_ENCRYPTION_KEY set — operator SMPP bind " +
+			"passwords cannot be stored, so no connection can be enabled")
+	}
+
 	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger,
 		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
 		EnableDevEndpoints: cfg.EnableDevEndpoints,
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
+		Secrets:           connectionSecrets,
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,

@@ -445,11 +445,12 @@ func DeleteScheduledReport(ctx context.Context, pool *pgxpool.Pool, id Identity,
 
 // AttributedSpend is spend grouped by the thing that caused it.
 type AttributedSpend struct {
-	ID       string
-	Name     string
-	Channel  string
-	Currency string
-	Amount   int64
+	ID           string
+	Name         string
+	Channel      string
+	Currency     string
+	Amount       int64
+	MessageCount int
 }
 
 // UsageByCampaign and UsageByJourney attribute spend to what drove it.
@@ -462,18 +463,18 @@ type AttributedSpend struct {
 // Delivered messages only, matching every other cost figure in the product — a
 // tenant is not billed for a message that never arrived, so attributing spend
 // to one would inflate the campaign's cost.
-func UsageByCampaign(ctx context.Context, conn driver.Conn, tenantID uuid.UUID) (
-	[]AttributedSpend, error) {
-	return attributedSpend(ctx, conn, tenantID, "campaign_id", "campaign_name")
+func UsageByCampaign(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
+	since time.Time, currency string) ([]AttributedSpend, error) {
+	return attributedSpend(ctx, conn, tenantID, "campaign_id", "campaign_name", since, currency)
 }
 
-func UsageByJourney(ctx context.Context, conn driver.Conn, tenantID uuid.UUID) (
-	[]AttributedSpend, error) {
-	return attributedSpend(ctx, conn, tenantID, "journey_id", "journey_name")
+func UsageByJourney(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
+	since time.Time, currency string) ([]AttributedSpend, error) {
+	return attributedSpend(ctx, conn, tenantID, "journey_id", "journey_name", since, currency)
 }
 
 func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
-	idColumn, nameColumn string) ([]AttributedSpend, error) {
+	idColumn, nameColumn string, since time.Time, currency string) ([]AttributedSpend, error) {
 
 	// max(name), not any(name).
 	//
@@ -487,14 +488,41 @@ func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	//
 	// The empty string sorts below every real name, so max() returns a genuine
 	// name whenever the group holds one.
+	// Collapse each message to its latest version BEFORE aggregating.
+	//
+	// messages is a ReplacingMergeTree: every status change writes another row
+	// for the same id and the versions coexist until a background merge runs.
+	// Aggregating raw rows makes both numbers depend on whether that merge has
+	// happened yet.
+	//
+	// It bit amount specifically. sumIf(cost_minor, status = 'delivered') reads
+	// a message that went delivered -> read as billable while both rows are
+	// present, and as free the moment the merge leaves only the 'read' one — the
+	// charge silently leaves the report with no data having changed. argMax over
+	// version pins each message to one row and one status, so the answer is the
+	// same before and after a merge.
+	//
+	// message_count is then a count of those collapsed rows, so a journey with
+	// several settled send steps reports its real volume rather than that volume
+	// times its step count. amount is still summed, because each message's cost
+	// is its own.
 	rows, err := conn.Query(ctx, fmt.Sprintf(`
-		SELECT toString(%s) AS id, max(%s) AS name, channel, currency,
-		       sumIf(cost_minor, status = 'delivered') AS amount
-		FROM messages
-		WHERE tenant_id = ? AND %s IS NOT NULL
-		GROUP BY id, channel, currency
+		SELECT entity_id, max(name) AS name, channel, currency,
+		       sumIf(cost, final_status IN ('delivered', 'read')) AS amount,
+		       countIf(final_status IN ('delivered', 'read')) AS message_count
+		FROM (
+			SELECT toString(%s) AS entity_id, max(%s) AS name, channel, currency, id,
+			       argMax(status, version) AS final_status,
+			       argMax(cost_minor, version) AS cost
+			FROM messages
+			WHERE tenant_id = ? AND %s IS NOT NULL AND created_at >= ?
+			  AND (? = '' OR currency = ?)
+			GROUP BY entity_id, channel, currency, id
+		)
+		GROUP BY entity_id, channel, currency
 		HAVING amount > 0
-		ORDER BY amount DESC`, idColumn, nameColumn, idColumn), tenantID)
+		ORDER BY amount DESC`, idColumn, nameColumn, idColumn),
+		tenantID, since, currency, currency)
 	if err != nil {
 		return nil, fmt.Errorf("store: attributed spend: %w", err)
 	}
@@ -502,10 +530,12 @@ func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	out := []AttributedSpend{}
 	for rows.Next() {
 		var row AttributedSpend
+		var messageCount uint64
 		if err := rows.Scan(&row.ID, &row.Name, &row.Channel, &row.Currency,
-			&row.Amount); err != nil {
+			&row.Amount, &messageCount); err != nil {
 			return nil, fmt.Errorf("store: scan attributed spend: %w", err)
 		}
+		row.MessageCount = int(messageCount)
 		out = append(out, row)
 	}
 	return out, rows.Err()

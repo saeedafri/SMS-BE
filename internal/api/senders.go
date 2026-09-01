@@ -129,12 +129,31 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 			enumMessage("Channel", validChannels))), nil
 	}
 	country := string(request.Body.Country)
-	if _, known := compliance.For(country); !known {
+	regime, known := compliance.For(country)
+	if !known {
 		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation,
 			fmt.Sprintf("We do not operate in %q yet.", country))), nil
 	}
 
+	// The regime owns the shape of a header, the same way it owns CTA rules.
+	// India's was documented in the regime's own remediation text and enforced
+	// nowhere, so "a b!@#$%^&*()_+1234567890" was accepted as a DLT header and
+	// sat in review looking like a real submission.
+	//
+	// Alphanumeric channels only. A Voice or Email sender's identity is a
+	// number or a domain, and neither is a six-character DLT header.
+	if channel := string(request.Body.Channel); channel == "SMS" || channel == "RCS" {
+		if result := regime.ValidateHeader(header); !result.OK {
+			return gen.CreateSenderId422JSONResponse(
+				errorBody(codeValidation, result.Reason)), nil
+		}
+	}
+
 	created, err := store.CreateSenderID(ctx, s.DB, identity, store.SenderID{
+		// Stored exactly as typed. This is the customer's DLT header id, issued
+		// to them on their operator portal — Relay is the system of record for
+		// it, never its issuer, so there is no derive-or-default branch here.
+		ExternalID:  request.Body.RegistrationId,
 		Header:      header,
 		Channel:     string(request.Body.Channel),
 		Country:     country,

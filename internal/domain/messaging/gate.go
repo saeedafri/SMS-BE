@@ -29,6 +29,11 @@ var (
 	ErrSuppressed                 = errors.New("messaging: recipient is suppressed")
 	ErrInsufficientFunds          = errors.New("messaging: insufficient balance")
 	ErrInvalidRecipient           = errors.New("messaging: recipient is not a valid number")
+	// ErrContentNotAllowed is the country's own content rule refusing the body
+	// — India's ban on public URL shorteners under DLT, today. Distinct from a
+	// template refusal: the template may be perfectly approved and the text
+	// still carry something the regulator does not permit.
+	ErrContentNotAllowed = errors.New("messaging: content is not allowed in this country")
 )
 
 // GateInput is everything the gate needs to decide. It is a plain struct with
@@ -108,7 +113,7 @@ func IsRefusal(err error) bool {
 	for _, refusal := range []error{
 		ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
 		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
-		ErrInvalidRecipient, ErrCarrierTemplateNotApproved,
+		ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -119,6 +124,8 @@ func IsRefusal(err error) bool {
 
 func GateFailureCode(err error) string {
 	switch {
+	case errors.Is(err, ErrContentNotAllowed):
+		return "content_not_allowed"
 	case errors.Is(err, ErrTenantSuspended):
 		return "tenant_suspended"
 	case errors.Is(err, ErrSenderNotApproved):

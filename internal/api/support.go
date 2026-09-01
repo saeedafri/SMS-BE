@@ -48,7 +48,19 @@ func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTi
 		value := string(*request.Params.Category)
 		category = &value
 	}
-	tickets, err := store.ListSupportTickets(ctx, s.DB, identity, status, category)
+	cursor, limit := "", 0
+	if request.Params.Cursor != nil {
+		cursor = *request.Params.Cursor
+	}
+	if request.Params.Limit != nil {
+		limit = *request.Params.Limit
+	}
+	tickets, total, next, err := store.ListSupportTickets(ctx, s.DB, identity,
+		status, category, cursor, limit)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.GetSupportTickets422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +73,11 @@ func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTi
 			CreatedAt: ticket.CreatedAt, UpdatedAt: ticket.UpdatedAt,
 		})
 	}
-	return gen.GetSupportTickets200JSONResponse(gen.SupportTicketPage{Tickets: out}), nil
+	page := gen.SupportTicketPage{Tickets: out, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return gen.GetSupportTickets200JSONResponse(page), nil
 }
 
 func (s *Server) GetSupportTicket(ctx context.Context, request gen.GetSupportTicketRequestObject) (gen.GetSupportTicketResponseObject, error) {
@@ -188,7 +204,17 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 		value := string(*request.Params.Status)
 		filter.Status = &value
 	}
-	conversations, err := store.ListConversations(ctx, s.DB, identity, filter)
+	if request.Params.Cursor != nil {
+		filter.Cursor = *request.Params.Cursor
+	}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	conversations, total, next, err := store.ListConversations(ctx, s.DB, identity, filter)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.ListConversations422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -196,9 +222,13 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 	for _, conversation := range conversations {
 		out = append(out, toConversation(conversation))
 	}
-	return gen.ListConversations200JSONResponse(gen.ConversationPage{
-		Conversations: out, Total: len(out),
-	}), nil
+	// total is the count matching the filter, not len(out). They were the same
+	// number only while this endpoint returned everything.
+	page := gen.ConversationPage{Conversations: out, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return gen.ListConversations200JSONResponse(page), nil
 }
 
 // conversationDetail is the shared read-back every conversation mutation ends
@@ -297,15 +327,16 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 		} else {
 			status = "sent"
 			// The sandbox posts its delivery reports to an internal queue
-			// rather than calling us back. Draining here keeps a reply's final
-			// state honest — delivered means a report said so, not that we
-			// assumed it — without waiting on a worker tick the agent watching
-			// the thread would have to sit through.
+			// rather than calling us back. Taking this reply's own report here
+			// keeps its final state honest — delivered means a report said so,
+			// not that we assumed it — without waiting on a worker tick the
+			// agent watching the thread would have to sit through.
+			//
+			// TakeReportsFor, not DrainReports: draining emptied the whole
+			// queue to find one report and discarded the rest, so every other
+			// message in flight lost its settlement and stalled at "sent".
 			if sandbox, ok := s.Connector.(*connector.Sandbox); ok {
-				for _, report := range sandbox.DrainReports() {
-					if report.MessageID != messageID {
-						continue
-					}
+				for _, report := range sandbox.TakeReportsFor(messageID) {
 					if report.Delivered {
 						status = "delivered"
 					} else {

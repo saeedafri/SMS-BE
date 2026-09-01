@@ -49,6 +49,12 @@ type Config struct {
 	// value to create an account.
 	SignupInviteCode string
 
+	// ConnectionEncryptionKey is a base64-encoded 32-byte key for the operator
+	// SMPP bind passwords. Empty means no bind password can be stored — the
+	// deployment can describe its connections and cannot enable one, which is a
+	// safer failure than storing a carrier credential in plaintext.
+	ConnectionEncryptionKey string
+
 	// AllowGreyRoutes permits enabling a route whose compliance standing is
 	// grey — traffic that reaches handsets without being registered with the
 	// operator behind it.
@@ -157,6 +163,7 @@ func Load() (Config, error) {
 	}
 
 	cfg.SignupInviteCode = strings.TrimSpace(os.Getenv("SIGNUP_INVITE_CODE"))
+	cfg.ConnectionEncryptionKey = strings.TrimSpace(os.Getenv("CONNECTION_ENCRYPTION_KEY"))
 	cfg.OperatorIPAllowlist = strings.TrimSpace(os.Getenv("OPERATOR_IP_ALLOWLIST"))
 
 	return cfg, nil

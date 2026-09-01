@@ -76,6 +76,26 @@ type Regime interface {
 	RegistrationObjects() []RegistrationObject
 	Object(key string) (RegistrationObject, bool)
 	ValidateCtaURL(rawURL string) ValidationResult
+	// ValidateHeader checks a sender header against the country's rule for one.
+	//
+	// India fixes the shape exactly — six alphanumerics, which is what DLT
+	// issues — and that rule was written down in the regime's own remediation
+	// text while nothing enforced it, so "a b!@#$%^&*()_+1234567890" was
+	// accepted as a DLT header and sat pending review looking legitimate.
+	ValidateHeader(header string) ValidationResult
+	// RequiresRegistrationID reports whether this country's regulator issues an
+	// identifier the customer must carry on records at that tier — India's DLT
+	// principal-entity, header and content-template ids.
+	//
+	// It lives here rather than as `country == "IN"` inside the sender and
+	// template handlers for the reason at the top of this file: a new country is
+	// a file in this package, not a branch somewhere else. Two handlers each
+	// carrying their own copy of the rule is exactly how they drift.
+	//
+	// Note what this does NOT say: nothing anywhere may GENERATE such an id.
+	// The regulator issues it to the customer; we only ever store what they
+	// hand us.
+	RequiresRegistrationID(tier Tier) bool
 }
 
 var registry = map[string]Regime{

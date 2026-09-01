@@ -121,18 +121,55 @@ type AuditEntry struct {
 // reads during an incident to answer "who changed this tenant, and when". A
 // tenant filter that silently returned every tenant's actions would have them
 // reading the wrong history at the worst possible moment.
-func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, limit int, tenantID *uuid.UUID, action *string) ([]AuditEntry, error) {
+// AuditLogFilter narrows the audit log and positions one page within it.
+type AuditLogFilter struct {
+	TenantID *uuid.UUID
+	Action   *string
+	Since    time.Time
+	Cursor   string
+	Limit    int
+}
+
+// ListAuditLog returns one page of the audit log and the number of rows the
+// filter matches.
+//
+// Total is counted with the same WHERE clause but without the cursor, because
+// it is the denominator of "Showing 1 to 20 of 54" — a total that ignored the
+// filters would read as the filter being broken, and one that included the
+// cursor would shrink as the operator paged.
+func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter) (
+	[]AuditEntry, int, string, error) {
+
+	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	var total int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM operator_audit_log
+		WHERE ($1::uuid IS NULL OR tenant_id = $1)
+		  AND ($2::text IS NULL OR action    = $2)
+		  AND occurred_at >= $3`,
+		filter.TenantID, filter.Action, filter.Since).Scan(&total); err != nil {
+		return nil, 0, "", fmt.Errorf("store: count audit log: %w", err)
+	}
+
 	rows, err := pool.Query(ctx, `
 		SELECT id, occurred_at, actor, action, tenant_id, tenant_name, target_label, detail
 		FROM operator_audit_log
 		WHERE ($2::uuid IS NULL OR tenant_id = $2)
 		  AND ($3::text IS NULL OR action    = $3)
-		ORDER BY occurred_at DESC, id DESC LIMIT $1`, limit, tenantID, action)
+		  AND occurred_at >= $4
+		  AND ($5::timestamptz IS NULL OR (occurred_at, id) < ($5, $6))
+		ORDER BY occurred_at DESC, id DESC LIMIT $1`,
+		limit+1, filter.TenantID, filter.Action, filter.Since, cursorTime, cursorID)
 	if err != nil {
-		return nil, fmt.Errorf("store: list audit log: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list audit log: %w", err)
 	}
 	defer rows.Close()
 	out := []AuditEntry{}
@@ -140,11 +177,20 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, limit int, tenantID *
 		var entry AuditEntry
 		if err := rows.Scan(&entry.ID, &entry.OccurredAt, &entry.Actor, &entry.Action,
 			&entry.TenantID, &entry.TenantName, &entry.TargetLabel, &entry.Detail); err != nil {
-			return nil, fmt.Errorf("store: scan audit entry: %w", err)
+			return nil, 0, "", fmt.Errorf("store: scan audit entry: %w", err)
 		}
 		out = append(out, entry)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, "", err
+	}
+
+	next := ""
+	if len(out) > limit {
+		next = encodeLedgerCursor(out[limit-1].OccurredAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
 }
 
 // OperatorTenant is a tenant as platform staff see it: identity, standing, and
@@ -175,7 +221,17 @@ type OperatorTenant struct {
 // treated as absent: `?status=` is a client asking for tenants whose status is
 // empty, and quietly turning that into "all tenants" is how a filtered screen
 // ends up showing rows it said it had excluded.
-func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *string) ([]OperatorTenant, error) {
+func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *string,
+	cursor string, limit int) ([]OperatorTenant, int, string, error) {
+
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
 	// The status filter matches the STANDING the console displays, not the raw
 	// status column — and those are not the same thing.
 	//
@@ -189,6 +245,18 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 	// The CASE below is the same precedence tenantStanding uses — suspended
 	// outranks throttled, because a suspended tenant is not sending at all and
 	// reporting "throttled" would understate what was done to them.
+	var total int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM tenants
+		WHERE ($1::text IS NULL OR CASE
+		           WHEN status = 'suspended'      THEN 'suspended'
+		           WHEN throttled_at IS NOT NULL  THEN 'throttled'
+		           ELSE status
+		       END = $1)
+		  AND ($2::text IS NULL OR country = $2)`, status, country).Scan(&total); err != nil {
+		return nil, 0, "", fmt.Errorf("store: count tenants: %w", err)
+	}
+
 	rows, err := pool.Query(ctx, `
 		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at
 		FROM tenants
@@ -198,9 +266,11 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		           ELSE status
 		       END = $1)
 		  AND ($2::text IS NULL OR country = $2)
-		ORDER BY created_at DESC`, status, country)
+		  AND ($3::timestamptz IS NULL OR (created_at, id) < ($3, $4))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $5`, status, country, cursorTime, cursorID, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("store: list tenants: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list tenants: %w", err)
 	}
 	defer rows.Close()
 	out := []OperatorTenant{}
@@ -209,9 +279,41 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status,
 			&tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
 			&tenant.ThrottledAt); err != nil {
-			return nil, fmt.Errorf("store: scan tenant: %w", err)
+			return nil, 0, "", fmt.Errorf("store: scan tenant: %w", err)
 		}
 		out = append(out, tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, "", err
+	}
+
+	next := ""
+	if len(out) > limit {
+		next = encodeLedgerCursor(out[limit-1].CreatedAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
+}
+
+// AllTenantIDs returns every tenant id, unpaged.
+//
+// Separate from ListTenants deliberately. That one pages for the console, and a
+// background sweep that borrowed it would stop at whatever page size the
+// console happened to want — silently reconciling the first 100 tenants and no
+// others, with nothing in the logs to say so.
+func AllTenantIDs(ctx context.Context, pool *pgxpool.Pool) ([]uuid.UUID, error) {
+	rows, err := pool.Query(ctx, `SELECT id FROM tenants ORDER BY created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("store: all tenant ids: %w", err)
+	}
+	defer rows.Close()
+	out := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("store: scan tenant id: %w", err)
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }
@@ -296,6 +398,9 @@ type Route struct {
 	CostPerSegmentMinor int64
 	Currency            string
 	Status              string
+	// ConnectionID is the SMPP bind carrying this corridor. Null means the
+	// corridor is defined but not yet wired, so it is skipped during failover.
+	ConnectionID *uuid.UUID
 }
 
 // ListRoutes returns carrier routes, narrowed by country and channel when
@@ -304,12 +409,12 @@ type Route struct {
 // not a report about it.
 func ListRoutes(ctx context.Context, pool *pgxpool.Pool, country, channel *string) ([]Route, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, country, channel, carrier, label, priority, compliance_standing,
+		SELECT id, country, channel, carrier, label, priority, compliance_standing, connection_id,
 		       cost_per_segment_minor, currency, status
 		FROM routes
 		WHERE ($1::text IS NULL OR country = $1)
 		  AND ($2::text IS NULL OR channel = $2)
-		ORDER BY country, channel, carrier, priority`, country, channel)
+		ORDER BY country, channel, priority`, country, channel)
 	if err != nil {
 		return nil, fmt.Errorf("store: list routes: %w", err)
 	}
@@ -318,7 +423,7 @@ func ListRoutes(ctx context.Context, pool *pgxpool.Pool, country, channel *strin
 	for rows.Next() {
 		var route Route
 		if err := rows.Scan(&route.ID, &route.Country, &route.Channel, &route.Carrier,
-			&route.Label, &route.Priority, &route.ComplianceStanding,
+			&route.Label, &route.Priority, &route.ComplianceStanding, &route.ConnectionID,
 			&route.CostPerSegmentMinor, &route.Currency, &route.Status); err != nil {
 			return nil, fmt.Errorf("store: scan route: %w", err)
 		}
@@ -338,15 +443,16 @@ func SetRouteStatus(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, statu
 	return nil
 }
 
-// MoveRoute swaps a route with its neighbour in the same corridor AND on the
-// same carrier.
+// MoveRoute swaps a route with its neighbour in the same country x channel
+// corridor, across carriers.
 //
-// Carrier is part of the grouping, not just country and channel. Priority ranks
-// the ways of reaching one network — "Jio Direct" ahead of "Jio via Aggregator
-// A" — and says nothing about where Airtel sits, so both carriers can hold
-// priority 1 in the same corridor. The console groups its rows the same way;
-// omitting carrier here made Move down swap a Jio route with an Airtel one and
-// scramble an ordering the operator never asked to change.
+// Carrier used to be part of the grouping, because priority then ranked the ways
+// of reaching ONE network — "Jio Direct" ahead of "Jio via Aggregator A" — and
+// said nothing about where Airtel sat. With four operator binds and
+// priority-with-failover that is exactly the ordering the product now needs: a
+// corridor is one ladder, and priority is what expresses "try Airtel, then Jio,
+// then Vi, then BSNL". Carrier demotes to an ordinary attribute; two routes to
+// the same carrier simply sit adjacent in the one ladder.
 //
 // The swap runs in one transaction with the unique constraint deferred by
 // parking one row at a sentinel priority: without that, setting A to B's
@@ -359,11 +465,11 @@ func MoveRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, up bool) e
 	defer tx.Rollback(ctx)
 
 	if err := func() error {
-		var country, channel, carrier string
+		var country, channel string
 		var priority int
 		if err := tx.QueryRow(ctx,
-			`SELECT country, channel, carrier, priority FROM routes WHERE id = $1`, id,
-		).Scan(&country, &channel, &carrier, &priority); err != nil {
+			`SELECT country, channel, priority FROM routes WHERE id = $1`, id,
+		).Scan(&country, &channel, &priority); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -378,9 +484,9 @@ func MoveRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, up bool) e
 		var neighbourPriority int
 		err := tx.QueryRow(ctx, fmt.Sprintf(`
 			SELECT id, priority FROM routes
-			WHERE country = $1 AND channel = $2 AND carrier = $3 AND priority %s $4
+			WHERE country = $1 AND channel = $2 AND priority %s $3
 			ORDER BY priority %s LIMIT 1`, comparison, order),
-			country, channel, carrier, priority).Scan(&neighbourID, &neighbourPriority)
+			country, channel, priority).Scan(&neighbourID, &neighbourPriority)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Already at the end. Not an error: the console shows the arrow
 			// regardless, and refusing would make a harmless click fail.
@@ -410,26 +516,29 @@ func MoveRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, up bool) e
 
 // CreateRoute adds a route at the end of its carrier's order in a corridor.
 //
-// Always last and always disabled. Priority ranks the ways of reaching ONE
-// carrier, so a new path has to be tried after the ones already proven, and a
-// route that went live the moment it was typed would put real traffic on an
-// untested carrier connection before anybody looked at it.
+// Always last and always disabled. Priority ranks the whole corridor now, not
+// one carrier within it, so a new path is appended to the end of the ladder and
+// is tried after everything already proven. A route that went live the moment it
+// was typed would put real traffic on an untested connection before anybody
+// looked at it.
 func CreateRoute(ctx context.Context, pool *pgxpool.Pool, route Route) (Route, error) {
 	var created Route
 	err := pool.QueryRow(ctx, `
 		INSERT INTO routes (country, channel, carrier, label, priority,
-		                    compliance_standing, cost_per_segment_minor, currency, status)
+		                    compliance_standing, cost_per_segment_minor, currency, status,
+		                    connection_id)
 		SELECT $1, $2, $3, $4,
 		       COALESCE(MAX(priority), 0) + 1,
-		       $5, $6, $7, 'disabled'
+		       $5, $6, $7, 'disabled', $8
 		  FROM routes
-		 WHERE country = $1 AND channel = $2 AND carrier = $3
+		 WHERE country = $1 AND channel = $2
 		RETURNING id, country, channel, carrier, label, priority,
-		          compliance_standing, cost_per_segment_minor, currency, status`,
+		          compliance_standing, connection_id, cost_per_segment_minor, currency, status`,
 		route.Country, route.Channel, route.Carrier, route.Label,
 		route.ComplianceStanding, route.CostPerSegmentMinor, route.Currency,
+		route.ConnectionID,
 	).Scan(&created.ID, &created.Country, &created.Channel, &created.Carrier,
-		&created.Label, &created.Priority, &created.ComplianceStanding,
+		&created.Label, &created.Priority, &created.ComplianceStanding, &created.ConnectionID,
 		&created.CostPerSegmentMinor, &created.Currency, &created.Status)
 	if err != nil {
 		return Route{}, fmt.Errorf("store: create route: %w", err)
@@ -479,14 +588,14 @@ func DeleteRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) error {
 	// holds a negative priority outside a transaction like this one.
 	if _, err := tx.Exec(ctx, `
 		UPDATE routes SET priority = -priority
-		 WHERE country = $1 AND channel = $2 AND carrier = $3 AND priority > $4`,
-		country, channel, carrier, priority); err != nil {
+		 WHERE country = $1 AND channel = $2 AND priority > $3`,
+		country, channel, priority); err != nil {
 		return fmt.Errorf("store: close route priority gap: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE routes SET priority = (-priority) - 1
-		 WHERE country = $1 AND channel = $2 AND carrier = $3 AND priority < 0`,
-		country, channel, carrier); err != nil {
+		 WHERE country = $1 AND channel = $2 AND priority < 0`,
+		country, channel); err != nil {
 		return fmt.Errorf("store: close route priority gap: %w", err)
 	}
 	return tx.Commit(ctx)
@@ -594,8 +703,28 @@ func GetRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (Route, err
 // UpsertPricingRate sets the default price for a corridor. The currency is not
 // a parameter: it is a property of the country, and letting a caller change it
 // per edit would leave two rows for one corridor priced in different money.
+// UpsertPricingRate writes a default rate and reports what it replaced.
+//
+// The previous value is returned because the audit line needs it: "changed the
+// AE VOICE rate from 42 to 45" is actionable in an incident review and "the AE
+// VOICE rate was changed" is not. Read here rather than in the handler so the
+// two cannot drift, and so a caller cannot forget.
 func UpsertPricingRate(ctx context.Context, pool *pgxpool.Pool, country, channel,
-	category string, perSegmentMinor int64) (PricingRate, error) {
+	category string, perSegmentMinor int64) (PricingRate, *int64, error) {
+
+	var previous *int64
+	var existing int64
+	switch err := pool.QueryRow(ctx, `
+		SELECT per_segment_minor FROM pricing_rates
+		WHERE country = $1 AND channel = $2 AND category = $3`,
+		country, channel, category).Scan(&existing); {
+	case err == nil:
+		previous = &existing
+	case errors.Is(err, pgx.ErrNoRows):
+		// No default yet: this is the first rate for the corridor.
+	default:
+		return PricingRate{}, nil, fmt.Errorf("store: read pricing rate: %w", err)
+	}
 
 	var rate PricingRate
 	err := pool.QueryRow(ctx, `
@@ -609,9 +738,9 @@ func UpsertPricingRate(ctx context.Context, pool *pgxpool.Pool, country, channel
 		country, channel, category, perSegmentMinor,
 	).Scan(&rate.Country, &rate.Channel, &rate.Category, &rate.PerSegmentMinor, &rate.Currency)
 	if err != nil {
-		return PricingRate{}, fmt.Errorf("store: upsert pricing rate: %w", err)
+		return PricingRate{}, nil, fmt.Errorf("store: upsert pricing rate: %w", err)
 	}
-	return rate, nil
+	return rate, previous, nil
 }
 
 // PendingSender is a sender awaiting an operator decision, with the tenant it
@@ -848,23 +977,56 @@ func ListFlaggedTenants(ctx context.Context, pool *pgxpool.Pool) ([]OperatorTena
 // list. Deliberately not the tenant-scoped ListSupportTickets — an operator
 // working a queue needs to see across customers, which is exactly what the
 // tenant version must never do.
-func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
-	tenantFilter *uuid.UUID) ([]SupportTicket, error) {
+// SupportTicketFilter narrows the operator ticket list and positions one page.
+type SupportTicketFilter struct {
+	TenantID *uuid.UUID
+	Status   *string
+	Category *string
+	Cursor   string
+	Limit    int
+}
 
-	query := `
+// ListAllSupportTickets returns one page of tickets across every tenant, and
+// the number matching the filter.
+//
+// status and category are applied here now. The contract declared both and this
+// query read neither, so the console's two dropdowns rendered, accepted a
+// choice, and returned the same rows — which reads as "there are no open
+// tickets" rather than "the filter does nothing".
+func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
+	filter SupportTicketFilter) ([]SupportTicket, int, string, error) {
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
+	where := `
+		WHERE ($1::uuid IS NULL OR t.tenant_id = $1)
+		  AND ($2::text IS NULL OR t.status    = $2)
+		  AND ($3::text IS NULL OR t.category  = $3)`
+
+	var total int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM support_tickets t`+where,
+		filter.TenantID, filter.Status, filter.Category).Scan(&total); err != nil {
+		return nil, 0, "", fmt.Errorf("store: count support tickets: %w", err)
+	}
+
+	rows, err := pool.Query(ctx, `
 		SELECT t.id, t.tenant_id, n.name, t.subject, t.category, t.status,
 		       t.created_at, t.updated_at
-		FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id`
-	args := []any{}
-	if tenantFilter != nil {
-		query += ` WHERE t.tenant_id = $1`
-		args = append(args, *tenantFilter)
-	}
-	query += ` ORDER BY t.updated_at DESC, t.id DESC`
-
-	rows, err := pool.Query(ctx, query, args...)
+		FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id`+where+`
+		  AND ($4::timestamptz IS NULL OR (t.updated_at, t.id) < ($4, $5))
+		ORDER BY t.updated_at DESC, t.id DESC
+		LIMIT $6`,
+		filter.TenantID, filter.Status, filter.Category, cursorTime, cursorID, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("store: list all support tickets: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list all support tickets: %w", err)
 	}
 	defer rows.Close()
 	out := []SupportTicket{}
@@ -873,11 +1035,23 @@ func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
 		if err := rows.Scan(&ticket.ID, &ticket.TenantID, &ticket.TenantName,
 			&ticket.Subject, &ticket.Category, &ticket.Status,
 			&ticket.CreatedAt, &ticket.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("store: scan ticket: %w", err)
+			return nil, 0, "", fmt.Errorf("store: scan ticket: %w", err)
 		}
 		out = append(out, ticket)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, "", err
+	}
+
+	next := ""
+	if len(out) > limit {
+		// Keyed on updated_at, which is what this list is ordered by. Using
+		// created_at here would hand back a cursor that does not match the sort
+		// and silently skip or repeat rows.
+		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
 }
 
 // GetSupportTicketAnyTenant reads one ticket without a tenant context.

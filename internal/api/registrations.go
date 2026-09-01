@@ -119,8 +119,19 @@ func (s *Server) CreateRegistration(ctx context.Context, request gen.CreateRegis
 		}
 	}
 
+	// Lift a supplied registrationId out of the free-form bag into its typed
+	// column, and take it out of the bag.
+	//
+	// The bag's shape is owned by the regime, so that is where the customer
+	// types their DLT id. Leaving a copy behind would give the same value two
+	// homes that a later edit could pull apart, and the typed column is the one
+	// every reader uses. Keyed on the field being present rather than on the
+	// country: this is "did they give us an id", not a per-country special case.
+	registrationID := liftRegistrationID(fields)
+
 	created, err := store.CreateRegistration(ctx, s.DB, identity, store.Registration{
 		Country: country, ObjectKey: objectKey, Fields: fields,
+		ExternalID: registrationID,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		return gen.CreateRegistration409JSONResponse(errorBody(codeConflict,
@@ -130,4 +141,23 @@ func (s *Server) CreateRegistration(ctx context.Context, request gen.CreateRegis
 		return nil, err
 	}
 	return gen.CreateRegistration201JSONResponse(registrationResponse(created)), nil
+}
+
+// liftRegistrationID removes a registrationId from a submitted fields bag and
+// returns it, so the value lives in exactly one place.
+//
+// Blank or whitespace is treated as absent: a customer who tabs through the
+// field without typing has not given us a DLT id, and storing "" would make an
+// empty string look like an answer to every reader downstream.
+func liftRegistrationID(fields map[string]any) *string {
+	raw, present := fields["registrationId"]
+	if !present {
+		return nil
+	}
+	delete(fields, "registrationId")
+	value := strings.TrimSpace(fmt.Sprintf("%v", raw))
+	if value == "" {
+		return nil
+	}
+	return &value
 }

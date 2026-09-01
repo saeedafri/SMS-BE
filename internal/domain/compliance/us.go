@@ -5,7 +5,16 @@ type unitedStates struct{}
 func (unitedStates) Country() string  { return "US" }
 func (unitedStates) Label() string    { return "United States (10DLC/TCR)" }
 func (unitedStates) Currency() string { return "USD" }
-func (unitedStates) Stub() bool       { return false }
+
+// 10DLC registers a brand and a campaign with TCR, but nothing issues a
+// per-sender or per-template identifier the customer must carry the way DLT
+// does.
+func (unitedStates) RequiresRegistrationID(Tier) bool { return false }
+
+// 10DLC traffic goes out from a number the brand owns, so there is no
+// alphanumeric header shape to police here.
+func (unitedStates) ValidateHeader(string) ValidationResult { return valid() }
+func (unitedStates) Stub() bool                             { return false }
 
 func (r unitedStates) Object(key string) (RegistrationObject, bool) {
 	return findObject(r.RegistrationObjects(), key)

@@ -30,12 +30,20 @@ var (
 	validChannels     = []string{"SMS", "RCS", "WHATSAPP", "EMAIL", "VOICE"}
 	validCurrencies   = []string{"INR", "USD", "GBP", "AED"}
 	validEnvironments = []string{"live", "test"}
+	validBindTypes    = []string{"transmitter", "receiver", "transceiver"}
 	validFrequencies  = []string{"daily", "weekly", "monthly"}
 	validCardBrands   = []string{"visa", "mastercard", "amex"}
 	validRoles        = []string{"owner", "admin", "member"}
 	validCountries    = []string{"IN", "US", "GB", "AE"}
 	validStandings    = []string{"registered", "grey"}
-	validCarriers     = []string{"JIO", "AIRTEL", "VI", "BSNL", "VERIZON", "ATT",
+	// India DLT's content-template taxonomy. Deliberately NOT merged with
+	// TemplateCategory (Meta's WhatsApp taxonomy) even though both contain
+	// TRANSACTIONAL: Meta's is ordinary, DLT's is restricted to banking and OTP
+	// traffic, and a merged enum would accept UTILITY for an Indian template
+	// with nothing to catch it.
+	validDltCategories = []string{"PROMOTIONAL", "SERVICE_IMPLICIT",
+		"SERVICE_EXPLICIT", "TRANSACTIONAL"}
+	validCarriers = []string{"JIO", "AIRTEL", "VI", "BSNL", "VERIZON", "ATT",
 		"TMOBILE", "EE", "O2", "VODAFONE_UK", "THREE", "ETISALAT", "DU"}
 )
 
