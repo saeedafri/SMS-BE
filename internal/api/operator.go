@@ -1589,8 +1589,12 @@ func (s *Server) decideSender(ctx context.Context, id string, status, reason str
 		action = "sender.reject"
 	}
 	s.publishTenantEvent(ctx, sender.TenantID, "sender.decided", "", sender.ID.String())
+	// An approval carries no reason, so passing `reason` alone left the Audit
+	// table's most prominent column blank on every approve — half the rows on
+	// the screen. The detail says what was decided about what.
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
-		&sender.TenantID, sender.TenantName, sender.Header, reason); err != nil {
+		&sender.TenantID, sender.TenantName, sender.Header,
+		decisionDetail(action, "sender header", sender.Header, sender.TenantName, reason)); err != nil {
 		return store.PendingSender{}, err
 	}
 	return sender, nil
@@ -1685,7 +1689,8 @@ func (s *Server) decideTemplate(ctx context.Context, id string, status, reason s
 	}
 	s.publishTenantEvent(ctx, template.TenantID, "template.decided", "", template.ID.String())
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
-		&template.TenantID, template.TenantName, template.Name, reason); err != nil {
+		&template.TenantID, template.TenantName, template.Name,
+		decisionDetail(action, "template", template.Name, template.TenantName, reason)); err != nil {
 		return store.PendingTemplate{}, err
 	}
 	return template, nil
@@ -2301,4 +2306,24 @@ func auditDetail(action, tenantName string) string {
 		return ""
 	}
 	return verb + " " + tenantName
+}
+
+// decisionDetail is the sentence an approve or reject writes into the audit log.
+//
+// A rejection already carried its reason; an approval carried nothing, so the
+// Audit table's row header was blank on every approve. Both now say what was
+// decided, about what, for whom — the line an operator quotes into a write-up.
+func decisionDetail(action, kind, subject, tenantName, reason string) string {
+	verb := "Approved"
+	if strings.HasSuffix(action, ".reject") {
+		verb = "Rejected"
+	}
+	detail := fmt.Sprintf("%s the %s %q", verb, kind, subject)
+	if tenantName != "" {
+		detail += " for " + tenantName
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		detail += ": " + reason
+	}
+	return detail
 }

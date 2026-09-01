@@ -159,3 +159,50 @@ func TestOperatorActionsRecordAReadableDetail(t *testing.T) {
 		t.Error("detail is empty — the Audit table's most prominent column has nothing in it")
 	}
 }
+
+// Approvals write a readable detail too, not only rejections.
+//
+// A rejection always carried its reason; an approval passed the same empty
+// string, so every approve row — half the Audit table — had a blank in its most
+// prominent column.
+func TestApprovingASenderWritesAReadableDetail(t *testing.T) {
+	h := newHarness(t)
+	operator := h.operatorToken()
+	acct := h.newAccount("owner")
+
+	created := h.do(http.MethodPost, "/v1/sender-ids", acct.Token, map[string]any{
+		"header": "AUDTDT", "channel": "SMS", "country": "IN",
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create sender = %d\n%s", created.Code, created.Body)
+	}
+	var sender struct {
+		Id string `json:"id"`
+	}
+	created.decode(t, &sender)
+
+	if res := h.do(http.MethodPost, "/v1/operator/senders/"+sender.Id+"/approve",
+		operator, nil); res.Code != http.StatusOK {
+		t.Fatalf("approve = %d\n%s", res.Code, res.Body)
+	}
+
+	res := h.do(http.MethodGet, "/v1/operator/audit-log?range=90d&action=sender.approve",
+		operator, nil)
+	var log struct {
+		Entries []struct {
+			TargetLabel string `json:"targetLabel"`
+			Detail      string `json:"detail"`
+		} `json:"entries"`
+	}
+	res.decode(t, &log)
+	for _, entry := range log.Entries {
+		if entry.TargetLabel != "AUDTDT" {
+			continue
+		}
+		if entry.Detail == "" {
+			t.Fatal("an approval wrote an empty detail — the Audit table's row header is blank")
+		}
+		return
+	}
+	t.Fatal("the approval was not audited")
+}
