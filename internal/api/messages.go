@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -177,6 +178,30 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
 			"A JSON body with senderId, to and body is required.")), nil
 	}
+	// Idempotency is a money control on this endpoint, not a convenience.
+	//
+	// A client whose OTP submit times out will retry, and without this the
+	// retry is a second message and a second charge with nothing tying the two
+	// together. Checked before anything else observable happens, so a replay
+	// costs one lookup and touches neither the wallet nor the carrier.
+	idempotencyKey := ""
+	if request.Params.IdempotencyKey != nil {
+		idempotencyKey = strings.TrimSpace(*request.Params.IdempotencyKey)
+	}
+	if idempotencyKey != "" {
+		stored, found, err := store.FindIdempotentResponse(ctx, s.DB, identity,
+			"messages.send", idempotencyKey)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			var replay gen.SendMessageResult
+			if err := json.Unmarshal(stored, &replay); err == nil {
+				return gen.SendMessage202JSONResponse(replay), nil
+			}
+		}
+	}
+
 	to := strings.TrimSpace(request.Body.To)
 	body := strings.TrimSpace(request.Body.Body)
 	if to == "" || body == "" {
@@ -255,6 +280,17 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	if result.FailureCode != "" {
 		code := result.FailureCode
 		out.ErrorCode = &code
+	}
+	// Stored only once the send has an outcome, so a crash mid-send leaves the
+	// key unclaimed and the client's retry is a real attempt rather than a
+	// replay of something that never happened.
+	if idempotencyKey != "" {
+		if encoded, err := json.Marshal(out); err == nil {
+			if err := store.SaveIdempotentResponse(ctx, s.DB, identity,
+				"messages.send", idempotencyKey, encoded); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return gen.SendMessage202JSONResponse(out), nil
 }

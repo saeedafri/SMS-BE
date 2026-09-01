@@ -17,6 +17,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/store"
 )
@@ -89,6 +90,23 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 	}
 	if err != nil {
 		return SendResult{}, err
+	}
+
+	// 1a. Apply the country's own content rules to the body.
+	//
+	// India bans public URL shorteners under DLT. That rule lived in the
+	// regime, was enforced when a TEMPLATE was created, and was absent from the
+	// send path — so a bit.ly link went out fine as long as nobody put it in a
+	// template first. The browser also checks, but a client-side rule is a hint;
+	// this is the control, and it sits here rather than in the HTTP handler so
+	// campaign sends and API sends cannot diverge.
+	if regime, known := compliance.For(sender.Country); known {
+		for _, url := range compliance.ExtractURLs(request.Body) {
+			if result := regime.ValidateCtaURL(url); !result.OK {
+				return SendResult{Status: "rejected", FailureCode: "content_not_allowed"},
+					fmt.Errorf("%w: %s", messaging.ErrContentNotAllowed, result.Reason)
+			}
+		}
 	}
 
 	// 2. Normalise the recipient the same way the audience import does, so a

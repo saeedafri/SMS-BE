@@ -19,6 +19,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
+	"github.com/saeedafri/sms-be/internal/platform/secrets"
 )
 
 // Server satisfies the generated contract interface. Embedding Unimplemented
@@ -46,6 +47,11 @@ type Server struct {
 	// SignupInviteCode, when set, is required by POST /v1/auth/signup. Empty
 	// leaves self-registration open.
 	SignupInviteCode string
+
+	// Secrets encrypts values that must be recoverable — today the SMPP bind
+	// passwords. Nil when no key is configured, in which case storing a bind
+	// password refuses rather than falling back to plaintext.
+	Secrets *secrets.Box
 
 	// OperatorDB sees across tenants and is used ONLY by operator-console
 	// handlers. Tenant handlers must keep using DB: that split is what stops a
@@ -148,6 +154,15 @@ func NewRouter(s *Server) http.Handler {
 	// an operator login.
 	r.Use(s.restrictOperatorNetwork)
 	r.Use(s.authenticate)
+	// additionalProperties: false, actually enforced. It is declared on
+	// ConnectionCreate and ConnectionUpdate and is documentation without this:
+	// encoding/json drops unknown keys silently. Middleware rather than a check
+	// in each handler, because the failure being guarded against is a handler
+	// that forgot — one path enforcing it while its sibling did not.
+	r.Use(rejectUnknownFields(map[string][]string{
+		"POST /v1/operator/connections":       connectionBodyFields,
+		"PATCH /v1/operator/connections/{id}": connectionBodyFields,
+	}))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")

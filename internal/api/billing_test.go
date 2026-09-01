@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -177,3 +178,86 @@ func TestUsageReflectsActualCharges(t *testing.T) {
 		t.Fatalf("amountMinor = %d, want 12000", report.ByChannel[0].AmountMinor)
 	}
 }
+
+// A journey's messageCount is its real volume, not that volume multiplied by
+// how many send steps settled.
+//
+// This is the trap the frontend asked us to prove we had avoided: a campaign
+// settles one ledger charge row, a journey settles one PER settled send step,
+// so accumulating the count the way amountMinor is accumulated silently
+// multiplies a journey's volume by its step count with no error to catch it.
+// The count here is taken from the message rows and grouped by the journey, so
+// charge rows never enter into it.
+//
+// The second hazard is this table's engine. messages is a ReplacingMergeTree:
+// every status change writes another row for the same id, and the versions
+// coexist until a background merge collapses them. Counting rows would report
+// one number before a merge and another after, with no data change in between.
+// So the two send steps below each get a superseded 'sent' row alongside their
+// final 'delivered' one, and the answer must still be 2.
+func TestJourneyMessageCountIsNotMultipliedByItsSteps(t *testing.T) {
+	h := newSendHarness(t)
+	acct := h.newAccount("owner")
+
+	ctx := context.Background()
+	conn, err := h.server.ClickHouse.Conn(ctx)
+	if err != nil {
+		t.Fatalf("clickhouse: %v", err)
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO messages (
+		tenant_id, id, journey_id, journey_name, channel, country, sender_header,
+		msisdn, status, fraud_flag, segments, cost_minor, currency,
+		created_at, updated_at, version)`)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	journeyID := uuid.New()
+	now := time.Now().UTC()
+	// Two distinct messages, one per settled send step.
+	//
+	// The first is written twice: delivered, then read. Both statuses are
+	// billable, so a count of ROWS sees three messages where there are two, and
+	// a sum over rows whose status is exactly 'delivered' loses the first
+	// message's charge as soon as a merge collapses it to its 'read' row.
+	first, second := uuid.New(), uuid.New()
+	type versionRow struct {
+		id      uuid.UUID
+		status  string
+		version uint64
+	}
+	for _, r := range []versionRow{
+		{first, "delivered", 1},
+		{first, "read", 2},
+		{second, "delivered", 1},
+	} {
+		if err := batch.Append(acct.TenantID, r.id, &journeyID,
+			ptr("Winback"), "SMS", "IN", "ACMERT", "+919820000001", r.status,
+			"none", uint8(1), int64(500), "INR", now, now, r.version); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send batch: %v", err)
+	}
+
+	res := h.do(http.MethodGet, "/v1/billing/usage?range=30d&currency=INR", acct.Token, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	var report gen.UsageReport
+	res.decode(t, &report)
+
+	if len(report.ByJourney) != 1 {
+		t.Fatalf("got %d journey rows, want 1: %+v", len(report.ByJourney), report.ByJourney)
+	}
+	row := report.ByJourney[0]
+	if row.MessageCount != 2 {
+		t.Errorf("messageCount = %d, want 2 — three rows for two messages across two steps",
+			row.MessageCount)
+	}
+	if row.AmountMinor != 1000 {
+		t.Errorf("amountMinor = %d, want 1000", row.AmountMinor)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

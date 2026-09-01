@@ -124,6 +124,14 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 	if request.Params.Currency != nil {
 		currency = string(*request.Params.Currency)
 	}
+	// The contract declares `range` on this endpoint and it was read by nothing,
+	// so every window returned the same all-time numbers. Same default as
+	// /v1/analytics: absent means 30d.
+	since := rangeSince("30d")
+	if request.Params.Range != nil {
+		since = rangeSince(string(*request.Params.Range))
+	}
+
 	byChannel, err := store.UsageByChannel(ctx, s.DB, identity, currency)
 	if err != nil {
 		return nil, err
@@ -141,7 +149,7 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 	campaigns := []gen.UsageByCampaign{}
 	journeys := []gen.UsageByJourney{}
 	if clickhouse, chErr := s.clickhouse(ctx); chErr == nil {
-		byCampaign, err := store.UsageByCampaign(ctx, clickhouse, identity.TenantID)
+		byCampaign, err := store.UsageByCampaign(ctx, clickhouse, identity.TenantID, since, currency)
 		if err != nil {
 			return nil, s.clickhouseFailed(err)
 		}
@@ -152,12 +160,13 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 			}
 			campaigns = append(campaigns, gen.UsageByCampaign{
 				CampaignId: id.String(), CampaignName: row.Name,
-				Channel:     gen.ChannelId(row.Channel),
-				Currency:    gen.CurrencyCode(row.Currency),
-				AmountMinor: int(row.Amount),
+				Channel:      gen.ChannelId(row.Channel),
+				Currency:     gen.CurrencyCode(row.Currency),
+				MessageCount: row.MessageCount,
+				AmountMinor:  int(row.Amount),
 			})
 		}
-		byJourney, err := store.UsageByJourney(ctx, clickhouse, identity.TenantID)
+		byJourney, err := store.UsageByJourney(ctx, clickhouse, identity.TenantID, since, currency)
 		if err != nil {
 			return nil, s.clickhouseFailed(err)
 		}
@@ -168,9 +177,10 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 			}
 			journeys = append(journeys, gen.UsageByJourney{
 				JourneyId: id.String(), JourneyName: row.Name,
-				Channel:     gen.ChannelId(row.Channel),
-				Currency:    gen.CurrencyCode(row.Currency),
-				AmountMinor: int(row.Amount),
+				Channel:      gen.ChannelId(row.Channel),
+				Currency:     gen.CurrencyCode(row.Currency),
+				MessageCount: row.MessageCount,
+				AmountMinor:  int(row.Amount),
 			})
 		}
 	}

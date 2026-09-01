@@ -13,7 +13,13 @@ type stub struct {
 func (s stub) Country() string  { return s.country }
 func (s stub) Label() string    { return s.label }
 func (s stub) Currency() string { return s.currency }
-func (stub) Stub() bool         { return true }
+
+// A stub registers nothing, so it requires nothing.
+func (stub) RequiresRegistrationID(Tier) bool { return false }
+
+// A stub has no registration rules to check a header against.
+func (stub) ValidateHeader(string) ValidationResult { return valid() }
+func (stub) Stub() bool                             { return true }
 
 func (stub) RegistrationObjects() []RegistrationObject { return nil }
 

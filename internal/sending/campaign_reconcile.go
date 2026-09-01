@@ -52,22 +52,22 @@ func ReconcileStuckCampaigns(ctx context.Context, tenants, db *pgxpool.Pool,
 	// ponytail: one query per tenant per tick. Fine at this scale; if the
 	// tenant count ever makes this hurt, give campaigns an operator read policy
 	// and do it in a single cross-tenant query.
-	rows, err := store.ListTenants(ctx, tenants, nil, nil)
+	rows, err := store.AllTenantIDs(ctx, tenants)
 	if err != nil {
 		return 0, err
 	}
 
 	landed, failures := 0, []error(nil)
-	for _, tenant := range rows {
-		identity := store.Identity{TenantID: tenant.ID}
+	for _, tenantID := range rows {
+		identity := store.Identity{TenantID: tenantID}
 		stuck, err := store.FindStuckCampaigns(ctx, db, identity, cutoff, limit)
 		if err != nil {
 			// One tenant must never stall the sweep for everybody else.
-			failures = append(failures, fmt.Errorf("tenant %s: %w", tenant.ID, err))
+			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))
 			continue
 		}
 		for _, campaign := range stuck {
-			counts, err := store.CountCampaignMessages(ctx, clickhouse, tenant.ID, campaign.ID)
+			counts, err := store.CountCampaignMessages(ctx, clickhouse, tenantID, campaign.ID)
 			if err != nil {
 				failures = append(failures, fmt.Errorf("campaign %s: %w", campaign.ID, err))
 				continue

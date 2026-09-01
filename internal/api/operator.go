@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,7 +221,18 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 		value := string(*request.Params.Country)
 		country = &value
 	}
-	tenants, err := store.ListTenants(ctx, s.operatorPool(), status, country)
+	cursor, limit := "", 0
+	if request.Params.Cursor != nil {
+		cursor = *request.Params.Cursor
+	}
+	if request.Params.Limit != nil {
+		limit = *request.Params.Limit
+	}
+	tenants, total, next, err := store.ListTenants(ctx, s.operatorPool(), status, country, cursor, limit)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.GetTenants422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +240,11 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 	for _, tenant := range tenants {
 		out = append(out, toOperatorTenant(tenant))
 	}
-	return gen.GetTenants200JSONResponse{Tenants: out}, nil
+	page := gen.GetTenants200JSONResponse{Tenants: out, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
 }
 
 // operatorAction applies a state change to a tenant and records who did it.
@@ -254,7 +272,30 @@ func (s *Server) operatorAction(ctx context.Context, id string, action string,
 	// them changes what the customer is allowed to do right now.
 	s.publishTenantEvent(ctx, tenantID, "tenant.status_changed", "", "")
 	return store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
-		&tenantID, tenant.Name, tenant.Name, "")
+		&tenantID, tenant.Name, tenant.Name, tenantActionDetail(action, tenant.Name))
+}
+
+// tenantActionDetail is the sentence the Audit table shows as its row header.
+//
+// Every one of these used to record an empty detail, so the most prominent
+// column on the screen was blank and the log read as a list of verbs with no
+// objects. The target label already names the tenant; this says what was done
+// to them, in the words an operator would use writing it up.
+func tenantActionDetail(action, tenantName string) string {
+	switch action {
+	case "tenant.suspend":
+		return "Suspended " + tenantName
+	case "tenant.reinstate":
+		return "Reinstated " + tenantName
+	case "tenant.throttle":
+		return "Throttled sending for " + tenantName
+	case "tenant.flag_abuse":
+		return "Flagged " + tenantName + " for abuse review"
+	case "tenant.dismiss_flag":
+		return "Dismissed the abuse flag on " + tenantName
+	default:
+		return ""
+	}
 }
 
 func toTenantDetail(tenant store.OperatorTenant) gen.TenantDetail {
@@ -594,6 +635,9 @@ func (s *Server) GetRoutes(ctx context.Context, request gen.GetRoutesRequestObje
 			CostPerSegmentMinor: int(route.CostPerSegmentMinor),
 			Currency:            gen.CurrencyCode(route.Currency),
 			Status:              gen.RouteStatus(route.Status),
+			// Required key, nullable value: an unwired corridor and an absent
+			// field are different facts, and only one should be representable.
+			ConnectionId: route.ConnectionID,
 		})
 	}
 	return gen.GetRoutes200JSONResponse{Routes: out}, nil
@@ -611,7 +655,26 @@ func (s *Server) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequest
 		value := string(*request.Params.Action)
 		auditAction = &value
 	}
-	entries, err := store.ListAuditLog(ctx, s.DB, 100, request.Params.TenantId, auditAction)
+	// range, cursor and limit were all declared by the contract and read by
+	// nothing: every call returned the newest 100 rows whatever was asked for.
+	since := rangeSince("30d")
+	if request.Params.Range != nil {
+		since = rangeSince(string(*request.Params.Range))
+	}
+	filter := store.AuditLogFilter{
+		TenantID: request.Params.TenantId, Action: auditAction, Since: since,
+	}
+	if request.Params.Cursor != nil {
+		filter.Cursor = *request.Params.Cursor
+	}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	entries, total, next, err := store.ListAuditLog(ctx, s.DB, filter)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.GetAuditLog422JSONResponse(
+			errorBody(codeValidation, "Malformed cursor.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -635,7 +698,11 @@ func (s *Server) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequest
 		}
 		out = append(out, row)
 	}
-	return gen.GetAuditLog200JSONResponse{Entries: out}, nil
+	page := gen.GetAuditLog200JSONResponse{Entries: out, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
 }
 
 // routeAction changes a route and records who did it. Route order decides which
@@ -652,11 +719,40 @@ func (s *Server) routeAction(ctx context.Context, id string, action string,
 	if !valid {
 		return store.ErrNotFound
 	}
+	// Read BEFORE the change, not after: route.delete removes the row, so a
+	// label read afterwards is always the bare uuid — which is the one entry
+	// where knowing which route it was matters most.
+	label := routeID.String()
+	if route, err := store.GetRoute(ctx, s.DB, routeID); err == nil && route.Label != "" {
+		label = route.Label
+	}
 	if err := apply(routeID); err != nil {
 		return err
 	}
 	return store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
-		nil, "", routeID.String(), "")
+		nil, "", label, routeActionDetail(action, label))
+}
+
+// routeActionDetail describes a routing change in words.
+//
+// Route order decides which carrier a tenant's traffic actually takes, so "the
+// route was moved up" without saying which route, past what, is not something
+// anyone can act on weeks later.
+func routeActionDetail(action, label string) string {
+	switch action {
+	case "route.enable":
+		return "Enabled the " + label + " route"
+	case "route.disable":
+		return "Disabled the " + label + " route"
+	case "route.move_up":
+		return "Raised the priority of the " + label + " route"
+	case "route.move_down":
+		return "Lowered the priority of the " + label + " route"
+	case "route.delete":
+		return "Deleted the " + label + " route"
+	default:
+		return ""
+	}
 }
 
 // routeBeforeChange reads a route so a handler can refuse the change. It stays
@@ -694,6 +790,7 @@ func toGenRoute(route store.Route) gen.Route {
 		CostPerSegmentMinor: int(route.CostPerSegmentMinor),
 		Currency:            gen.CurrencyCode(route.Currency),
 		Status:              gen.RouteStatus(route.Status),
+		ConnectionId:        route.ConnectionID,
 	}
 }
 
@@ -726,6 +823,8 @@ func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequest
 		ComplianceStanding:  string(request.Body.ComplianceStanding),
 		CostPerSegmentMinor: int64(request.Body.CostPerSegmentMinor),
 		Currency:            string(request.Body.Currency),
+		// Optional: a corridor may be defined before its bind exists.
+		ConnectionID: request.Body.ConnectionId,
 	}
 	for _, check := range []struct {
 		value   string
@@ -910,14 +1009,23 @@ func (s *Server) UpdateDefaultRate(ctx context.Context, request gen.UpdateDefaul
 		return gen.UpdateDefaultRate422JSONResponse(errorBody(codeValidation,
 			enumMessage("Channel", validChannels))), nil
 	}
-	rate, err := store.UpsertPricingRate(ctx, s.DB, string(request.Body.Country),
+	rate, previous, err := store.UpsertPricingRate(ctx, s.DB, string(request.Body.Country),
 		string(request.Body.Channel), category, int64(request.Body.PerSegmentMinor))
 	if err != nil {
 		return nil, err
 	}
+	// The target label names the corridor; the detail says what actually changed
+	// about it. Without the old number the entry records that a price moved but
+	// not from where, which is the one thing an incident review needs.
+	corridor := string(request.Body.Country) + " " + string(request.Body.Channel)
+	detail := fmt.Sprintf("Set the %s default rate to %d %s (minor units)",
+		corridor, request.Body.PerSegmentMinor, rate.Currency)
+	if previous != nil {
+		detail = fmt.Sprintf("Changed the %s default rate from %d to %d %s (minor units)",
+			corridor, *previous, request.Body.PerSegmentMinor, rate.Currency)
+	}
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "rate.default_update",
-		nil, "", string(request.Body.Country)+" "+string(request.Body.Channel),
-		""); err != nil {
+		nil, "", corridor, detail); err != nil {
 		return nil, err
 	}
 
@@ -1011,7 +1119,10 @@ func (s *Server) CreateRateOverride(ctx context.Context,
 	}
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "rate.override_create",
 		&request.Body.TenantId, tenant.Name,
-		string(request.Body.Country)+" "+string(request.Body.Channel), ""); err != nil {
+		string(request.Body.Country)+" "+string(request.Body.Channel),
+		fmt.Sprintf("Gave %s a negotiated %s %s rate of %d %s (minor units)",
+			tenant.Name, request.Body.Country, request.Body.Channel,
+			request.Body.PerSegmentMinor, created.Currency)); err != nil {
 		return nil, err
 	}
 	created.TenantName = tenant.Name
@@ -1048,7 +1159,10 @@ func (s *Server) EditRateOverride(ctx context.Context,
 	}
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "rate.override_update",
 		&override.TenantID, override.TenantName,
-		override.Country+" "+override.Channel, ""); err != nil {
+		override.Country+" "+override.Channel,
+		fmt.Sprintf("Changed %s's negotiated %s %s rate to %d %s (minor units)",
+			override.TenantName, override.Country, override.Channel,
+			override.PerSegmentMinor, override.Currency)); err != nil {
 		return nil, err
 	}
 	return gen.EditRateOverride200JSONResponse(toTenantRateOverride(override)), nil
@@ -1082,7 +1196,11 @@ func (s *Server) RemoveRateOverride(ctx context.Context,
 	}
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "rate.override_delete",
 		&override.TenantID, override.TenantName,
-		override.Country+" "+override.Channel, ""); err != nil {
+		override.Country+" "+override.Channel,
+		fmt.Sprintf("Removed %s's negotiated %s %s rate of %d %s (minor units); "+
+			"they fall back to the default",
+			override.TenantName, override.Country, override.Channel,
+			override.PerSegmentMinor, override.Currency)); err != nil {
 		return nil, err
 	}
 	return gen.RemoveRateOverride204Response{}, nil
@@ -1151,7 +1269,19 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 			(wantCountry == "" || wantCountry == country)
 	}
 
-	items := make([]gen.ApprovalQueueItem, 0, len(senders)+len(templates)+len(registrations))
+	// Carried with its timestamp so the merge can be ordered.
+	//
+	// Appending the three sources back to back left the queue grouped by kind
+	// rather than by age, which is invisible while everything is returned and
+	// wrong the moment it is paged: with a hundred pending senders, the first
+	// page is all senders and a registration submitted weeks earlier never
+	// appears at all. An operator works "what needs a decision next", so the
+	// merge is sorted newest-first across all three kinds before it is cut.
+	type queuedItem struct {
+		at   time.Time
+		item gen.ApprovalQueueItem
+	}
+	queued := make([]queuedItem, 0, len(senders)+len(templates)+len(registrations))
 	for _, sender := range senders {
 		if !keep("sender", sender.Country, sender.Status) {
 			continue
@@ -1179,7 +1309,7 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		}); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		queued = append(queued, queuedItem{at: sender.CreatedAt, item: item})
 	}
 	for _, template := range templates {
 		if !keep("template", template.Country, template.Status) {
@@ -1197,7 +1327,7 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		if err := item.FromApprovalQueueTemplateItem(entry); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		queued = append(queued, queuedItem{at: template.CreatedAt, item: item})
 	}
 	for _, reg := range registrations {
 		if !keep("registration", reg.Country, reg.Status) {
@@ -1220,9 +1350,75 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		if err := item.FromApprovalQueueRegistrationItem(entry); err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		queued = append(queued, queuedItem{at: reg.CreatedAt, item: item})
 	}
-	return gen.GetApprovalQueue200JSONResponse{Items: items}, nil
+	sort.SliceStable(queued, func(a, b int) bool { return queued[a].at.After(queued[b].at) })
+	items := make([]gen.ApprovalQueueItem, 0, len(queued))
+	for _, entry := range queued {
+		items = append(items, entry.item)
+	}
+
+	// Paged in memory over the merged list, and the cursor is an offset.
+	//
+	// The other paged endpoints keyset on (created_at, id) against one table.
+	// This queue is a merge of three with different shapes, so a keyset cursor
+	// would need a sort key that exists in all three and a three-way merge to
+	// resume from — a lot of machinery for a list bounded by what staff have not
+	// yet decided. The offset is honest about what it is: if rows are decided
+	// between two page reads the window shifts, which for a queue being worked
+	// down is a redraw, not a correctness problem.
+	//
+	// ponytail: offset cursor over a merged queue; keyset it if the pending
+	// backlog ever justifies the three-way merge.
+	total := len(items)
+	offset := 0
+	if request.Params.Cursor != nil && *request.Params.Cursor != "" {
+		decoded, err := decodeOffsetCursor(*request.Params.Cursor)
+		if err != nil {
+			return gen.GetApprovalQueue422JSONResponse(
+				errorBody(codeValidation, "That page cursor is not valid.")), nil
+		}
+		offset = decoded
+	}
+	limit := 100
+	if request.Params.Limit != nil && *request.Params.Limit > 0 {
+		limit = *request.Params.Limit
+	}
+	if offset > total {
+		offset = total
+	}
+	window := items[offset:]
+	page := gen.GetApprovalQueue200JSONResponse{Total: total}
+	if len(window) > limit {
+		window = window[:limit]
+		next := encodeOffsetCursor(offset + limit)
+		page.NextCursor = &next
+	}
+	page.Items = window
+	return page, nil
+}
+
+// encodeOffsetCursor and decodeOffsetCursor carry a position through an opaque
+// string, so a client cannot come to depend on it being an offset. The contract
+// promises opacity, not a keyset.
+func encodeOffsetCursor(offset int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("offset:" + strconv.Itoa(offset)))
+}
+
+func decodeOffsetCursor(cursor string) (int, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return 0, fmt.Errorf("malformed cursor")
+	}
+	value, ok := strings.CutPrefix(string(raw), "offset:")
+	if !ok {
+		return 0, fmt.Errorf("malformed cursor")
+	}
+	offset, err := strconv.Atoi(value)
+	if err != nil || offset < 0 {
+		return 0, fmt.Errorf("malformed cursor")
+	}
+	return offset, nil
 }
 
 // decodeRegistrationFields turns the stored jsonb into the map the contract
@@ -1268,8 +1464,10 @@ func (s *Server) ApproveRegistrationItem(ctx context.Context,
 		return nil, err
 	}
 	if err := store.RecordOperatorAction(ctx, s.operatorPool(), operator.Email,
-		"registration.approve", &reg.TenantID, "",
-		reg.Country+" "+reg.ObjectKey, ""); err != nil {
+		"registration.approve", &reg.TenantID, reg.TenantName,
+		reg.Country+" "+reg.ObjectKey,
+		fmt.Sprintf("Approved the %s %s registration, unblocking sending in %s",
+			reg.Country, reg.ObjectKey, reg.Country)); err != nil {
 		return nil, err
 	}
 	// The customer is watching a screen that said "in review". Tell it.
@@ -1312,8 +1510,10 @@ func (s *Server) RejectRegistrationItem(ctx context.Context,
 		return nil, err
 	}
 	if err := store.RecordOperatorAction(ctx, s.operatorPool(), operator.Email,
-		"registration.reject", &reg.TenantID, "",
-		reg.Country+" "+reg.ObjectKey, reason); err != nil {
+		"registration.reject", &reg.TenantID, reg.TenantName,
+		reg.Country+" "+reg.ObjectKey,
+		fmt.Sprintf("Rejected the %s %s registration: %s",
+			reg.Country, reg.ObjectKey, reason)); err != nil {
 		return nil, err
 	}
 	s.publishTenantEvent(ctx, reg.TenantID, "registration.decided", "", reg.ID.String())
@@ -1572,7 +1772,26 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 		return gen.GetOperatorSupportTickets401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
-	tickets, err := store.ListAllSupportTickets(ctx, s.operatorPool(), request.Params.TenantId)
+	filter := store.SupportTicketFilter{TenantID: request.Params.TenantId}
+	if request.Params.Status != nil {
+		value := string(*request.Params.Status)
+		filter.Status = &value
+	}
+	if request.Params.Category != nil {
+		value := string(*request.Params.Category)
+		filter.Category = &value
+	}
+	if request.Params.Cursor != nil {
+		filter.Cursor = *request.Params.Cursor
+	}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	tickets, total, next, err := store.ListAllSupportTickets(ctx, s.operatorPool(), filter)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.GetOperatorSupportTickets422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1590,7 +1809,11 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 		}
 		out = append(out, toGenTicket(ticket))
 	}
-	return gen.GetOperatorSupportTickets200JSONResponse{Tickets: out}, nil
+	page := gen.GetOperatorSupportTickets200JSONResponse{Tickets: out, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
 }
 
 func (s *Server) GetOperatorSupportTicket(ctx context.Context,
@@ -1935,8 +2158,15 @@ func (s *Server) GetUserActivity(ctx context.Context,
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
+	if request.Params.Cursor != nil {
+		filter.Cursor = *request.Params.Cursor
+	}
 
-	activity, err := store.ListUserActivity(ctx, s.operatorPool(), filter)
+	activity, total, next, err := store.ListUserActivity(ctx, s.operatorPool(), filter)
+	if errors.Is(err, store.ErrInvalidCursor) {
+		return gen.GetUserActivity422JSONResponse(
+			errorBody(codeValidation, "That page cursor is not valid.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1950,7 +2180,11 @@ func (s *Server) GetUserActivity(ctx context.Context,
 			Detail: event.Detail,
 		})
 	}
-	return gen.GetUserActivity200JSONResponse{Entries: entries}, nil
+	page := gen.GetUserActivity200JSONResponse{Entries: entries, Total: total}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
 }
 
 // rangeStart turns the contract's analytics range into the timestamp to look

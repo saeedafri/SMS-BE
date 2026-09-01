@@ -447,19 +447,25 @@ type Suppression struct {
 }
 
 func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	cursor string, limit int) ([]Suppression, string, error) {
+	cursor string, limit int) ([]Suppression, int, string, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 
 	var out []Suppression
 	var ids []uuid.UUID
+	var total int
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Counted without the cursor: this is the footer's denominator, and one
+		// that shrank as the reader paged would be worse than none.
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppressions`).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT id, identity, msisdn, email, reason, note, created_at
 			FROM suppressions
@@ -484,7 +490,7 @@ func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("store: list suppressions: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list suppressions: %w", err)
 	}
 
 	next := ""
@@ -492,7 +498,7 @@ func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		next = encodeLedgerCursor(out[limit-1].CreatedAt, ids[limit-1])
 		out = out[:limit]
 	}
-	return out, next, nil
+	return out, total, next, nil
 }
 
 // AddSuppression records an opt-out. Re-suppressing an identity is a no-op

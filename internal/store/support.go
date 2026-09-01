@@ -35,16 +35,41 @@ type SupportMessage struct {
 
 // ListSupportTickets returns the tenant's tickets, narrowed by status and
 // category when given. Nil means no filter.
-func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity, status, category *string) ([]SupportTicket, error) {
+// ListSupportTickets pages one tenant's tickets and reports how many match.
+//
+// The operator sibling has paged since it was written; this one had no way to
+// ask for a second page, so the customer Support screen could only ever show
+// the first slice of its own tickets.
+func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	status, category *string, cursor string, limit int) ([]SupportTicket, int, string, error) {
+
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
 	var out []SupportTicket
-	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	var total int
+	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM support_tickets t
+			WHERE ($1::text IS NULL OR t.status   = $1)
+			  AND ($2::text IS NULL OR t.category = $2)`,
+			status, category).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT t.id, t.tenant_id, n.name, t.subject, t.category, t.status,
 			       t.created_at, t.updated_at
 			FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id
 			WHERE ($1::text IS NULL OR t.status   = $1)
 			  AND ($2::text IS NULL OR t.category = $2)
-			ORDER BY t.updated_at DESC, t.id DESC`, status, category)
+			  AND ($3::timestamptz IS NULL OR (t.updated_at, t.id) < ($3, $4))
+			ORDER BY t.updated_at DESC, t.id DESC
+			LIMIT $5`, status, category, cursorTime, cursorID, limit+1)
 		if err != nil {
 			return err
 		}
@@ -61,9 +86,15 @@ func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity, st
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list support tickets: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list support tickets: %w", err)
 	}
-	return out, nil
+
+	next := ""
+	if len(out) > limit {
+		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
 }
 
 func GetSupportTicket(ctx context.Context, pool *pgxpool.Pool, id Identity,
@@ -273,11 +304,38 @@ type ConversationFilter struct {
 	Channel *string
 	Status  *string
 	Unread  *bool
+	Cursor  string
+	Limit   int
 }
 
-func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity, filter ConversationFilter) ([]Conversation, error) {
+// ListConversations pages the inbox and reports how many threads match.
+//
+// limit and cursor were declared by the contract and read by nothing: asking
+// for three threads returned every one. total was the length of that response,
+// which looked correct only because nothing was ever cut.
+func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	filter ConversationFilter) ([]Conversation, int, string, error) {
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
+	if err != nil {
+		return nil, 0, "", err
+	}
+
 	var out []Conversation
-	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	var total int
+	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM conversations c
+			WHERE ($1::text IS NULL OR c.channel = $1)
+			  AND ($2::text IS NULL OR c.status  = $2)
+			  AND ($3::bool IS NULL OR c.unread  = $3)`,
+			filter.Channel, filter.Status, filter.Unread).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT `+conversationColumns+`
 			FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
@@ -286,8 +344,10 @@ func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity, fil
 			  -- Only filters when the caller asked. unread=false is a real
 			  -- request for read threads, not the same as omitting it.
 			  AND ($3::bool IS NULL OR c.unread  = $3)
-			ORDER BY c.updated_at DESC, c.id DESC`,
-			filter.Channel, filter.Status, filter.Unread)
+			  AND ($4::timestamptz IS NULL OR (c.updated_at, c.id) < ($4, $5))
+			ORDER BY c.updated_at DESC, c.id DESC
+			LIMIT $6`,
+			filter.Channel, filter.Status, filter.Unread, cursorTime, cursorID, limit+1)
 		if err != nil {
 			return err
 		}
@@ -302,9 +362,15 @@ func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity, fil
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list conversations: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list conversations: %w", err)
 	}
-	return out, nil
+
+	next := ""
+	if len(out) > limit {
+		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
+		out = out[:limit]
+	}
+	return out, total, next, nil
 }
 
 func GetConversation(ctx context.Context, pool *pgxpool.Pool, id Identity,

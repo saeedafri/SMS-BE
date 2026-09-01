@@ -170,12 +170,15 @@ func CreateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, sender
 		created, err = scanSender(tx.QueryRow(ctx, `
 			INSERT INTO sender_ids (tenant_id, header, channel, country,
 			    waba_id, display_name, phone_number, email_domain,
-			    from_address, from_name, caller_id_number)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			    from_address, from_name, caller_id_number, external_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			RETURNING `+senderColumns,
 			id.TenantID, sender.Header, sender.Channel, sender.Country,
 			sender.WabaID, sender.DisplayName, sender.PhoneNumber, sender.EmailDomain,
-			sender.FromAddress, sender.FromName, sender.CallerIDNumber))
+			sender.FromAddress, sender.FromName, sender.CallerIDNumber,
+			// Written verbatim, only ever from client input. Nothing derives or
+			// defaults this: a DLT id is issued by DLT, not by us.
+			sender.ExternalID))
 		if err != nil {
 			return err
 		}
@@ -287,6 +290,18 @@ type Template struct {
 	RejectionReason *string
 	CreatedAt       time.Time
 
+	// ExternalID is the DLT content-template id and DltCategory the category
+	// DLT approved it under. Both come from the customer's own DLT
+	// registration; nothing here derives or defaults either.
+	//
+	// DltCategory is deliberately separate from Category. Category is Meta's
+	// WhatsApp taxonomy, DltCategory is India's, and both spell TRANSACTIONAL
+	// while meaning different things — Meta's is ordinary, DLT's is restricted
+	// to banking and OTP traffic. One column for both would mis-file Indian
+	// traffic with nothing to catch it until DLT complained.
+	ExternalID  *string
+	DltCategory *string
+
 	// Channel-specific message content, carried as raw JSON exactly as the
 	// contract defines it. Kept as bytes rather than decoded into a Go type
 	// here because each is a discriminated union whose variants are generated
@@ -310,6 +325,7 @@ type Template struct {
 }
 
 const templateColumns = `id, sender_id, name, channel, country, body, category,
+	external_id, dlt_category,
 	variables, cta_url, status, rejection_reason, created_at,
 	rcs_content, wa_content, email_content,
 	carrier_vendor, carrier_template_id, carrier_status,
@@ -318,7 +334,8 @@ const templateColumns = `id, sender_id, name, channel, country, body, category,
 func scanTemplate(row pgx.Row) (Template, error) {
 	var t Template
 	err := row.Scan(&t.ID, &t.SenderID, &t.Name, &t.Channel, &t.Country, &t.Body,
-		&t.Category, &t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt,
+		&t.Category, &t.ExternalID, &t.DltCategory,
+		&t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt,
 		&t.RCSContent, &t.WAContent, &t.EmailContent,
 		&t.CarrierVendor, &t.CarrierTemplateID, &t.CarrierStatus,
 		&t.CarrierRejectionReason, &t.CarrierSubmittedAt, &t.CarrierUpdatedAt)
@@ -384,12 +401,13 @@ func CreateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templa
 		var err error
 		created, err = scanTemplate(tx.QueryRow(ctx, `
 			INSERT INTO templates (tenant_id, sender_id, name, channel, country,
-			    body, category, variables, cta_url,
+			    body, category, external_id, dlt_category, variables, cta_url,
 			    rcs_content, wa_content, email_content)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 			RETURNING `+templateColumns,
 			id.TenantID, template.SenderID, template.Name, template.Channel,
 			template.Country, template.Body, template.Category,
+			template.ExternalID, template.DltCategory,
 			template.Variables, template.CtaURL,
 			// Columns are named explicitly above. An insert bound to table
 			// order broke every send once already, the day a column was added
@@ -512,16 +530,21 @@ func CreateRegistration(ctx context.Context, pool *pgxpool.Pool, id Identity, re
 		// silently overwrite an approved registration, or to reset one that is
 		// mid-review: those still raise the unique violation below.
 		created, err = scanRegistration(tx.QueryRow(ctx, `
-			INSERT INTO registrations (tenant_id, country, object_key, fields)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO registrations (tenant_id, country, object_key, fields, external_id)
+			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (tenant_id, country, object_key) DO UPDATE
 			   SET fields           = EXCLUDED.fields,
+			       -- A resubmission carries whatever id the NEW submission
+			       -- supplied, including none. Never the previously approved
+			       -- value carried forward silently.
+			       external_id      = EXCLUDED.external_id,
 			       status           = 'pending_review',
 			       rejection_reason = NULL,
 			       updated_at       = now()
 			   WHERE registrations.status = 'rejected'
 			RETURNING `+registrationColumns,
-			id.TenantID, registration.Country, registration.ObjectKey, encoded))
+			id.TenantID, registration.Country, registration.ObjectKey, encoded,
+			registration.ExternalID))
 		// A DO UPDATE whose WHERE excludes the row returns NO rows rather than
 		// raising — so without this, resubmitting over a pending or approved
 		// registration would surface as a scan error instead of the conflict it

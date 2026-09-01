@@ -105,6 +105,33 @@ func (s *Sandbox) DrainReports() []DeliveryReport {
 	return drained
 }
 
+// TakeReportsFor removes and returns only the reports for one message, leaving
+// every other message's queued.
+//
+// DrainReports empties the queue. A caller that wanted one message's report and
+// called it anyway took everybody else's too and, having no use for them,
+// dropped them on the floor — so those messages never settled, sat at "sent"
+// forever, and were eventually expired by the reconciler as though the carrier
+// had gone silent. Two callers wanting different messages could not both win.
+//
+// The background drainer still takes everything, which is right: it is the one
+// caller whose job IS everything.
+func (s *Sandbox) TakeReportsFor(messageID string) []DeliveryReport {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mine := make([]DeliveryReport, 0, 1)
+	kept := s.pending[:0]
+	for _, report := range s.pending {
+		if report.MessageID == messageID {
+			mine = append(mine, report)
+			continue
+		}
+		kept = append(kept, report)
+	}
+	s.pending = kept
+	return mine
+}
+
 type outcome int
 
 const (
