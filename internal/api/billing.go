@@ -109,10 +109,16 @@ func (s *Server) GetInvoice(ctx context.Context, request gen.GetInvoiceRequestOb
 
 // GetUsage reports spend groupings.
 //
-// Channel totals come from the wallet, campaign and journey attribution from
-// the message rows: the ledger knows money moved, but only a message knows what
-// moved it. ClickHouse being unavailable costs the two attributed sections and
-// leaves the channel totals intact, rather than failing the whole screen.
+// All three groupings come from the message rows. The wallet ledger knows money
+// moved and in what currency, but a charge row carries no channel, campaign or
+// journey — only a message knows what moved it. Reading channel totals from the
+// ledger, as this did, meant the same screen answered "how much on each
+// channel" and "how much on each campaign" from two different sources that did
+// not agree.
+//
+// ClickHouse being unavailable therefore empties the report rather than leaving
+// a partial one. That is the honest failure: the alternative was a channel row
+// the ledger cannot actually substantiate.
 func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject) (gen.GetUsageResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
@@ -132,23 +138,22 @@ func (s *Server) GetUsage(ctx context.Context, request gen.GetUsageRequestObject
 		since = rangeSince(string(*request.Params.Range))
 	}
 
-	byChannel, err := store.UsageByChannel(ctx, s.DB, identity, currency)
-	if err != nil {
-		return nil, err
-	}
-
-	channels := make([]gen.UsageByChannel, 0, len(byChannel))
-	for _, usage := range byChannel {
-		channels = append(channels, gen.UsageByChannel{
-			Channel:      gen.ChannelId(usage.Channel),
-			Currency:     gen.CurrencyCode(usage.Currency),
-			MessageCount: usage.MessageCount,
-			AmountMinor:  int(usage.AmountMinor),
-		})
-	}
+	channels := []gen.UsageByChannel{}
 	campaigns := []gen.UsageByCampaign{}
 	journeys := []gen.UsageByJourney{}
 	if clickhouse, chErr := s.clickhouse(ctx); chErr == nil {
+		byChannel, err := store.UsageByChannel(ctx, clickhouse, identity.TenantID, since, currency)
+		if err != nil {
+			return nil, s.clickhouseFailed(err)
+		}
+		for _, usage := range byChannel {
+			channels = append(channels, gen.UsageByChannel{
+				Channel:      gen.ChannelId(usage.Channel),
+				Currency:     gen.CurrencyCode(usage.Currency),
+				MessageCount: usage.MessageCount,
+				AmountMinor:  int(usage.AmountMinor),
+			})
+		}
 		byCampaign, err := store.UsageByCampaign(ctx, clickhouse, identity.TenantID, since, currency)
 		if err != nil {
 			return nil, s.clickhouseFailed(err)
