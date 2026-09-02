@@ -127,7 +127,17 @@ func (s *Server) CreateRegistration(ctx context.Context, request gen.CreateRegis
 	// homes that a later edit could pull apart, and the typed column is the one
 	// every reader uses. Keyed on the field being present rather than on the
 	// country: this is "did they give us an id", not a per-country special case.
+	//
+	// The contract also carries registrationId at the top level of the body,
+	// and that is what the console sends. It wins: a caller that sends both
+	// means the typed one. The bag is still emptied either way, so the two can
+	// never disagree later.
 	registrationID := liftRegistrationID(fields)
+	if request.Body.RegistrationId != nil &&
+		strings.TrimSpace(*request.Body.RegistrationId) != "" {
+		supplied := strings.TrimSpace(*request.Body.RegistrationId)
+		registrationID = &supplied
+	}
 
 	created, err := store.CreateRegistration(ctx, s.DB, identity, store.Registration{
 		Country: country, ObjectKey: objectKey, Fields: fields,

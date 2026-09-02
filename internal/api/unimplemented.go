@@ -320,6 +320,38 @@ func (Unimplemented) GetAuditLog(ctx context.Context, request gen.GetAuditLogReq
 	return nil, errNotImplemented("GetAuditLog")
 }
 
+func (Unimplemented) GetConnections(ctx context.Context, request gen.GetConnectionsRequestObject) (gen.GetConnectionsResponseObject, error) {
+	return nil, errNotImplemented("GetConnections")
+}
+
+func (Unimplemented) CreateConnection(ctx context.Context, request gen.CreateConnectionRequestObject) (gen.CreateConnectionResponseObject, error) {
+	return nil, errNotImplemented("CreateConnection")
+}
+
+func (Unimplemented) DeleteConnection(ctx context.Context, request gen.DeleteConnectionRequestObject) (gen.DeleteConnectionResponseObject, error) {
+	return nil, errNotImplemented("DeleteConnection")
+}
+
+func (Unimplemented) GetConnection(ctx context.Context, request gen.GetConnectionRequestObject) (gen.GetConnectionResponseObject, error) {
+	return nil, errNotImplemented("GetConnection")
+}
+
+func (Unimplemented) UpdateConnection(ctx context.Context, request gen.UpdateConnectionRequestObject) (gen.UpdateConnectionResponseObject, error) {
+	return nil, errNotImplemented("UpdateConnection")
+}
+
+func (Unimplemented) DisableConnection(ctx context.Context, request gen.DisableConnectionRequestObject) (gen.DisableConnectionResponseObject, error) {
+	return nil, errNotImplemented("DisableConnection")
+}
+
+func (Unimplemented) EnableConnection(ctx context.Context, request gen.EnableConnectionRequestObject) (gen.EnableConnectionResponseObject, error) {
+	return nil, errNotImplemented("EnableConnection")
+}
+
+func (Unimplemented) TestConnection(ctx context.Context, request gen.TestConnectionRequestObject) (gen.TestConnectionResponseObject, error) {
+	return nil, errNotImplemented("TestConnection")
+}
+
 func (Unimplemented) OperatorLogin(ctx context.Context, request gen.OperatorLoginRequestObject) (gen.OperatorLoginResponseObject, error) {
 	return nil, errNotImplemented("OperatorLogin")
 }

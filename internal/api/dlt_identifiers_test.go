@@ -154,6 +154,38 @@ func TestRegistrationLiftsTheDltIdOutOfTheFieldsBag(t *testing.T) {
 	}
 }
 
+// The console sends registrationId at the top level of the body, not inside
+// the fields bag. Before the contract carried it there, encoding/json dropped
+// it without a word: the customer typed their DLT id, the form said saved, and
+// the column stayed null.
+func TestRegistrationAcceptsATopLevelDltId(t *testing.T) {
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+
+	const supplied = "1102345678901234567"
+	created := h.do(http.MethodPost, "/v1/registrations", acct.Token, map[string]any{
+		"country": "IN", "objectKey": "pe_rtm_entity",
+		"registrationId": supplied,
+		"fields": map[string]any{
+			"legalName":    "Acme Retail Pvt Ltd",
+			"pan":          "ABCDE1234F",
+			"entityType":   "private_ltd",
+			"contactEmail": "compliance@acme.test",
+		},
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create registration = %d\n%s", created.Code, created.Body)
+	}
+	var registration struct {
+		RegistrationID *string `json:"registrationId"`
+	}
+	created.decode(t, &registration)
+
+	if registration.RegistrationID == nil || *registration.RegistrationID != supplied {
+		t.Fatalf("typed registrationId = %v, want %q", registration.RegistrationID, supplied)
+	}
+}
+
 // DLT's taxonomy is not Meta's, and a value outside it is refused rather than
 // stored. A mis-filed template is not rejected by us — it is scrubbed by the
 // carrier, after the customer believes they are live.
