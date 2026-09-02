@@ -229,3 +229,43 @@ func TestTeamOperationsCannotReachAnotherTenant(t *testing.T) {
 		t.Fatal("another tenant changed the victim's role")
 	}
 }
+
+// The same escalation as TestOnlyAnOwnerCanCreateAnotherOwner, through the
+// other door.
+//
+// team.go guards both the invite path and the promote path with the identical
+// rule, and only the invite half was covered. An admin who cannot invite a new
+// owner could still take an existing member and promote them to owner, which is
+// the same privilege escalation with one extra step — and the kind of gap that
+// survives review precisely because the neighbouring endpoint is tested.
+func TestAnAdminCannotPromoteAnExistingMemberToOwner(t *testing.T) {
+	h := newHarness(t)
+	admin := h.newAccount("admin")
+	member := h.newAccount("member")
+
+	// Put the member in the admin's tenant, so the refusal below is the role
+	// rule rather than the cross-tenant 404 that guards a different case.
+	if _, err := h.admin.Exec(t.Context(),
+		`UPDATE tenant_users SET tenant_id = $1 WHERE user_id = $2`,
+		admin.TenantID, member.UserID); err != nil {
+		t.Fatalf("move member into the admin's tenant: %v", err)
+	}
+
+	res := h.do(http.MethodPatch, "/v1/team/"+member.UserID.String(), admin.Token,
+		map[string]string{"role": "owner"})
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("an admin promoted someone to owner: status = %d, want 403; body = %s",
+			res.Code, res.Body)
+	}
+
+	// And the promotion must not have happened anyway.
+	var role string
+	if err := h.admin.QueryRow(t.Context(),
+		`SELECT role FROM tenant_users WHERE user_id = $1`, member.UserID).
+		Scan(&role); err != nil {
+		t.Fatalf("read role back: %v", err)
+	}
+	if role != "member" {
+		t.Fatalf("role is %q after a refused promotion, want member", role)
+	}
+}
