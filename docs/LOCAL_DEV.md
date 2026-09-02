@@ -5,21 +5,21 @@ Runs the Go backend and the real Next.js dashboard together on one machine, with
 ## Prerequisites
 
 ```bash
-brew install go postgresql@16 redis
+brew install go
 ```
 
-Node 20+ and pnpm for the frontend. ClickHouse is **not** needed until Stage 5 — see
-"ClickHouse on macOS" below.
+Node 20+ and pnpm for the frontend. **No database is installed locally** — Postgres, Redis and
+ClickHouse all run on the Hostinger VPS and are reached over an SSH tunnel. See "The datastores
+are on the VPS" below.
 
 ## First-time setup
 
 ```bash
 cd /Users/mohdsaeedafri/All-Code-Base/SMS-BE
-make services-up          # Postgres + Redis via brew services
-make db-setup             # creates sms_dev, sms_test, and the sms_app role
-cp .env.example .env
+make tunnel-up            # forwards the VPS Postgres, Redis and ClickHouse
+cp .env.example .env      # then point the URLs at the forwarded ports
 set -a && source .env && set +a
-make migrate-up && make migrate-test
+make migrate-test         # brings the sms_test database up to date
 make generate             # regenerate from ../SMS-UI/openapi.json
 make check                # vet + build + test — expect green
 ```
@@ -97,47 +97,39 @@ they succeed:
    for sandbox environments with a hard production kill-switch, or gate the tooling off when
    mocks are disabled.
 
-## ClickHouse on macOS — resolved
+## The datastores are on the VPS
 
-**Do not install ClickHouse with Homebrew.** The cask stamps `com.apple.quarantine` on the
-binary, so Gatekeeper kills it silently — no error, no log output, just an immediate exit. The
-cask is also deprecated for removal on 2026-09-01.
-
-The official installer avoids this entirely: `curl` does not set the quarantine attribute, so
-there is nothing for Gatekeeper to block and **no security control is being bypassed**.
+Postgres, Redis and ClickHouse run on the Hostinger box and are **not** installed here. None of
+the three is published to the internet: they bind to the VPS loopback inside Docker, so SSH is
+the only way to reach them.
 
 ```bash
-mkdir -p ~/clickhouse-bin && cd ~/clickhouse-bin
-curl -sS https://clickhouse.com/ | sh          # ~160 MB single binary
-
-mkdir -p ~/clickhouse-data && cd ~/clickhouse-data
-nohup ~/clickhouse-bin/clickhouse server > ch.log 2>&1 &
-
-curl -s http://localhost:8123/ping             # expect: Ok.
-for db in sms_dev sms_test; do
-  curl -s http://localhost:8123/ --data-binary "CREATE DATABASE IF NOT EXISTS $db"
-done
+make tunnel-up            # or scripts/hostinger-tunnel.sh start
+scripts/hostinger-tunnel.sh status
 ```
 
-Then set in `.env`:
+| Forwarded port | Reaches |
+|---|---|
+| 15432 | `ems-postgres` — databases `sms` and `sms_test` |
+| 16380 | `relay-redis-1` |
+| 8123 | `relay-clickhouse-1` HTTP |
+| 9000 | `relay-clickhouse-1` native |
 
-```bash
-CLICKHOUSE_URL=http://localhost:8123/sms_dev
-TEST_CLICKHOUSE_URL=http://localhost:8123/sms_test
-```
+ClickHouse keeps its real port numbers on purpose: `store.OpenClickHouse` derives the native
+address as `host:9000` from the HTTP URL, so a renumbered forward would be silently ignored and
+every ClickHouse-backed test would fail on a refused connection to `127.0.0.1:9000`.
 
-`spctl -a` still reports "rejected" for the binary — that is expected and harmless. Gatekeeper
-only *enforces* against quarantined files, and this one is not quarantined.
+Tests use the separate `sms_test` databases — never `sms`, which is production. `.env` therefore
+carries two sets of URLs, and `TEST_DATABASE_URL` must never point at `sms`.
 
-Verified working: ClickHouse 26.8.1.1307 on macOS 26.6 arm64.
-
-None of this affects production: on Linux the standard package works normally.
+Redis has no separate test URL, so local runs use db **1** and production keeps db 0. Nothing a
+local run writes can touch a live session or rate-limit counter.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `pg_isready` fails | `brew services restart postgresql@16` |
-| Tests skip silently | You forgot `set -a && source .env && set +a` |
+| Connection refused on 15432/8123/9000 | The tunnel dropped — `make tunnel-up` |
+| Tests skip silently | The URLs are missing. `make test` sources `.env` itself; a bare `go test` does not |
 | `invalid input syntax for type uuid: ""` | An RLS policy is using raw `current_setting` instead of `current_tenant_id()` — see migration `00002` |
 | Port 8080 busy | `lsof -i :8080` then kill the stale process |
