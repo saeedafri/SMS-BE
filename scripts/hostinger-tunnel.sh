@@ -3,6 +3,8 @@
 # the VPS and are not published, so SSH is the only way in — which is also why
 # there is no reason to run Postgres, Redis or ClickHouse on a laptop.
 #
+#   local 18080 -> the live control-api, including /v1/dev/* which nginx
+#                  denies on the public hostname — the browser gate needs those
 #   local 15432 -> ems-postgres       (databases: sms, sms_test)
 #   local 16380 -> relay-redis-1
 #   local  8123 -> relay-clickhouse-1 HTTP
@@ -24,6 +26,7 @@ start)
     fi
     ssh -f -N -o ExitOnForwardFailure=yes \
         -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+        -L 18080:127.0.0.1:8080 \
         -L 15432:127.0.0.1:5432 \
         -L 16380:127.0.0.1:6380 \
         -L 8123:127.0.0.1:8123 \
@@ -38,7 +41,7 @@ stop)
     echo "tunnel down"
     ;;
 status)
-    for port in 15432 16380 8123 9000; do
+    for port in 18080 15432 16380 8123 9000; do
         if nc -z 127.0.0.1 "$port" 2>/dev/null; then echo "$port up"; else echo "$port DOWN"; fi
     done
     ;;
