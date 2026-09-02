@@ -473,6 +473,63 @@ func UsageByJourney(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	return attributedSpend(ctx, conn, tenantID, "journey_id", "journey_name", since, currency)
 }
 
+// ChannelUsage is spend grouped by channel.
+type ChannelUsage struct {
+	Channel      string
+	Currency     string
+	MessageCount int
+	AmountMinor  int64
+}
+
+// UsageByChannel splits spend across the channels that produced it.
+//
+// It reads the message rows for the same reason the two functions above do:
+// the wallet ledger records that money moved and in what currency, but a charge
+// row carries no channel. The previous implementation grouped the ledger by
+// currency and stamped every row "SMS", which on live data reported one row of
+// 123 SMS where the messages say 418 SMS, 290 WhatsApp, 274 RCS, 253 email and
+// 211 voice — four channels renamed rather than merely uncounted.
+//
+// Same collapse-then-aggregate as attributedSpend, and the same delivered-or-
+// read filter, so the channel totals and the campaign totals on one screen are
+// derived identically and can be added up against each other.
+func UsageByChannel(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
+	since time.Time, currency string) ([]ChannelUsage, error) {
+
+	rows, err := conn.Query(ctx, `
+		SELECT channel, currency,
+		       sumIf(cost, final_status IN ('delivered', 'read')) AS amount,
+		       countIf(final_status IN ('delivered', 'read')) AS message_count
+		FROM (
+			SELECT channel, currency, id,
+			       argMax(status, version) AS final_status,
+			       argMax(cost_minor, version) AS cost
+			FROM messages
+			WHERE tenant_id = ? AND created_at >= ?
+			  AND (? = '' OR currency = ?)
+			GROUP BY channel, currency, id
+		)
+		GROUP BY channel, currency
+		HAVING message_count > 0
+		ORDER BY amount DESC`, tenantID, since, currency, currency)
+	if err != nil {
+		return nil, fmt.Errorf("store: usage by channel: %w", err)
+	}
+	defer rows.Close()
+	out := []ChannelUsage{}
+	for rows.Next() {
+		var usage ChannelUsage
+		var messageCount uint64
+		if err := rows.Scan(&usage.Channel, &usage.Currency,
+			&usage.AmountMinor, &messageCount); err != nil {
+			return nil, fmt.Errorf("store: scan usage by channel: %w", err)
+		}
+		usage.MessageCount = int(messageCount)
+		out = append(out, usage)
+	}
+	return out, rows.Err()
+}
+
 func attributedSpend(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	idColumn, nameColumn string, since time.Time, currency string) ([]AttributedSpend, error) {
 

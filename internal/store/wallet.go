@@ -733,46 +733,6 @@ func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID 
 	return invoice, nil
 }
 
-// ChannelUsage is spend grouped by channel.
-type ChannelUsage struct {
-	Channel      string
-	Currency     string
-	MessageCount int
-	AmountMinor  int64
-}
-
-// UsageByChannel totals charges from the ledger. Per-channel attribution needs
-// message-level data, which arrives with the data plane in Stage 5; until then
-// charges carry no channel and this correctly returns nothing.
-func UsageByChannel(ctx context.Context, pool *pgxpool.Pool, id Identity, currency string) ([]ChannelUsage, error) {
-	var out []ChannelUsage
-	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT currency, count(*), coalesce(sum(amount_minor), 0)
-			FROM wallet_ledger
-			WHERE entry_type = 'charge' AND ($1 = '' OR currency = $1)
-			GROUP BY currency ORDER BY currency`, currency)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var usage ChannelUsage
-			if err := rows.Scan(&usage.Currency, &usage.MessageCount,
-				&usage.AmountMinor); err != nil {
-				return err
-			}
-			usage.Channel = "SMS"
-			out = append(out, usage)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		return nil, fmt.Errorf("store: usage by channel: %w", err)
-	}
-	return out, nil
-}
-
 // applyAutoRecharge tops a wallet back up when a charge has taken it under the
 // tenant's configured threshold.
 //

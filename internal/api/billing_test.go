@@ -152,30 +152,85 @@ func TestUsageReturnsAllThreeGroupings(t *testing.T) {
 	}
 }
 
-// Once a charge exists, usage reflects it — proving the report reads real
-// ledger data rather than always returning empty.
-func TestUsageReflectsActualCharges(t *testing.T) {
-	h := newHarness(t)
+// Spend on four channels is reported as four channels.
+//
+// It used to be reported as one row labelled SMS, whatever the tenant actually
+// sent: the query grouped the wallet ledger by currency and stamped "SMS" on
+// every row it produced, because a charge row carries no channel. On live data
+// that renamed 290 WhatsApp, 274 RCS, 253 email and 211 voice messages to SMS
+// and reported a third of the real volume — a wrong answer rather than a
+// missing one, which is why nobody had reported it.
+//
+// The same superseded-row hazard as the journey test below applies: WhatsApp's
+// message is written twice, delivered then read, and must still count once.
+func TestUsageSplitsSpendAcrossTheChannelsThatEarnedIt(t *testing.T) {
+	h := newSendHarness(t)
 	acct := h.newAccount("owner")
-	card := addCard(t, h, acct.Token, "visa", "4242")
-	topUp(t, h, acct.Token, "INR", 100_000, card.Id)
 
-	if _, err := store.AppendLedgerEntry(context.Background(), h.pool,
-		store.Identity{TenantID: acct.TenantID}, store.LedgerEntry{
-			Currency: "INR", Type: "charge", AmountMinor: 12_000,
-		}); err != nil {
-		t.Fatalf("charge: %v", err)
+	ctx := context.Background()
+	conn, err := h.server.ClickHouse.Conn(ctx)
+	if err != nil {
+		t.Fatalf("clickhouse: %v", err)
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO messages (
+		tenant_id, id, channel, country, sender_header, msisdn, status,
+		fraud_flag, segments, cost_minor, currency,
+		created_at, updated_at, version)`)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	now := time.Now().UTC()
+	whatsapp := uuid.New()
+	type messageRow struct {
+		id      uuid.UUID
+		channel string
+		status  string
+		cost    int64
+		version uint64
+	}
+	for _, r := range []messageRow{
+		{uuid.New(), "SMS", "delivered", 500, 1},
+		{uuid.New(), "SMS", "delivered", 500, 1},
+		{whatsapp, "WHATSAPP", "delivered", 1_200, 1},
+		{whatsapp, "WHATSAPP", "read", 1_200, 2},
+		{uuid.New(), "RCS", "delivered", 900, 1},
+		// Undelivered, so it is not billable and must not appear at all.
+		{uuid.New(), "VOICE", "undelivered", 4_000, 1},
+	} {
+		if err := batch.Append(acct.TenantID, r.id, r.channel, "IN", "ACMERT",
+			"+919820000001", r.status, "none", uint8(1), r.cost, "INR",
+			now, now, r.version); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send batch: %v", err)
 	}
 
 	res := h.do(http.MethodGet, "/v1/billing/usage?range=30d&currency=INR", acct.Token, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
 	var report gen.UsageReport
 	res.decode(t, &report)
 
-	if len(report.ByChannel) != 1 {
-		t.Fatalf("got %d channel rows, want 1: %+v", len(report.ByChannel), report.ByChannel)
+	got := map[string]struct{ amount, count int }{}
+	for _, row := range report.ByChannel {
+		got[string(row.Channel)] = struct{ amount, count int }{row.AmountMinor, row.MessageCount}
 	}
-	if report.ByChannel[0].AmountMinor != 12_000 {
-		t.Fatalf("amountMinor = %d, want 12000", report.ByChannel[0].AmountMinor)
+	want := map[string]struct{ amount, count int }{
+		"SMS":      {1_000, 2},
+		"WHATSAPP": {1_200, 1},
+		"RCS":      {900, 1},
+	}
+	for channel, expected := range want {
+		if got[channel] != expected {
+			t.Errorf("%s = %+v, want %+v (all rows: %+v)",
+				channel, got[channel], expected, report.ByChannel)
+		}
+	}
+	if _, billed := got["VOICE"]; billed {
+		t.Errorf("an undelivered message was billed: %+v", got["VOICE"])
 	}
 }
 
