@@ -346,7 +346,13 @@ func (s *Server) GetTenantDetail(ctx context.Context, request gen.GetTenantDetai
 		s.Logger.Warn("tenant usage snapshot unavailable — no warehouse connection",
 			"tenant", tenant.ID, "error", chErr)
 	} else if usage, usageErr := store.QueryTenantUsage(ctx, conn, tenant.ID.String(),
-		time.Now().AddDate(0, 0, -30)); usageErr != nil {
+		// rangeSince, not time.Now().AddDate(0, 0, -30). The rollup is hourly, so
+		// an untruncated start lands mid-bucket and silently drops part of the
+		// oldest hour — this screen read 1,783 where /admin/usage read 1,788 for
+		// the same tenant over the same nominal window. Sharing the store query
+		// was not enough to keep the two screens agreeing; they have to share the
+		// window too.
+		rangeSince("30d")); usageErr != nil {
 		s.Logger.Warn("tenant usage snapshot unavailable",
 			"tenant", tenant.ID, "error", usageErr)
 	} else {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/domain/auth"
@@ -1294,67 +1295,8 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		return fmt.Errorf("begin routes rebuild: %w", err)
 	}
 	defer routeTx.Rollback(ctx)
-	if _, err := routeTx.Exec(ctx, `DELETE FROM routes`); err != nil {
-		return fmt.Errorf("clear routes: %w", err)
-	}
-	if _, err := routeTx.Exec(ctx, `
-		INSERT INTO routes (country, channel, carrier, label, priority,
-		                    compliance_standing, cost_per_segment_minor, currency, status)
-		-- Carrier holds a CarrierId from the contract's enum, not a vendor name.
-		-- The console resolves it against a fixed registry to get the label, so
-		-- a lowercase or invented value makes the whole routes page throw.
-		--
-		-- Ported wholesale from ../SMS-UI/src/mocks/routes-state.ts. The console's
-		-- specs assert on these labels, and the filter tests assert on which rows
-		-- DROP OUT — so a corridor missing here reads as a broken filter.
-		--
-		-- Priority is unique within a country x channel, enforced by
-		-- routes_country_channel_priority_key since migration 00039. It used to
-		-- repeat — it ranked the ways of reaching ONE carrier, so JIO's direct and
-		-- aggregator routes were 1 and 2 while AIRTEL's direct route was separately
-		-- 1 — and that data is now rejected by the constraint.
-		--
-		-- The DELETE above has already run by the time the INSERT is refused, so a
-		-- violation here does not leave the old routes in place: it leaves NONE.
-		-- That is how it was found. The browser suite calls the reset hook, the
-		-- hook calls this, and the routes table came back empty — which on a live
-		-- deployment means every corridor loses its carrier path and no tenant can
-		-- send at all. Any edit to these rows must keep each country x channel
-		-- group's priorities distinct and gap-free.
-		--
-		-- The order below is the one migration 00039 computed when it regrouped:
-		-- cheapest first, registered ahead of grey at equal cost, then by carrier.
-		--
-		-- Every 'grey' route is seeded DISABLED, without exception. A grey route
-		-- reaches handsets without being registered with the operator behind it:
-		-- it delivers until the carrier notices, and then messages are filtered
-		-- with no report and the sender id is blocked. Two of them were seeded
-		-- active and were found carrying production traffic on 2026-08-21, both
-		-- with a registered alternative in the same corridor. The fixture must
-		-- not create a state an operator would be refused for creating by hand.
-		VALUES ('IN','SMS','VI',         'Vi Direct',                   1,'grey',       8,'INR','disabled'),
-		       ('IN','SMS','JIO',        'Jio via Aggregator A',        2,'grey',       9,'INR','disabled'),
-		       ('IN','SMS','JIO',        'Jio Direct',                  3,'registered',12,'INR','active'),
-		       ('IN','SMS','AIRTEL',     'Airtel Direct',               4,'registered',14,'INR','active'),
-		       ('IN','RCS','JIO',        'Jio RCS Direct',              1,'registered',45,'INR','active'),
-		       ('IN','RCS','AIRTEL',     'Airtel RCS Direct',           2,'registered',48,'INR','active'),
-		       ('IN','VOICE','JIO',      'Jio Voice Direct',            1,'registered',40,'INR','active'),
-		       ('US','SMS','ATT',        'AT&T Direct',                 1,'registered', 1,'USD','active'),
-		       ('US','SMS','VERIZON',    'Verizon Direct',              2,'registered', 1,'USD','active'),
-		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   3,'grey',       1,'USD','disabled'),
-		       ('US','RCS','VERIZON',    'Verizon RCS Direct',          1,'registered', 5,'USD','active'),
-		       ('US','VOICE','VERIZON',  'Verizon Voice Direct',        1,'registered', 5,'USD','active'),
-		       ('GB','SMS','VODAFONE_UK','Vodafone UK via Aggregator C',1,'grey',       3,'GBP','disabled'),
-		       ('GB','SMS','EE',         'EE Direct',                   2,'registered', 4,'GBP','active'),
-		       ('GB','SMS','O2',         'O2 Direct',                   3,'registered', 4,'GBP','active'),
-		       ('GB','RCS','EE',         'EE RCS Direct',               1,'registered', 8,'GBP','active'),
-		       ('GB','VOICE','EE',       'EE Voice Direct',             1,'registered', 6,'GBP','active'),
-		       ('AE','SMS','DU',         'du Direct',                   1,'registered', 3,'AED','active'),
-		       ('AE','SMS','ETISALAT',   'Etisalat Direct',             2,'registered', 3,'AED','active'),
-		       ('AE','RCS','ETISALAT',   'Etisalat RCS Direct',         1,'registered', 9,'AED','active'),
-		       ('AE','VOICE','ETISALAT', 'Etisalat Voice Direct',       1,'registered', 8,'AED','active')`,
-	); err != nil {
-		return fmt.Errorf("seed routes: %w", err)
+	if err := rebuildRoutes(ctx, routeTx); err != nil {
+		return err
 	}
 	if err := routeTx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit routes rebuild: %w", err)
@@ -1973,6 +1915,84 @@ func seedUserActivity(ctx context.Context, pool *pgxpool.Pool, tenantIDs []strin
 				return fmt.Errorf("seed user activity: %w", err)
 			}
 		}
+	}
+	return nil
+}
+
+// rebuildRoutes clears the carrier routes and lays them down again.
+//
+// Split out so a test can run the real statements inside its own transaction
+// and roll them back. routes is a global table shared by every test against
+// this database, and a test that seeded it for real broke two others in other
+// packages that were inserting routes of their own at the same time.
+func rebuildRoutes(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `DELETE FROM routes`); err != nil {
+		return fmt.Errorf("clear routes: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM routes`); err != nil {
+		return fmt.Errorf("clear routes: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO routes (country, channel, carrier, label, priority,
+		                    compliance_standing, cost_per_segment_minor, currency, status)
+		-- Carrier holds a CarrierId from the contract's enum, not a vendor name.
+		-- The console resolves it against a fixed registry to get the label, so
+		-- a lowercase or invented value makes the whole routes page throw.
+		--
+		-- Ported wholesale from ../SMS-UI/src/mocks/routes-state.ts. The console's
+		-- specs assert on these labels, and the filter tests assert on which rows
+		-- DROP OUT — so a corridor missing here reads as a broken filter.
+		--
+		-- Priority is unique within a country x channel, enforced by
+		-- routes_country_channel_priority_key since migration 00039. It used to
+		-- repeat — it ranked the ways of reaching ONE carrier, so JIO's direct and
+		-- aggregator routes were 1 and 2 while AIRTEL's direct route was separately
+		-- 1 — and that data is now rejected by the constraint.
+		--
+		-- The DELETE above has already run by the time the INSERT is refused, so a
+		-- violation here does not leave the old routes in place: it leaves NONE.
+		-- That is how it was found. The browser suite calls the reset hook, the
+		-- hook calls this, and the routes table came back empty — which on a live
+		-- deployment means every corridor loses its carrier path and no tenant can
+		-- send at all. Any edit to these rows must keep each country x channel
+		-- group's priorities distinct and gap-free.
+		--
+		-- The order is routes-state.ts's own, renumbered 1..n within each group.
+		-- That file still carries the pre-00039 numbering — Jio Direct and Airtel
+		-- Direct are both priority 1 there — so the ORDER is what ports across,
+		-- not the numbers. Two console specs depend on it: they move Jio Direct
+		-- down and expect Jio via Aggregator A to take its place.
+		--
+		-- Every 'grey' route is seeded DISABLED, without exception. A grey route
+		-- reaches handsets without being registered with the operator behind it:
+		-- it delivers until the carrier notices, and then messages are filtered
+		-- with no report and the sender id is blocked. Two of them were seeded
+		-- active and were found carrying production traffic on 2026-08-21, both
+		-- with a registered alternative in the same corridor. The fixture must
+		-- not create a state an operator would be refused for creating by hand.
+		VALUES ('IN','SMS','JIO',        'Jio Direct',                  1,'registered',12,'INR','active'),
+		       ('IN','SMS','JIO',        'Jio via Aggregator A',        2,'grey',       9,'INR','disabled'),
+		       ('IN','SMS','AIRTEL',     'Airtel Direct',               3,'registered',14,'INR','active'),
+		       ('IN','SMS','VI',         'Vi Direct',                   4,'grey',       8,'INR','disabled'),
+		       ('IN','RCS','JIO',        'Jio RCS Direct',              1,'registered',45,'INR','active'),
+		       ('IN','RCS','AIRTEL',     'Airtel RCS Direct',           2,'registered',48,'INR','active'),
+		       ('IN','VOICE','JIO',      'Jio Voice Direct',            1,'registered',40,'INR','active'),
+		       ('US','SMS','VERIZON',    'Verizon Direct',              1,'registered', 1,'USD','active'),
+		       ('US','SMS','ATT',        'AT&T Direct',                 2,'registered', 1,'USD','active'),
+		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   3,'grey',       1,'USD','disabled'),
+		       ('US','RCS','VERIZON',    'Verizon RCS Direct',          1,'registered', 5,'USD','active'),
+		       ('US','VOICE','VERIZON',  'Verizon Voice Direct',        1,'registered', 5,'USD','active'),
+		       ('GB','SMS','EE',         'EE Direct',                   1,'registered', 4,'GBP','active'),
+		       ('GB','SMS','O2',         'O2 Direct',                   2,'registered', 4,'GBP','active'),
+		       ('GB','SMS','VODAFONE_UK','Vodafone UK via Aggregator C',3,'grey',       3,'GBP','disabled'),
+		       ('GB','RCS','EE',         'EE RCS Direct',               1,'registered', 8,'GBP','active'),
+		       ('GB','VOICE','EE',       'EE Voice Direct',             1,'registered', 6,'GBP','active'),
+		       ('AE','SMS','ETISALAT',   'Etisalat Direct',             1,'registered', 3,'AED','active'),
+		       ('AE','SMS','DU',         'du Direct',                   2,'registered', 3,'AED','active'),
+		       ('AE','RCS','ETISALAT',   'Etisalat RCS Direct',         1,'registered', 9,'AED','active'),
+		       ('AE','VOICE','ETISALAT', 'Etisalat Voice Direct',       1,'registered', 8,'AED','active')`,
+	); err != nil {
+		return fmt.Errorf("seed routes: %w", err)
 	}
 	return nil
 }
