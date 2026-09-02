@@ -1281,10 +1281,23 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 
 	// Carrier routes, ordered. The console's move-up/move-down controls need at
 	// least two routes in the same country and channel to have anything to swap.
-	if _, err := pool.Exec(ctx, `DELETE FROM routes`); err != nil {
+	// One transaction, so a refused INSERT puts the old routes back.
+	//
+	// As two separate statements the DELETE committed on its own, and a rejected
+	// INSERT left the table EMPTY rather than unchanged — which is not a broken
+	// fixture but a dead platform: no corridor has a carrier path and no tenant
+	// can send. That is exactly what happened when migration 00039 changed the
+	// uniqueness rule and these rows no longer satisfied it. Whatever a future
+	// edit gets wrong here, it now fails without taking sending down with it.
+	routeTx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin routes rebuild: %w", err)
+	}
+	defer routeTx.Rollback(ctx)
+	if _, err := routeTx.Exec(ctx, `DELETE FROM routes`); err != nil {
 		return fmt.Errorf("clear routes: %w", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := routeTx.Exec(ctx, `
 		INSERT INTO routes (country, channel, carrier, label, priority,
 		                    compliance_standing, cost_per_segment_minor, currency, status)
 		-- Carrier holds a CarrierId from the contract's enum, not a vendor name.
@@ -1295,9 +1308,22 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		-- specs assert on these labels, and the filter tests assert on which rows
 		-- DROP OUT — so a corridor missing here reads as a broken filter.
 		--
-		-- Priority repeats within a corridor because it ranks the ways of reaching
-		-- ONE carrier: JIO has a direct route and an aggregator route, so those are
-		-- 1 and 2, while AIRTEL's own direct route is separately priority 1.
+		-- Priority is unique within a country x channel, enforced by
+		-- routes_country_channel_priority_key since migration 00039. It used to
+		-- repeat — it ranked the ways of reaching ONE carrier, so JIO's direct and
+		-- aggregator routes were 1 and 2 while AIRTEL's direct route was separately
+		-- 1 — and that data is now rejected by the constraint.
+		--
+		-- The DELETE above has already run by the time the INSERT is refused, so a
+		-- violation here does not leave the old routes in place: it leaves NONE.
+		-- That is how it was found. The browser suite calls the reset hook, the
+		-- hook calls this, and the routes table came back empty — which on a live
+		-- deployment means every corridor loses its carrier path and no tenant can
+		-- send at all. Any edit to these rows must keep each country x channel
+		-- group's priorities distinct and gap-free.
+		--
+		-- The order below is the one migration 00039 computed when it regrouped:
+		-- cheapest first, registered ahead of grey at equal cost, then by carrier.
 		--
 		-- Every 'grey' route is seeded DISABLED, without exception. A grey route
 		-- reaches handsets without being registered with the operator behind it:
@@ -1306,29 +1332,32 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		-- active and were found carrying production traffic on 2026-08-21, both
 		-- with a registered alternative in the same corridor. The fixture must
 		-- not create a state an operator would be refused for creating by hand.
-		VALUES ('IN','SMS','JIO',        'Jio Direct',                  1,'registered',12,'INR','active'),
+		VALUES ('IN','SMS','VI',         'Vi Direct',                   1,'grey',       8,'INR','disabled'),
 		       ('IN','SMS','JIO',        'Jio via Aggregator A',        2,'grey',       9,'INR','disabled'),
-		       ('IN','SMS','AIRTEL',     'Airtel Direct',               1,'registered',14,'INR','active'),
-		       ('IN','SMS','VI',         'Vi Direct',                   1,'grey',       8,'INR','disabled'),
+		       ('IN','SMS','JIO',        'Jio Direct',                  3,'registered',12,'INR','active'),
+		       ('IN','SMS','AIRTEL',     'Airtel Direct',               4,'registered',14,'INR','active'),
 		       ('IN','RCS','JIO',        'Jio RCS Direct',              1,'registered',45,'INR','active'),
-		       ('IN','RCS','AIRTEL',     'Airtel RCS Direct',           1,'registered',48,'INR','active'),
+		       ('IN','RCS','AIRTEL',     'Airtel RCS Direct',           2,'registered',48,'INR','active'),
 		       ('IN','VOICE','JIO',      'Jio Voice Direct',            1,'registered',40,'INR','active'),
-		       ('US','SMS','VERIZON',    'Verizon Direct',              1,'registered', 1,'USD','active'),
 		       ('US','SMS','ATT',        'AT&T Direct',                 1,'registered', 1,'USD','active'),
-		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   1,'grey',       1,'USD','disabled'),
+		       ('US','SMS','VERIZON',    'Verizon Direct',              2,'registered', 1,'USD','active'),
+		       ('US','SMS','TMOBILE',    'T-Mobile via Aggregator B',   3,'grey',       1,'USD','disabled'),
 		       ('US','RCS','VERIZON',    'Verizon RCS Direct',          1,'registered', 5,'USD','active'),
 		       ('US','VOICE','VERIZON',  'Verizon Voice Direct',        1,'registered', 5,'USD','active'),
-		       ('GB','SMS','EE',         'EE Direct',                   1,'registered', 4,'GBP','active'),
-		       ('GB','SMS','O2',         'O2 Direct',                   1,'registered', 4,'GBP','active'),
 		       ('GB','SMS','VODAFONE_UK','Vodafone UK via Aggregator C',1,'grey',       3,'GBP','disabled'),
+		       ('GB','SMS','EE',         'EE Direct',                   2,'registered', 4,'GBP','active'),
+		       ('GB','SMS','O2',         'O2 Direct',                   3,'registered', 4,'GBP','active'),
 		       ('GB','RCS','EE',         'EE RCS Direct',               1,'registered', 8,'GBP','active'),
 		       ('GB','VOICE','EE',       'EE Voice Direct',             1,'registered', 6,'GBP','active'),
-		       ('AE','SMS','ETISALAT',   'Etisalat Direct',             1,'registered', 3,'AED','active'),
 		       ('AE','SMS','DU',         'du Direct',                   1,'registered', 3,'AED','active'),
+		       ('AE','SMS','ETISALAT',   'Etisalat Direct',             2,'registered', 3,'AED','active'),
 		       ('AE','RCS','ETISALAT',   'Etisalat RCS Direct',         1,'registered', 9,'AED','active'),
 		       ('AE','VOICE','ETISALAT', 'Etisalat Voice Direct',       1,'registered', 8,'AED','active')`,
 	); err != nil {
 		return fmt.Errorf("seed routes: %w", err)
+	}
+	if err := routeTx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit routes rebuild: %w", err)
 	}
 
 	return verifyFixtureCompliance(ctx, pool, activityTenants)
