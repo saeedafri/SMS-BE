@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -82,11 +83,13 @@ func TestAnApiKeyCanSendOneMessage(t *testing.T) {
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
+	template := h.wildcardTemplate(tenant, sender)
 	h.fundWallet(tenant)
 	secret := h.apiKey(tenant, []string{"send:sms"})
 
 	sent := h.do(http.MethodPost, "/v1/messages", secret, map[string]any{
-		"senderId": sender, "to": "9876543210", "body": "Your order has shipped.",
+		"senderId": sender, "templateId": template,
+		"to": "9876543210", "body": "Your order has shipped.",
 	})
 	if sent.Code != http.StatusAccepted {
 		t.Fatalf("send = %d, want 202\n%s", sent.Code, sent.Body)
@@ -174,24 +177,49 @@ func TestASessionCanSendOneMessage(t *testing.T) {
 
 func (h *harness) approvedSender(tenant account) string {
 	h.t.Helper()
+	return h.approvedSenderOn(tenant, "SMS")
+}
+
+// approvedSenderOn is the same for a channel other than SMS, which the scope
+// tests need: send:sms and send:rcs are separate permissions and cannot be told
+// apart without a sender on each.
+func (h *harness) approvedSenderOn(tenant account, channel string) string {
+	h.t.Helper()
 	var id string
 	if err := h.admin.QueryRow(context.Background(), `
 		INSERT INTO sender_ids (tenant_id, header, channel, country, status)
-		VALUES ($1, 'SENDAP', 'SMS', 'IN', 'approved') RETURNING id`,
-		tenant.TenantID).Scan(&id); err != nil {
+		VALUES ($1, 'SENDAP', $2, 'IN', 'approved') RETURNING id`,
+		tenant.TenantID, channel).Scan(&id); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
 	return id
 }
 
+// wildcardTemplate is an approved template whose entire body is one variable,
+// which makes it a legal registered template for any text.
+//
+// India's regime requires every send to carry a registered template and to be
+// an instantiation of it. That rule has its own tests, in the messaging package
+// and in send_compliance_test.go. These tests are about authentication, scopes,
+// throttling and settlement; making each of them construct a matching body
+// would make them worse at the thing they exist to check, without testing the
+// binding any harder.
+func (h *harness) wildcardTemplate(tenant account, senderID string) string {
+	h.t.Helper()
+	var templateID string
+	if err := h.admin.QueryRow(context.Background(), `
+		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status)
+		VALUES ($1, $2, $3, 'SMS', 'IN', '{{message}}', 'approved') RETURNING id`,
+		tenant.TenantID, senderID,
+		fmt.Sprintf("Wildcard %d", h.nextSenderSeq())).Scan(&templateID); err != nil {
+		h.t.Fatalf("seed wildcard template: %v", err)
+	}
+	return templateID
+}
+
 func (h *harness) fundWallet(tenant account) {
 	h.t.Helper()
-	if _, err := store.AppendLedgerEntry(context.Background(), h.pool,
-		store.Identity{TenantID: tenant.TenantID}, store.LedgerEntry{
-			Currency: "INR", Type: "topup", AmountMinor: 1_000_000,
-		}); err != nil {
-		h.t.Fatalf("fund wallet: %v", err)
-	}
+	h.appendTopup(tenant, "INR", 1_000_000)
 }
 
 func (h *harness) apiKey(tenant account, scopes []string) string {

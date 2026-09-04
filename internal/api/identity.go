@@ -81,25 +81,39 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		// Keys were mintable from the moment the dashboard shipped and
 		// authenticated nothing: store.ResolveAPIKey had no callers at all, so
 		// every sk_live_ key a customer pasted into their code was decoration.
+		// Then they authenticated on the send endpoint and nowhere else, which
+		// made the programmatic API send-only: an integration could spend the
+		// wallet and could not ask what happened to any of it.
 		//
-		// Accepted ONLY for the send endpoint, deliberately. A key carries
-		// scopes rather than a role, and no other handler checks them — letting
-		// a key through the general path would mean a read:messages key could
-		// read the team roster and the billing history too. Widening this means
-		// enforcing scopes at each endpoint that opts in, not here.
+		// Now a key is a credential on the routes in keyRoutes, and on nothing
+		// else. Which scope each needs is decided there rather than here, and
+		// the check happens BEFORE the handler runs, so a key that lacks it
+		// never reaches code that assumes a caller is allowed to be there.
 		if isAPIKey(token) {
-			if r.Method == http.MethodPost && r.URL.Path == "/v1/messages" {
-				keyIdentity, scopes, environment, keyErr := store.ResolveAPIKey(
-					r.Context(), s.DB, token)
-				if keyErr == nil {
-					ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
-					ctx = context.WithValue(ctx, scopesKey{}, scopes)
-					ctx = context.WithValue(ctx, environmentKey{}, environment)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+			scope, accepted := keyRouteScope(r)
+			if !accepted {
+				// Not a key route. No identity is attached, so the handler
+				// answers 401 exactly as it does for a missing token — a key is
+				// simply not a credential here.
+				next.ServeHTTP(w, r)
+				return
 			}
-			next.ServeHTTP(w, r)
+			keyIdentity, scopes, environment, keyErr := store.ResolveAPIKey(
+				r.Context(), s.DB, token)
+			if keyErr != nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// scopeCheckedByHandler is the send path, where the scope depends
+			// on the sender's channel and only a database read can tell which.
+			if scope != scopeCheckedByHandler && !oneOf(scope, scopes) {
+				forbiddenScope(w, scope)
+				return
+			}
+			ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
+			ctx = context.WithValue(ctx, scopesKey{}, scopes)
+			ctx = context.WithValue(ctx, environmentKey{}, environment)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 

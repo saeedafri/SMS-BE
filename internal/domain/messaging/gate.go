@@ -34,6 +34,14 @@ var (
 	// template refusal: the template may be perfectly approved and the text
 	// still carry something the regulator does not permit.
 	ErrContentNotAllowed = errors.New("messaging: content is not allowed in this country")
+	// ErrRegisteredTemplateRequired and ErrTemplateBodyMismatch are the two
+	// halves of India's template binding. They are separate errors because they
+	// are separate fixes: one means "attach your DLT template", the other means
+	// "the text you sent is not what that template says".
+	ErrRegisteredTemplateRequired = errors.New(
+		"messaging: this country requires a registered template on every send")
+	ErrTemplateBodyMismatch = errors.New(
+		"messaging: body is not a legal instantiation of the registered template")
 )
 
 // GateInput is everything the gate needs to decide. It is a plain struct with
@@ -56,6 +64,15 @@ type GateInput struct {
 	BalanceMinor          int64
 	CostMinor             int64
 	RecipientValid        bool
+
+	// RegisteredTemplateRequired is the destination regime's rule. When it is
+	// set, a send must name an approved template AND its body must be an
+	// instantiation of that template's registered text.
+	RegisteredTemplateRequired bool
+	// TemplateBody is the registered text, empty when no template was named.
+	TemplateBody string
+	// Body is what the caller actually asked us to send.
+	Body string
 }
 
 // Check runs the gate. Order matters and is deliberate: compliance failures
@@ -78,6 +95,31 @@ func Check(input GateInput) error {
 		}
 		if input.TemplateSender != "" && input.TemplateSender != input.SenderID {
 			return ErrSenderTemplateMismatch
+		}
+	}
+	// Template binding, where the regime demands it. Checked after the
+	// template's own approval — an unapproved template is a different and more
+	// basic problem — and before anything to do with money.
+	if input.RegisteredTemplateRequired {
+		if input.TemplateStatus == "" {
+			return ErrRegisteredTemplateRequired
+		}
+		// Matched only when there is a registered text AND a submitted body to
+		// match it against. Two cases where there is not, and refusing either
+		// would be wrong:
+		//
+		//   - a template whose channel keeps its content somewhere we cannot
+		//     read gives us nothing to compare against;
+		//   - an RCS campaign sends no body at all. The carrier holds the
+		//     approved template and renders it from the variables we pass, so
+		//     what reaches the handset IS the registered template by
+		//     construction. Comparing an empty body against the template text
+		//     refused every RCS campaign, which is how this was caught.
+		//
+		// The template requirement itself still stands in both cases.
+		if input.TemplateBody != "" && input.Body != "" &&
+			!MatchesTemplate(input.TemplateBody, input.Body) {
+			return ErrTemplateBodyMismatch
 		}
 	}
 	// After our own approval, because a template neither side has approved
@@ -114,6 +156,7 @@ func IsRefusal(err error) bool {
 		ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
 		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
 		ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
+		ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -136,6 +179,10 @@ func GateFailureCode(err error) string {
 		return "template_not_approved"
 	case errors.Is(err, ErrSenderTemplateMismatch):
 		return "sender_template_mismatch"
+	case errors.Is(err, ErrRegisteredTemplateRequired):
+		return "registered_template_required"
+	case errors.Is(err, ErrTemplateBodyMismatch):
+		return "template_body_mismatch"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
 	case errors.Is(err, ErrInsufficientFunds):

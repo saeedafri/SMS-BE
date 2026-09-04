@@ -4,6 +4,7 @@ package sending
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -108,8 +109,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// 1. Resolve the sender and confirm it is approved for this tenant.
 	sender, err := store.CachedSenderID(ctx, s.DB, s.Hot, identity, request.SenderID)
 	if errors.Is(err, store.ErrNotFound) {
-		return SendResult{Status: "rejected", FailureCode: "sender_not_found"},
-			messaging.ErrSenderNotApproved
+		return SendResult{Status: "rejected", FailureCode: "sender_not_found",
+			Currency: refusalCurrency(identity, "")}, messaging.ErrSenderNotApproved
 	}
 	if err != nil {
 		return SendResult{}, err
@@ -126,7 +127,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	if regime, known := compliance.For(sender.Country); known {
 		for _, url := range compliance.ExtractURLs(request.Body) {
 			if result := regime.ValidateCtaURL(url); !result.OK {
-				return SendResult{Status: "rejected", FailureCode: "content_not_allowed"},
+				return SendResult{Status: "rejected", FailureCode: "content_not_allowed",
+						Currency: refusalCurrency(identity, sender.Country)},
 					fmt.Errorf("%w: %s", messaging.ErrContentNotAllowed, result.Reason)
 			}
 		}
@@ -146,7 +148,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	segments := billing.SegmentCount(request.Body)
 	rate, err := store.CachedPricingRate(ctx, s.DB, s.Hot, identity.TenantID, sender.Country, sender.Channel, "")
 	if err != nil {
-		return SendResult{Status: "rejected", FailureCode: "no_rate"},
+		return SendResult{Status: "rejected", FailureCode: "no_rate",
+				Currency: refusalCurrency(identity, sender.Country)},
 			fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
 	}
 	cost := int64(segments) * rate.PerSegmentMinor
@@ -158,8 +161,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		var err error
 		template, err = store.GetTemplate(ctx, s.DB, identity, *request.TemplateID)
 		if errors.Is(err, store.ErrNotFound) {
-			return SendResult{Status: "rejected", FailureCode: "template_not_found"},
-				messaging.ErrTemplateNotApproved
+			return SendResult{Status: "rejected", FailureCode: "template_not_found",
+				Currency: rate.Currency}, messaging.ErrTemplateNotApproved
 		}
 		if err != nil {
 			return SendResult{}, err
@@ -199,6 +202,9 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		TemplateSender: templateSender, Suppressed: suppressed,
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
+		RegisteredTemplateRequired: registeredTemplateRequired(sender.Country),
+		TemplateBody:               templateBody(template),
+		Body:                       request.Body,
 	})
 
 	messageID := uuid.New()
@@ -538,4 +544,58 @@ func (s *Service) resolvePath(ctx context.Context, country, channel string) (str
 	}
 	id := route.ID.String()
 	return route.Carrier, &id
+}
+
+// refusalCurrency is the currency to report on a refusal that never got as far
+// as looking up a rate.
+//
+// An empty string is not a currency code, and it is what a caller saw on every
+// early refusal: no such sender, no rate for the corridor, content the country
+// bans. The contract makes currency a required non-null string, so the answer
+// is the regime's currency for whichever country we do know — the sender's when
+// there is one, the tenant's otherwise.
+func refusalCurrency(identity store.Identity, country string) string {
+	for _, candidate := range []string{country, identity.Country} {
+		if candidate == "" {
+			continue
+		}
+		if regime, known := compliance.For(candidate); known {
+			return regime.Currency()
+		}
+	}
+	return ""
+}
+
+// registeredTemplateRequired asks the DESTINATION's regime whether a send must
+// carry a template the regulator registered.
+//
+// Resolved from the sender's country, in one function, so the three dispatch
+// paths cannot disagree about it. An unknown country requires nothing: we do
+// not operate there, and inventing a rule for it would refuse sends we have no
+// basis to refuse.
+func registeredTemplateRequired(country string) bool {
+	regime, known := compliance.For(country)
+	return known && regime.RequiresRegisteredTemplate()
+}
+
+// templateBody is the registered text a submitted body must instantiate.
+//
+// It is not simply Template.Body. An SMS template keeps its text there, but an
+// RCS one keeps it inside rcs_content — the channel-specific union the contract
+// defines — and reading only Body meant every RCS send compared its text
+// against an empty string and was refused. Found by the RCS end-to-end tests
+// the moment template binding was switched on, which is what they are for.
+func templateBody(template store.Template) string {
+	if template.Body != nil && *template.Body != "" {
+		return *template.Body
+	}
+	if len(template.RCSContent) > 0 {
+		var content struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(template.RCSContent, &content); err == nil {
+			return content.Text
+		}
+	}
+	return ""
 }

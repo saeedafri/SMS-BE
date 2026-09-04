@@ -123,6 +123,13 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// neighbour's.
 			CarrierTemplateStatus: s.carrierTemplateStatusFor(
 				context.sender.Channel, context.template),
+			// A campaign's body IS the template, personalised, so this passes by
+			// construction — which is the point. The same rule applies to every
+			// dispatch path, and a campaign that somehow sent text unrelated to
+			// its own template would be refused here too.
+			RegisteredTemplateRequired: registeredTemplateRequired(context.sender.Country),
+			TemplateBody:               templateBody(context.template),
+			Body:                       body,
 			// The balance check uses the running total for this batch, so a
 			// wallet that runs dry mid-page refuses the rest instead of going
 			// negative.

@@ -36,8 +36,8 @@ func TestStuckCampaignsLandOnWhatActuallySent(t *testing.T) {
 	// This one got a message out before it was abandoned.
 	partial := f.seedStuckCampaign(templateID, "Partial", time.Now().UTC().Add(-time.Hour))
 	if _, err := f.service.Send(ctx, f.identity, sending.SendRequest{
-		SenderID: f.senderID, Msisdn: "9876543210", Body: "Hello",
-		CampaignID: &partial,
+		SenderID: f.senderID, TemplateID: &f.templateID,
+		Msisdn: "9876543210", Body: "Hello", CampaignID: &partial,
 	}); err != nil {
 		t.Fatalf("send: %v", err)
 	}

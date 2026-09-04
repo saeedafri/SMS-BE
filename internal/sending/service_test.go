@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
@@ -21,6 +22,15 @@ type fixture struct {
 	sandbox  *connector.Sandbox
 	identity store.Identity
 	senderID uuid.UUID
+	// templateID is an approved template whose whole body is one variable, so
+	// it is a legal template for ANY text.
+	//
+	// India's regime now requires every send to carry a registered template and
+	// to be an instantiation of it, which is correct and is tested properly in
+	// the messaging package and in the binding tests. These tests are about
+	// money, settlement and batching; making each of them also construct a
+	// matching body would make them worse at the thing they exist to check.
+	templateID uuid.UUID
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -66,15 +76,16 @@ func newFixture(t *testing.T) *fixture {
 		// always does — could not be deleted at all, and the error was
 		// discarded. Disabled for this statement only, exactly as the demo
 		// reseed does.
-		if _, err := admin.Exec(context.Background(),
-			`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err == nil {
-			defer func() {
-				_, _ = admin.Exec(context.Background(),
-					`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`)
-			}()
-		}
-		if _, err := admin.Exec(context.Background(),
-			`DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		// Disabled, deleted and re-enabled inside ONE transaction.
+		//
+		// ALTER TABLE ... DISABLE TRIGGER is DDL and takes an ACCESS EXCLUSIVE
+		// lock, so doing it in a transaction means every other session blocks
+		// until the commit rather than observing the trigger switched off.
+		// Doing it in three separate statements switched it off for the whole
+		// database for a few milliseconds, and `go test ./...` runs packages in
+		// parallel — which is how the store package's append-only test failed
+		// while this fixture was cleaning up a tenant in another package.
+		if err := deleteTenantWithLedger(context.Background(), admin, tenantID); err != nil {
 			t.Logf("tenant %s was not cleaned up: %v", tenantID, err)
 		}
 		// ClickHouse rows must go too. The reconciler sweeps every tenant, so a
@@ -98,10 +109,19 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("fund wallet: %v", err)
 	}
 
+	templateID := uuid.New()
+	if _, err := admin.Exec(ctx, `
+		INSERT INTO templates (id, tenant_id, sender_id, name, channel, country, body, status)
+		VALUES ($1, $2, $3, 'Send fixture', 'SMS', 'IN', '{{message}}', 'approved')`,
+		templateID, tenantID, senderID); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
 	sandbox := connector.NewSandbox(0)
 	return &fixture{
 		t: t, sandbox: sandbox, identity: identity, senderID: senderID,
-		service: &sending.Service{DB: pool, ClickHouse: ch, Connector: sandbox},
+		templateID: templateID,
+		service:    &sending.Service{DB: pool, ClickHouse: ch, Connector: sandbox},
 	}
 }
 
@@ -122,7 +142,7 @@ func (f *fixture) balance() int64 {
 func (f *fixture) send(msisdn, body string) (sending.SendResult, error) {
 	f.t.Helper()
 	return f.service.Send(context.Background(), f.identity, sending.SendRequest{
-		SenderID: f.senderID, Msisdn: msisdn, Body: body,
+		SenderID: f.senderID, TemplateID: &f.templateID, Msisdn: msisdn, Body: body,
 	})
 }
 
@@ -289,4 +309,30 @@ func TestMultiSegmentMessageCostsProportionally(t *testing.T) {
 	if result.CostMinor != 24 {
 		t.Fatalf("cost = %d, want 24 (2 segments at 12)", result.CostMinor)
 	}
+}
+
+// deleteTenantWithLedger removes a fixture tenant and the append-only wallet
+// ledger that cascades from it, in one transaction so the DDL lock serialises
+// the trigger switch against every other session. See the api harness for the
+// full reasoning; the two packages run in parallel and this is what stops one
+// from breaking the other's assertions.
+func deleteTenantWithLedger(ctx context.Context, admin *pgxpool.Pool, tenantID uuid.UUID) error {
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

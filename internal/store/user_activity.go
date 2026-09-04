@@ -35,6 +35,11 @@ const (
 	ActivityTeamInvite      = "team.invite"
 	ActivityTeamRoleChange  = "team.role_change"
 	ActivitySSOConfigChange = "sso.config_change"
+	// The three halts. A campaign is a billable object and stopping one is the
+	// action someone asks about afterwards.
+	ActivityCampaignPause  = "campaign.pause"
+	ActivityCampaignResume = "campaign.resume"
+	ActivityCampaignCancel = "campaign.cancel"
 )
 
 // UserActivityEntry is one recorded event, already joined to the names the

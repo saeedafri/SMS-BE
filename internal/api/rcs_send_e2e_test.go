@@ -115,11 +115,25 @@ func TestAMissingVariableIsSentEmptySoPositionsDoNotShift(t *testing.T) {
 
 	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
 		"senderId": senderID.String(), "templateId": templateID.String(),
-		"to": "9876543211", "body": "Hi, your order shipped.",
+		// The instantiation with an empty first_name, spaces and all. India's
+		// regime now requires the body to be a legal instantiation of the
+		// registered template, and "Hi, your order shipped." is not one — the
+		// template's fixed text is "Hi " then the name then ", your order ".
+		"to": "9876543211", "body": "Hi , your order A-2 shipped.",
 		"variables": map[string]string{"order_id": "A-2"},
 	})
 	if res.Code != http.StatusAccepted {
 		t.Fatalf("status = %d; body = %s", res.Code, res.Body)
+	}
+	// Asserted before reaching into the carrier's submissions, so a refusal
+	// reports the reason instead of panicking on an empty slice.
+	var sent gen.SendMessageResult
+	res.decode(t, &sent)
+	if sent.Status != "sent" && sent.Status != "accepted" {
+		t.Fatalf("status = %q; body = %s", sent.Status, res.Body)
+	}
+	if len(carrier.sawSubmissions) == 0 {
+		t.Fatal("nothing reached the carrier")
 	}
 
 	submission := carrier.sawSubmissions[0]
@@ -154,7 +168,7 @@ func TestASendIsRefusedBeforeAnyMoneyMovesWhenTheCarrierHasNotApproved(t *testin
 
 	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
 		"senderId": senderID.String(), "templateId": templateID.String(),
-		"to": "9876543212", "body": "Hi Priya",
+		"to": "9876543212", "body": "Hi Priya, your order A-3 shipped.",
 		"variables": map[string]string{"first_name": "Priya", "order_id": "A-3"},
 	})
 	if res.Code != http.StatusAccepted {
@@ -420,7 +434,7 @@ func TestWithNoRCSCarrierASendDoesNotWaitForACarriersApproval(t *testing.T) {
 
 	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
 		"senderId": senderID.String(), "templateId": templateID.String(),
-		"to": "9876543218", "body": "Welcome, Priya.",
+		"to": "9876543218", "body": "Hi Priya, your order A-9 shipped.",
 		"variables": map[string]string{"first_name": "Priya", "order_id": "A-9"},
 	})
 	if res.Code != http.StatusAccepted {

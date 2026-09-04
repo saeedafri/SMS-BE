@@ -52,7 +52,7 @@ func (f *fixture) requests(count int, body string) []sending.SendRequest {
 	requests := make([]sending.SendRequest, count)
 	for i := range requests {
 		requests[i] = sending.SendRequest{
-			SenderID: f.senderID,
+			SenderID: f.senderID, TemplateID: &f.templateID,
 			// Distinct recipients: identical ones would be a legitimate reason
 			// for a batch to behave differently, and this is not testing that.
 			Msisdn: fmt.Sprintf("98765%05d", i+10),
@@ -248,7 +248,7 @@ func TestTheBatchedPathAgreesWithTheUnbatchedOne(t *testing.T) {
 
 	body := "Your verification code is 123456."
 	direct, err := f.service.Send(context.Background(), f.identity, sending.SendRequest{
-		SenderID: f.senderID, Msisdn: "9876543210", Body: body,
+		SenderID: f.senderID, TemplateID: &f.templateID, Msisdn: "9876543210", Body: body,
 	})
 	if err != nil {
 		t.Fatalf("unbatched send: %v", err)
@@ -256,7 +256,7 @@ func TestTheBatchedPathAgreesWithTheUnbatchedOne(t *testing.T) {
 
 	f.withCoalescer()
 	batched, err := f.service.Send(context.Background(), f.identity, sending.SendRequest{
-		SenderID: f.senderID, Msisdn: "9876543211", Body: body,
+		SenderID: f.senderID, TemplateID: &f.templateID, Msisdn: "9876543211", Body: body,
 	})
 	if err != nil {
 		t.Fatalf("batched send: %v", err)

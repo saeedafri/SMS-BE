@@ -156,8 +156,20 @@ func (Unimplemented) GetCampaign(ctx context.Context, request gen.GetCampaignReq
 	return nil, errNotImplemented("GetCampaign")
 }
 
+func (Unimplemented) CancelCampaign(ctx context.Context, request gen.CancelCampaignRequestObject) (gen.CancelCampaignResponseObject, error) {
+	return nil, errNotImplemented("CancelCampaign")
+}
+
 func (Unimplemented) ListCampaignMessages(ctx context.Context, request gen.ListCampaignMessagesRequestObject) (gen.ListCampaignMessagesResponseObject, error) {
 	return nil, errNotImplemented("ListCampaignMessages")
+}
+
+func (Unimplemented) PauseCampaign(ctx context.Context, request gen.PauseCampaignRequestObject) (gen.PauseCampaignResponseObject, error) {
+	return nil, errNotImplemented("PauseCampaign")
+}
+
+func (Unimplemented) ResumeCampaign(ctx context.Context, request gen.ResumeCampaignRequestObject) (gen.ResumeCampaignResponseObject, error) {
+	return nil, errNotImplemented("ResumeCampaign")
 }
 
 func (Unimplemented) ListContactLists(ctx context.Context, request gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {

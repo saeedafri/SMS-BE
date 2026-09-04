@@ -25,6 +25,8 @@ func (india) Stub() bool       { return false }
 // that must travel with every submit.
 func (india) RequiresRegistrationID(Tier) bool { return true }
 
+func (india) RequiresRegisteredTemplate() bool { return true }
+
 func (r india) Object(key string) (RegistrationObject, bool) {
 	return findObject(r.RegistrationObjects(), key)
 }
