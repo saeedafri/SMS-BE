@@ -223,23 +223,24 @@ func run() error {
 			"passwords cannot be stored, so no connection can be enabled")
 	}
 
-	// OFF, on the evidence.
+	// ON, on the evidence — the second time of asking.
 	//
-	// The send path re-reads the same configuration rows for every message, and
-	// caching them was supposed to be the throughput win. Measured against the
-	// deployed API with an otherwise identical run — same key tier, same four
-	// workers, same two minutes — it moved nothing: 19.2 accepted/sec before,
-	// 18.4 after. Those six Postgres reads were never the constraint.
+	// Caching these reads measured as noise when it was first tried: 19.2
+	// accepted/sec before, 18.4 after. That was correct at the time and for the
+	// wrong-looking reason — ClickHouse was holding a full core on row-at-a-time
+	// inserts, so nothing else in the send path could show up above it.
 	//
-	// What is: ClickHouse holds a full core of the two this box has while
-	// control-api uses a fifth of one, because a single send inserts one row and
-	// every insert becomes its own data part. Until that is fixed, this cache
-	// buys a staleness window on tenant standing and sender status — a
-	// compliance-relevant check — in exchange for nothing measurable.
+	// With the warehouse write coalesced the ceiling moved to ~35/sec, and the
+	// six Postgres round trips a send makes for the same handful of rows are now
+	// a visible share of what is left rather than something hidden behind a
+	// saturated warehouse.
 	//
-	// The code and its tests stay. Change this to a real TTL once the warehouse
-	// write is batched and Postgres becomes the next wall; it is one number.
-	hot := store.NewHotCache(0)
+	// Two seconds is the ceiling on staleness, not the norm: suspend, reinstate,
+	// throttle and sender approve/reject/edit/delete each drop their entry the
+	// moment they change it, so an operator's action takes effect on the next
+	// request. The wallet balance and suppression stay uncached — see hotcache.go
+	// for why those two are different in kind, not in degree.
+	hot := store.NewHotCache(2 * time.Second)
 
 	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger, Hot: hot,
 		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
@@ -256,6 +257,13 @@ func run() error {
 		Mail: &mailer.Mailer{
 			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 		}}
+
+	// Batch the transactional send path. The sends already in flight go through
+	// the pipeline together — one suppression query, one wallet movement per
+	// tenant, one carrier call and one ClickHouse write between all of them,
+	// instead of that many round trips each. Callers still wait for their own
+	// real outcome; nothing is deferred and nothing is acknowledged early.
+	apiServer.StartSendCoalescer()
 
 	// Said at every boot, because "rotate the seeded password" is exactly the
 	// kind of task that stays open forever when nothing mentions it again.
@@ -284,5 +292,10 @@ func run() error {
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return server.Shutdown(shutdownCtx)
+	err = server.Shutdown(shutdownCtx)
+	// After the listener, so no new send can be queued behind the ones being
+	// drained. A batch in flight has money held against it and messages already
+	// recorded; abandoning it there is the one shutdown that loses something.
+	apiServer.StopSendCoalescer()
+	return err
 }

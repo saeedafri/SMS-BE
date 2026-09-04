@@ -16,6 +16,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/mailer"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -35,6 +36,11 @@ type Server struct {
 	// Hot caches the configuration rows the send path re-reads per message.
 	// Nil disables it and every send goes to Postgres for all of them.
 	Hot *store.HotCache
+
+	// Sends batches the transactional send API: the sends already in flight go
+	// through the pipeline together instead of one round trip at a time. Nil
+	// means unbatched, which is what tests get and what this did before.
+	Sends *sending.Coalescer
 
 	// EnableDevEndpoints mounts /v1/dev/*, the browser suite's state hooks.
 	// Off unless the deployment opts in.
