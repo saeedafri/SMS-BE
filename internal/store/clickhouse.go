@@ -69,10 +69,17 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 			// is the guard on that claim.
 			"async_insert":          1,
 			"wait_for_async_insert": 1,
-			// How long the server may wait to fill a batch. The default 200ms
-			// would put a floor under single-send latency; 50ms keeps the batch
-			// worth having without making one caller wait on a quiet system.
-			"async_insert_busy_timeout_ms": 50,
+			// How long the server may wait to fill a batch.
+			//
+			// This is a latency floor on a quiet system: nothing else is
+			// arriving, so the caller waits out the whole window for a batch of
+			// one. Measured at 50ms it cost more than it bought at low
+			// concurrency — 11.2 sends/sec against 19.2 before — while lifting
+			// the ceiling under load from 22 to 36. 10ms keeps almost all of
+			// that ceiling, because a loaded server fills the buffer by SIZE
+			// long before the timer matters, and gives back the latency a single
+			// caller was paying for company that never arrived.
+			"async_insert_busy_timeout_ms": 10,
 		},
 		// Connections are recycled rather than held forever. Without a
 		// lifetime the pool keeps handles to a server that has since restarted
