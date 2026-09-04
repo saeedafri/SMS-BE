@@ -12,7 +12,13 @@ tunnel measured the home network, not the platform: 135 ms p50 there versus 77 m
 
 ## The number
 
-**~19–22 accepted sends per second, sustained, with zero errors and zero losses.**
+**~190 accepted sends per second per tenant, sustained, with zero errors and zero
+losses** — which is where the per-tenant rate limit sits, and, on this box, also
+where the hardware sits. See "Shipped and measured: batching the send path" for
+how it got there from 19; the run below is the original baseline, kept because
+the reasoning that follows only makes sense against it.
+
+Baseline, before any of the changes in this document:
 
 Two minutes, 4 workers:
 
@@ -159,3 +165,105 @@ Then reconcile `/tmp/ids.txt` against `SELECT count(DISTINCT id) FROM messages W
 
 The probe key created for this run was revoked afterwards, and the generator was removed from
 the VPS.
+
+## Shipped and measured: batching the send path — 5 September 2026
+
+`SendBatch` had already shown where the throughput was: one suppression query,
+one wallet movement and three ClickHouse writes for five hundred campaign
+recipients. It could only do that for a campaign, because a campaign is one
+sender and one body repeated, so everything expensive resolves once.
+
+API sends have no shared context — every caller brings its own sender, body and
+recipient. What they share is a moment: under load there are always dozens in
+flight, and the expensive work is per ROUND TRIP, not per message. Two hundred
+sends from two hundred callers still need one suppression query, one wallet
+movement per tenant, one carrier call and one ClickHouse write between them.
+
+So the sends already in flight now go through the pipeline together. **Nothing
+is deferred and nothing is acknowledged early**: a caller still waits for its own
+message id, its own cost and its own carrier verdict before the 202. This is the
+same send implemented differently, not a promise to do it later — which is why
+it needed no contract change, no new state and no schema change.
+
+There is no batch window and no timer. Assembling the next batch takes as long
+as processing the last one, so under load it fills on its own; with one caller
+the drain finds nothing and the batch is one message with no added latency. A
+fixed window has exactly the opposite behaviour — it was worth 40% at low
+concurrency when the ClickHouse insert window was first set to 50ms.
+
+Two smaller changes shipped alongside it: the configuration cache is now ON (it
+read as noise when ClickHouse was saturated and hiding everything behind it),
+and `SendMessage` no longer reads the sender uncached and then reads it again
+inside the send path.
+
+### Measured on the deployed API, 30s per point, live-tier key
+
+| workers | before (`d89a958`) | after (`972972d`) |
+|---|---|---|
+| 4 | 15.6/s · p50 208ms | 15.6/s · p50 260ms |
+| 24 | 26.9/s | **50.6/s** · p50 410ms |
+| 64 | 34.6/s | **104–132/s** · p50 455–575ms |
+| 128 | — | **188–192/s** (limiter engaged) |
+| 256 | — | **194.7/s** (limiter engaged) |
+
+**The ceiling went from ~35 to ~195 accepted/sec, about 5.6x.** Low-concurrency
+throughput is unchanged, which is the expected shape: four callers make batches
+of four.
+
+Run-to-run variance is ±15–25% — two cores shared with the EMS containers — so
+the 64-worker row is given as a range rather than a single number.
+
+### Zero miss, verified by reconciliation
+
+Every id the API returned was looked up in ClickHouse afterwards:
+
+| run | accepted | recorded |
+|---|---|---|
+| 4 workers | 473 | 473 |
+| 24 workers | 1,536 | 1,536 |
+| 64 workers | 4,012 | 4,012 |
+| 128 workers | 5,711 | 5,711 |
+| 256 workers | 5,900 | 5,900 |
+
+**13,620 accepted, 13,620 recorded, zero misses.** No 5xx in any run. A separate
+health probe every 500ms through a 64-worker run returned **60/60 200s** — the
+API stayed fully available while saturated.
+
+The 429s at 128 and 256 workers are the rate limiter working, not errors:
+`liveBurst` is 200/second per tenant.
+
+### What now stops it, named
+
+Two things, and they land in almost the same place:
+
+1. **The per-tenant limiter, at 200/second.** Deliberate: it is the tier
+   `GetRateLimit` advertises. A customer needing more needs their tier raised,
+   which is a product decision, not a code change.
+2. **The box.** During a 128-worker run, `top` shows **ClickHouse at 127–136% CPU
+   — more than a full core of the two this machine has** — while `control-api`
+   sits at 9–36% and load average reaches 9. At 64 workers and no throttling at
+   all, ClickHouse is still at 91%.
+
+So the limiter and the hardware ceiling coincide near 190/sec, and raising the
+limiter alone would not buy much. The Go service is not the constraint and has
+not been at any point: `/healthz` serves ~950 req/s, and at 256 workers the API
+handled **987 requests/second** end to end once the cheap 429 rejections are
+counted.
+
+### What it would take to reach thousands
+
+Both of these, not either:
+
+1. **Hardware.** ClickHouse wants a core to itself at 190/sec. Two cores shared
+   with a neighbouring product is the floor for a platform advertising 100/sec,
+   and it is nowhere near a platform advertising thousands. This is a
+   procurement decision, and it is the larger of the two.
+2. **Accept-and-enqueue.** Validate, persist, return 202, and let a worker pool
+   do the wallet charge, the carrier call and the warehouse write. Deliberately
+   NOT built: it introduces a state this product does not have — a message that
+   is accepted but not yet charged — and getting it wrong means double-charging
+   or sending for free. Batching took the throughput that could be taken without
+   that risk. This one needs its own design, not a flag.
+
+Anyone quoting a number to a customer should quote **190/second per tenant on
+the current hardware**, verified, with zero loss.
