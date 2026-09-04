@@ -223,14 +223,23 @@ func run() error {
 			"passwords cannot be stored, so no connection can be enabled")
 	}
 
-	// The send path re-reads the same handful of configuration rows for every
-	// message — sender, rate, tenant standing. Two seconds is short enough that
-	// an operator suspending a tenant sees it take effect before they have
-	// finished reading the confirmation, and long enough that a burst of
-	// thousands of messages asks Postgres for each row once rather than once
-	// per message. The paths that change those rows drop their entry
-	// immediately, so the TTL is the ceiling on staleness, not the norm.
-	hot := store.NewHotCache(2 * time.Second)
+	// OFF, on the evidence.
+	//
+	// The send path re-reads the same configuration rows for every message, and
+	// caching them was supposed to be the throughput win. Measured against the
+	// deployed API with an otherwise identical run — same key tier, same four
+	// workers, same two minutes — it moved nothing: 19.2 accepted/sec before,
+	// 18.4 after. Those six Postgres reads were never the constraint.
+	//
+	// What is: ClickHouse holds a full core of the two this box has while
+	// control-api uses a fifth of one, because a single send inserts one row and
+	// every insert becomes its own data part. Until that is fixed, this cache
+	// buys a staleness window on tenant standing and sender status — a
+	// compliance-relevant check — in exchange for nothing measurable.
+	//
+	// The code and its tests stay. Change this to a real TTL once the warehouse
+	// write is batched and Postgres becomes the next wall; it is one number.
+	hot := store.NewHotCache(0)
 
 	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger, Hot: hot,
 		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
