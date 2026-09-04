@@ -117,10 +117,6 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 	}
 
 	header := strings.TrimSpace(request.Body.Header)
-	if header == "" {
-		return gen.CreateSenderId422JSONResponse(
-			errorBody(codeValidation, "A sender header is required.")), nil
-	}
 	// sender_ids.channel has no CHECK constraint behind it, so an unchecked
 	// value here is written verbatim — a probe created a sender on channel
 	// "TELEPATHY" and it sat in the approvals queue.
@@ -140,13 +136,11 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 	// nowhere, so "a b!@#$%^&*()_+1234567890" was accepted as a DLT header and
 	// sat in review looking like a real submission.
 	//
-	// Alphanumeric channels only. A Voice or Email sender's identity is a
-	// number or a domain, and neither is a six-character DLT header.
-	if channel := string(request.Body.Channel); channel == "SMS" || channel == "RCS" {
-		if result := regime.ValidateHeader(header); !result.OK {
-			return gen.CreateSenderId422JSONResponse(
-				errorBody(codeValidation, result.Reason)), nil
-		}
+	// Shared with the update path so an edit cannot reach a state a create
+	// would have refused.
+	if problem := senderIdentityProblem(regime, string(request.Body.Channel), header,
+		request.Body.RegistrationId); problem != "" {
+		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
 	}
 
 	created, err := store.CreateSenderID(ctx, s.DB, identity, store.SenderID{
@@ -267,4 +261,208 @@ func sixDigitCode() (string, error) {
 		return "", fmt.Errorf("api: generate voice code: %w", err)
 	}
 	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// senderIdentityProblem validates the values a sender record would END UP with,
+// and is called by both the create and the update path.
+//
+// One function on purpose. Validating a patch in isolation lets a clear slip
+// through that the same empty value would be refused for at create — the record
+// ends up in a state the create path would never have produced, reached by
+// editing rather than by creating. The two rules cannot drift while there is
+// only one of them.
+//
+// Returns the sentence to show the customer, or "" when the record is valid.
+func senderIdentityProblem(regime compliance.Regime, channel, header string,
+	registrationID *string) string {
+
+	if strings.TrimSpace(header) == "" {
+		return "A sender header is required."
+	}
+	// Alphanumeric channels only. A Voice or Email sender's identity is a
+	// number or a domain, and neither is a six-character DLT header.
+	if channel == "SMS" || channel == "RCS" {
+		if result := regime.ValidateHeader(header); !result.OK {
+			return result.Reason
+		}
+	}
+	// A registry id that is present but empty is not an id. Where the regime
+	// issues one, storing "" would record an answer to a question the customer
+	// has not answered, and the header would go to the carrier unbacked.
+	//
+	// Absent is a different thing from empty and is left alone here: a customer
+	// may register a header before their DLT id comes back.
+	if registrationID != nil && strings.TrimSpace(*registrationID) == "" &&
+		regime.RequiresRegistrationID(compliance.TierSender) {
+		return "This country's regulator issues a registration id for a sender, " +
+			"so it cannot be cleared."
+	}
+	return ""
+}
+
+// UpdateSenderId corrects a sender that no registry has bound yet.
+//
+// A typo in a header used to be permanent for the life of the account. What
+// gates this is the sender's STANDING: once approved, the header is bound to the
+// registry entry that granted it — a DLT header registration in India, a TCR
+// campaign in the US — and changing it would leave the platform sending under a
+// header no registry approved.
+func (s *Server) UpdateSenderId(ctx context.Context, request gen.UpdateSenderIdRequestObject) (
+	gen.UpdateSenderIdResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return nil, errForbidden
+	}
+	sender, err := store.GetSenderID(ctx, s.DB, identity, request.Id)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateSenderId404JSONResponse(
+			errorBody(codeNotFound, "No such sender.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch sender.Status {
+	case "approved", "blocked", "expired":
+		return gen.UpdateSenderId409JSONResponse(errorBody(codeConflict,
+			fmt.Sprintf("A %s sender cannot be edited — its header is bound to the "+
+				"registration that granted it. Retire it and register the correction.",
+				sender.Status))), nil
+	}
+	if request.Body == nil {
+		return gen.UpdateSenderId200JSONResponse(senderResponse(sender)), nil
+	}
+
+	// An empty object is a no-op rather than an error: a form that submits
+	// without changing anything has not asked for anything invalid.
+	header := sender.Header
+	if request.Body.Header != nil {
+		header = strings.TrimSpace(*request.Body.Header)
+	}
+	// displayName is a WhatsApp Business concept. Storing it on an SMS sender
+	// records a field that channel has no meaning for, so it is refused rather
+	// than quietly kept.
+	if request.Body.DisplayName != nil && sender.Channel != "WHATSAPP" {
+		return gen.UpdateSenderId422JSONResponse(errorBody(codeValidation,
+			"displayName applies to WhatsApp senders only.")), nil
+	}
+
+	// Omitting registrationId leaves the stored value alone; sending null asks
+	// to clear it. Those are different requests, and the generated struct
+	// cannot tell them apart on its own — both arrive as a nil pointer — so the
+	// raw body decides which one this is.
+	clearRegistration := false
+	if request.Body.RegistrationId == nil && bodyMentions(ctx, "registrationId") {
+		clearRegistration = true
+	}
+	registrationID := sender.ExternalID
+	switch {
+	case clearRegistration:
+		registrationID = nil
+	case request.Body.RegistrationId != nil:
+		registrationID = request.Body.RegistrationId
+	}
+
+	// Validated as the record would END UP, through the create path's own rule.
+	regime, known := compliance.For(sender.Country)
+	if !known {
+		return gen.UpdateSenderId422JSONResponse(errorBody(codeValidation,
+			fmt.Sprintf("We do not operate in %q yet.", sender.Country))), nil
+	}
+	checked := registrationID
+	if clearRegistration {
+		blank := ""
+		checked = &blank
+	}
+	if problem := senderIdentityProblem(regime, sender.Channel, header, checked); problem != "" {
+		return gen.UpdateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+
+	updated, err := store.UpdateSenderID(ctx, s.DB, identity, request.Id,
+		request.Body.Header, request.Body.DisplayName, request.Body.RegistrationId,
+		clearRegistration)
+	if errors.Is(err, store.ErrConflict) {
+		return gen.UpdateSenderId409JSONResponse(errorBody(codeConflict,
+			"That header is already registered for this channel and country.")), nil
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateSenderId404JSONResponse(
+			errorBody(codeNotFound, "No such sender.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.UpdateSenderId200JSONResponse(senderResponse(updated)), nil
+}
+
+// DeleteSenderId retires a sender nothing depends on.
+//
+// What gates delete is USE, not standing: retiring a verified sender is
+// legitimate once nothing references it, which is the opposite of the rule on
+// editing. The refusal names the counts per kind, because "in use" without
+// saying by what leaves the caller with nothing to act on.
+func (s *Server) DeleteSenderId(ctx context.Context, request gen.DeleteSenderIdRequestObject) (
+	gen.DeleteSenderIdResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return nil, errForbidden
+	}
+	if _, err := store.GetSenderID(ctx, s.DB, identity, request.Id); errors.Is(err, store.ErrNotFound) {
+		return gen.DeleteSenderId404JSONResponse(
+			errorBody(codeNotFound, "No such sender.")), nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	refs, err := store.CountSenderReferences(ctx, s.DB, identity, request.Id)
+	if err != nil {
+		return nil, err
+	}
+	if refs.Total() > 0 {
+		return gen.DeleteSenderId409JSONResponse(errorBody(codeConflict,
+			"This sender is still used by "+describeSenderUse(refs)+
+				". Repoint or remove those first.")), nil
+	}
+
+	if err := store.DeleteSenderID(ctx, s.DB, identity, request.Id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.DeleteSenderId404JSONResponse(
+				errorBody(codeNotFound, "No such sender.")), nil
+		}
+		return nil, err
+	}
+	return gen.DeleteSenderId204Response{}, nil
+}
+
+// describeSenderUse turns the counts into the sentence the caller acts on:
+// "2 templates, 1 campaign".
+func describeSenderUse(refs store.SenderReferences) string {
+	parts := []string{}
+	for _, kind := range []struct {
+		count     int
+		one, many string
+	}{
+		{refs.Templates, "template", "templates"},
+		{refs.Campaigns, "campaign", "campaigns"},
+		{refs.CampaignFallback, "campaign fallback", "campaign fallbacks"},
+		{refs.Journeys, "journey", "journeys"},
+		{refs.VerifyServices, "Verify service", "Verify services"},
+	} {
+		if kind.count == 0 {
+			continue
+		}
+		noun := kind.many
+		if kind.count == 1 {
+			noun = kind.one
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", kind.count, noun))
+	}
+	return strings.Join(parts, ", ")
 }

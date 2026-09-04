@@ -162,6 +162,11 @@ func NewRouter(s *Server) http.Handler {
 	r.Use(rejectUnknownFields(map[string][]string{
 		"POST /v1/operator/connections":       connectionBodyFields,
 		"PATCH /v1/operator/connections/{id}": connectionBodyFields,
+		// A throttle body carrying `status` must not quietly change the status.
+		// Declaring additionalProperties: false and then spreading the body is
+		// how that happens, so the contract's declaration is enforced here.
+		"POST /v1/operator/tenants/{id}/throttle": {"ratePerSecond", "reason"},
+		"PATCH /v1/sender-ids/{id}":               {"header", "displayName", "registrationId"},
 	}))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

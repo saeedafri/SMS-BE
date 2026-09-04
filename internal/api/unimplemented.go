@@ -536,8 +536,16 @@ func (Unimplemented) CreateSenderId(ctx context.Context, request gen.CreateSende
 	return nil, errNotImplemented("CreateSenderId")
 }
 
+func (Unimplemented) DeleteSenderId(ctx context.Context, request gen.DeleteSenderIdRequestObject) (gen.DeleteSenderIdResponseObject, error) {
+	return nil, errNotImplemented("DeleteSenderId")
+}
+
 func (Unimplemented) GetSenderId(ctx context.Context, request gen.GetSenderIdRequestObject) (gen.GetSenderIdResponseObject, error) {
 	return nil, errNotImplemented("GetSenderId")
+}
+
+func (Unimplemented) UpdateSenderId(ctx context.Context, request gen.UpdateSenderIdRequestObject) (gen.UpdateSenderIdResponseObject, error) {
+	return nil, errNotImplemented("UpdateSenderId")
 }
 
 func (Unimplemented) RequestVoiceCall(ctx context.Context, request gen.RequestVoiceCallRequestObject) (gen.RequestVoiceCallResponseObject, error) {
