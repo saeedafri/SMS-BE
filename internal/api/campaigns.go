@@ -393,10 +393,38 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 // sendingService builds the data-plane service. Campaigns need ClickHouse for
 // message rows, so a missing one means no send path rather than a partial one.
 func (s *Server) sendingService(ctx context.Context) *sending.Service {
+	service := s.rawSendingService(ctx)
+	if service != nil {
+		service.Coalescer = s.Sends
+	}
+	return service
+}
+
+// rawSendingService is the same service without the coalescer attached. The
+// coalescer builds its per-batch service from this one: giving a batch's own
+// service a coalescer would be a loop waiting to be written.
+func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	clickhouse, err := s.clickhouse(ctx)
 	if err != nil || s.Connector == nil {
 		return nil
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot}
+}
+
+// StartSendCoalescer turns on batching for the transactional send API. Called
+// once at startup; until it is, every send takes its own round trips, which is
+// correct and slower.
+func (s *Server) StartSendCoalescer() {
+	s.Sends = sending.NewCoalescer(s.rawSendingService)
+	s.Sends.Start()
+}
+
+// StopSendCoalescer drains the batches in flight. Sends still queued are
+// answered with an error rather than left waiting for a reply that is not
+// coming.
+func (s *Server) StopSendCoalescer() {
+	if s.Sends != nil {
+		s.Sends.Stop()
+	}
 }

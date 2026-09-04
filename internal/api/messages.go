@@ -212,7 +212,14 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	// The sender is read before the scope check because the scope depends on
 	// the channel, and a key must not learn which sender ids exist by watching
 	// 403 turn into 404.
-	sender, err := store.GetSenderID(ctx, s.DB, identity, request.Body.SenderId)
+	//
+	// Read through the same cache the send path uses, because it is the same
+	// question about the same row a few microseconds apart. Reading it twice
+	// uncached made this the last per-message Postgres round trip left on the
+	// hot path once the rest of the pipeline was batched. Approve, reject, edit
+	// and delete all drop the entry, so the answer here is never staler than
+	// the send that follows it.
+	sender, err := store.CachedSenderID(ctx, s.DB, s.Hot, identity, request.Body.SenderId)
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
 			"No such sender id on this account.")), nil

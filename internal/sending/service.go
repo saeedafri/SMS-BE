@@ -43,6 +43,11 @@ type Service struct {
 	// every lookup goes to Postgres, which is the behaviour before this existed
 	// and what the tests that assert on freshness rely on.
 	Hot *store.HotCache
+
+	// Coalescer batches the transactional send path. Nil means every send pays
+	// for its own round trips, which is correct and slow — see coalesce.go for
+	// why the batched form is the same send rather than a deferred one.
+	Coalescer *Coalescer
 }
 
 // carrierFor picks the gateway for a channel.
@@ -87,6 +92,19 @@ type SendResult struct {
 // carrier. A message that reached a carrier but failed to be recorded is
 // unrecoverable — the recipient got it and we have no idea.
 func (s *Service) Send(ctx context.Context, identity store.Identity, request SendRequest) (SendResult, error) {
+	// Batched when a coalescer is running, one at a time when it is not. The
+	// two paths apply the same rules in the same order and return the same
+	// result; they differ only in how many round trips they spend doing it.
+	// Tests that want the unbatched path leave Coalescer nil, which is also
+	// what a deployment gets before Start is called.
+	if s.Coalescer != nil {
+		return s.Coalescer.submit(ctx, identity, request)
+	}
+	return s.sendOne(ctx, identity, request)
+}
+
+// sendOne is the unbatched pipeline: one message, its own round trips.
+func (s *Service) sendOne(ctx context.Context, identity store.Identity, request SendRequest) (SendResult, error) {
 	// 1. Resolve the sender and confirm it is approved for this tenant.
 	sender, err := store.CachedSenderID(ctx, s.DB, s.Hot, identity, request.SenderID)
 	if errors.Is(err, store.ErrNotFound) {
