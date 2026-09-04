@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -2304,6 +2305,20 @@ func (s *Server) senderReadyForApproval(ctx context.Context, senderID uuid.UUID)
 	if err := s.operatorPool().QueryRow(ctx,
 		`SELECT channel, voice_verified FROM sender_ids WHERE id = $1`,
 		senderID).Scan(&channel, &voiceVerified); err != nil {
+		// A sender that is not there is a 404, and it has to be said HERE.
+		//
+		// This readiness check runs only on the approve path, before
+		// DecideSender — which is the call that knows how to report a missing
+		// row. So an unknown id turned into a bare pgx.ErrNoRows escaping to
+		// the error middleware as a 500, while `reject` on the same id answered
+		// 404 correctly because it never comes through here.
+		//
+		// A 500 is the one status a client may retry blindly, and an approval
+		// is not safe to retry blindly. It also hides a real outage behind what
+		// is usually just a stale row in the approvals queue.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
 		return err
 	}
 

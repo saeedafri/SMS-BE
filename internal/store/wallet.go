@@ -162,19 +162,32 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // LedgerPage returns one page of entries, newest first, using keyset
 // pagination over (created_at, id). OFFSET would degrade as the ledger grows,
 // and the contract already models cursors as opaque strings.
+//
+// The total is the count matching the FILTER, not the page — it is what lets a
+// footer say "showing 50 of N", and for a ledger N is the number a customer
+// actually wants: how many transactions they have, not how many fit on screen.
 func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	currency, cursor string, limit int) ([]LedgerEntry, string, error) {
+	currency, cursor string, limit int) ([]LedgerEntry, int, string, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 
 	var entries []LedgerEntry
+	var total int
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Counted inside the same transaction as the page, so the total and the
+		// rows describe one consistent state of the ledger rather than two
+		// moments either side of a concurrent charge.
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM wallet_ledger
+			WHERE ($1 = '' OR currency = $1)`, currency).Scan(&total); err != nil {
+			return err
+		}
 		// Fetch one extra row to learn whether another page exists without a
 		// second count query.
 		rows, err := tx.Query(ctx, `
@@ -202,7 +215,7 @@ func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("store: ledger page: %w", err)
+		return nil, 0, "", fmt.Errorf("store: ledger page: %w", err)
 	}
 
 	next := ""
@@ -211,7 +224,7 @@ func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		entries = entries[:limit]
 		next = encodeLedgerCursor(last.CreatedAt, last.ID)
 	}
-	return entries, next, nil
+	return entries, total, next, nil
 }
 
 func encodeLedgerCursor(at time.Time, id uuid.UUID) string {
@@ -643,19 +656,23 @@ const invoiceColumns = `id, currency, period_start, period_end, status,
 	subtotal_minor, tax_rate_percent, tax_minor, total_minor, created_at`
 
 func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	cursor string, limit int) ([]Invoice, string, error) {
+	cursor string, limit int) ([]Invoice, int, string, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
 	if err != nil {
-		return nil, "", err
+		return nil, 0, "", err
 	}
 
 	var invoices []Invoice
 	var createdAts []time.Time
+	var total int
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT `+invoiceColumns+` FROM invoices
 			WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1, $2))
@@ -681,7 +698,7 @@ func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("store: list invoices: %w", err)
+		return nil, 0, "", fmt.Errorf("store: list invoices: %w", err)
 	}
 
 	next := ""
@@ -689,7 +706,7 @@ func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		next = encodeLedgerCursor(createdAts[limit-1], invoices[limit-1].ID)
 		invoices = invoices[:limit]
 	}
-	return invoices, next, nil
+	return invoices, total, next, nil
 }
 
 func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID uuid.UUID) (Invoice, error) {

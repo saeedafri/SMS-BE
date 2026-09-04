@@ -148,8 +148,15 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	//
 	// WithoutCancel because the common cause of the early return is the request
 	// context going away, and the landing write must still happen.
+	// halted is set when the loop stopped because someone hit the brake. The
+	// landing writes below must then leave the status alone: a campaign that
+	// was paused and is overwritten with 'sent' has had its brake silently
+	// undone, and one overwritten with 'failed' is reported as broken when it
+	// was stopped on purpose.
+	halted := false
+
 	defer func() {
-		if err == nil {
+		if err == nil || halted {
 			return
 		}
 		status := "sent"
@@ -162,9 +169,34 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 	}()
 
-	// Paged so a million-contact list never has to fit in memory at once.
-	cursor := ""
+	// Paged so a million-contact list never has to fit in memory at once, and
+	// resumed from where a pause stopped rather than from the top.
+	cursor := campaign.DispatchCursor
 	for {
+		// The brake, checked between pages.
+		//
+		// Fan-out is a loop inside a request, so the only thing that can stop
+		// it is another request changing the row underneath it. One indexed
+		// read per five hundred recipients is what "no further recipient is
+		// dispatched" costs. A page already handed to a carrier cannot be
+		// recalled and is not meant to be — the invariant is that nothing NEW
+		// leaves after the halt commits.
+		status, statusErr := store.CampaignStatus(ctx, s.DB, identity, campaign.ID)
+		if statusErr != nil {
+			return sent, failed, statusErr
+		}
+		if status == "paused" || status == "cancelled" {
+			halted = true
+			// Where to resume from. Written even on cancel: it costs nothing
+			// and it is the record of how far the campaign actually got.
+			if saveErr := store.SaveDispatchCursor(context.WithoutCancel(ctx), s.DB,
+				identity, campaign.ID, cursor); saveErr != nil && s.Logger != nil {
+				s.Logger.Warn("campaign halted without recording its cursor",
+					"campaign", campaign.ID, "error", saveErr)
+			}
+			return sent, failed, nil
+		}
+
 		contacts, _, next, err := store.ListContacts(ctx, s.DB, identity,
 			campaign.ListID, cursor, batchSize)
 		if err != nil {
@@ -183,6 +215,13 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			break
 		}
 		cursor = next
+		// Persisted per page rather than only at a halt, so a campaign that
+		// dies mid-fan-out — a crash, a ClickHouse blip — resumes from the last
+		// page it finished instead of re-sending everyone before it.
+		if saveErr := store.SaveDispatchCursor(ctx, s.DB, identity,
+			campaign.ID, cursor); saveErr != nil {
+			return sent, failed, saveErr
+		}
 	}
 
 	status := "sent"

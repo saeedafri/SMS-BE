@@ -85,7 +85,7 @@ func (s *Server) ListLedger(ctx context.Context, request gen.ListLedgerRequestOb
 		limit = *request.Params.Limit
 	}
 
-	entries, next, err := store.LedgerPage(ctx, s.DB, identity, currency, cursor, limit)
+	entries, total, next, err := store.LedgerPage(ctx, s.DB, identity, currency, cursor, limit)
 	if errors.Is(err, store.ErrInvalidCursor) {
 		// A cursor we never issued is the client's error, not ours.
 		return gen.ListLedger401JSONResponse(
@@ -99,7 +99,7 @@ func (s *Server) ListLedger(ctx context.Context, request gen.ListLedgerRequestOb
 	for _, entry := range entries {
 		out = append(out, ledgerEntryResponse(entry))
 	}
-	page := gen.LedgerPage{Entries: out}
+	page := gen.LedgerPage{Entries: out, Total: total}
 	if next != "" {
 		page.NextCursor = &next
 	}

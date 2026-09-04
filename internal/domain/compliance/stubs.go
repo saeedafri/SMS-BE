@@ -17,6 +17,8 @@ func (s stub) Currency() string { return s.currency }
 // A stub registers nothing, so it requires nothing.
 func (stub) RequiresRegistrationID(Tier) bool { return false }
 
+func (stub) RequiresRegisteredTemplate() bool { return false }
+
 // A stub has no registration rules to check a header against.
 func (stub) ValidateHeader(string) ValidationResult { return valid() }
 func (stub) Stub() bool                             { return true }

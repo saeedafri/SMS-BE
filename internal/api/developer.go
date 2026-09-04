@@ -82,6 +82,16 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 		return gen.CreateApiKey422JSONResponse(errorBody(codeValidation,
 			enumMessage("Environment", validEnvironments))), nil
 	}
+	// A scope outside the catalogue was accepted, stored verbatim and echoed
+	// back on every later read. "messages:write" is not a scope — it does not
+	// appear in the list this same service publishes two paths away — and a key
+	// holding it is a key whose printed permissions mean nothing, because
+	// nothing will ever match it.
+	if bad, ok := knownScopes(request.Body.Scopes); !ok {
+		return gen.CreateApiKey422JSONResponse(errorBody(codeValidation,
+			fmt.Sprintf("%q is not a scope. Scopes must be one of: %s.",
+				bad, scopeVocabulary()))), nil
+	}
 	key, err := store.CreateAPIKey(ctx, s.DB, identity, request.Body.Name,
 		string(request.Body.Environment), request.Body.Scopes)
 	if err != nil {
@@ -168,14 +178,7 @@ func (s *Server) ListApiScopes(ctx context.Context, _ gen.ListApiScopesRequestOb
 	// other set, so a key created through the UI carried scopes the API would
 	// not recognise. One vocabulary, and it is theirs, because a scope string
 	// is part of the public API surface customers paste into their own code.
-	return gen.ListApiScopes200JSONResponse([]gen.ApiScope{
-		{Key: "send:sms", Label: "Send SMS", Category: "Send"},
-		{Key: "send:rcs", Label: "Send RCS", Category: "Send"},
-		{Key: "read:messages", Label: "Read message status", Category: "Read"},
-		{Key: "read:analytics", Label: "Read analytics", Category: "Read"},
-		{Key: "read:logs", Label: "Read message logs", Category: "Read"},
-		{Key: "webhooks:manage", Label: "Manage webhooks", Category: "Manage"},
-	}), nil
+	return gen.ListApiScopes200JSONResponse(apiScopeCatalogue), nil
 }
 
 // GetRateLimit reports the tenant's API budget. Live traffic gets the larger

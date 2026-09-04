@@ -40,6 +40,9 @@ type harness struct {
 	// operatorPool carries app.operator=on, for rebuilding the router in
 	// variants like newHarnessWithInviteCode.
 	operatorPool *pgxpool.Pool
+	// senderSeq numbers seeded sender headers so they stay unique within one
+	// harness.
+	senderSeq int
 	// tenants is every tenant this harness seeded, so a variant that also
 	// writes to ClickHouse can clean up there — the warehouse has no foreign
 	// keys and would otherwise keep rows for tenants Postgres has dropped.
@@ -190,16 +193,16 @@ func (h *harness) newAccount(role string) account {
 		// started failing after a day of use, and long enough for a fixed test
 		// id to collide with its own previous run.
 		//
-		// Disabled for this statement only, exactly as the demo reseed does,
-		// and restored immediately whether or not the delete succeeds.
-		if _, err := h.admin.Exec(ctx,
-			`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err == nil {
-			defer func() {
-				_, _ = h.admin.Exec(ctx,
-					`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`)
-			}()
-		}
-		if _, err := h.admin.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		// Disabled, deleted and re-enabled inside ONE transaction.
+		//
+		// ALTER TABLE ... DISABLE TRIGGER is DDL and takes an ACCESS EXCLUSIVE
+		// lock, so doing it in a transaction means every other session blocks
+		// until the commit rather than observing the trigger switched off.
+		// Doing it in three separate statements switched it off for the whole
+		// database for a few milliseconds, and `go test ./...` runs packages in
+		// parallel — which is how the store package's append-only test failed
+		// while this fixture was cleaning up a tenant in another package.
+		if err := deleteTenantWithLedger(ctx, h.admin, tenantID); err != nil {
 			h.t.Logf("tenant %s was not cleaned up: %v", tenantID, err)
 		}
 		_, _ = h.admin.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
@@ -476,4 +479,33 @@ func testSecretsBox(t *testing.T) *secrets.Box {
 		t.Fatalf("test secrets box: %v", err)
 	}
 	return box
+}
+
+// deleteTenantWithLedger removes a fixture tenant, including the append-only
+// wallet ledger that cascades from it.
+//
+// The append-only trigger fires on the CASCADE, so a tenant that funded a
+// wallet — which every send fixture does — cannot be deleted at all while it is
+// enabled. Switching it off is therefore necessary and switching it off
+// GLOBALLY is not: the whole thing runs in one transaction so the DDL lock
+// serialises it against every other session.
+func deleteTenantWithLedger(ctx context.Context, admin *pgxpool.Pool, tenantID uuid.UUID) error {
+	tx, err := admin.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx,
+		`ALTER TABLE wallet_ledger DISABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenantID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`ALTER TABLE wallet_ledger ENABLE TRIGGER wallet_ledger_append_only`); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

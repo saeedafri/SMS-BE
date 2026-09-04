@@ -38,6 +38,16 @@ type Campaign struct {
 	// disagree.
 	RetriedByCampaignID *uuid.UUID
 	CreatedAt           time.Time
+
+	// PausedAt and CancelledAt are both nullable and can both be set: a paused
+	// campaign that is then cancelled carries the two instants, and its
+	// effective stop time is the EARLIER of them. Preferring the cancel instant
+	// jumps a campaign's elapsed time forward by the whole held interval.
+	PausedAt    *time.Time
+	CancelledAt *time.Time
+	// DispatchCursor is where fan-out reached, so a resume continues from the
+	// exact recipient a pause stopped at. Empty means from the beginning.
+	DispatchCursor string
 }
 
 const campaignColumns = `
@@ -46,7 +56,7 @@ const campaignColumns = `
 	c.status, c.scheduled_at, c.send_started_at, c.recipients,
 	c.segments_per_message, c.cost_minor_min, c.cost_minor_max, c.currency,
 	c.retry_of, (SELECT r.id FROM campaigns r WHERE r.retry_of = c.id LIMIT 1),
-	c.created_at`
+	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, '')`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var campaign Campaign
@@ -56,7 +66,8 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 		&campaign.Status, &campaign.ScheduledAt, &campaign.SendStartedAt,
 		&campaign.Recipients, &campaign.SegmentsPerMessage, &campaign.CostMinorMin,
 		&campaign.CostMinorMax, &campaign.Currency, &campaign.RetryOf,
-		&campaign.RetriedByCampaignID, &campaign.CreatedAt)
+		&campaign.RetriedByCampaignID, &campaign.CreatedAt,
+		&campaign.PausedAt, &campaign.CancelledAt, &campaign.DispatchCursor)
 	return campaign, err
 }
 
@@ -143,9 +154,15 @@ func MarkCampaignSending(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	campaignID uuid.UUID) error {
 
 	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Never over a halt. Fan-out marks the campaign sending on its way in,
+		// and between a resume returning and its dispatch goroutine starting
+		// there is a window in which someone can pause or cancel again. Without
+		// this guard that second halt is silently undone and the campaign sends
+		// anyway — the exact failure the brake exists to prevent.
 		_, err := tx.Exec(ctx,
 			`UPDATE campaigns SET status = 'sending', send_started_at = now(),
-			 updated_at = now() WHERE id = $1`, campaignID)
+			 updated_at = now()
+			 WHERE id = $1 AND status NOT IN ('paused','cancelled')`, campaignID)
 		return err
 	})
 }
@@ -155,8 +172,12 @@ func SetCampaignStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	campaignID uuid.UUID, status string) error {
 
 	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Cancelled is terminal. The landing writes — fan-out finishing, the
+		// stuck-campaign sweep tidying up afterwards — must not turn a campaign
+		// somebody deliberately stopped back into 'sent'.
 		_, err := tx.Exec(ctx,
-			`UPDATE campaigns SET status = $2, updated_at = now() WHERE id = $1`,
+			`UPDATE campaigns SET status = $2, updated_at = now()
+			 WHERE id = $1 AND status <> 'cancelled'`,
 			campaignID, status)
 		return err
 	})
@@ -206,4 +227,121 @@ func FindStuckCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return nil, fmt.Errorf("store: find stuck campaigns: %w", err)
 	}
 	return stuck, nil
+}
+
+// Campaign halt.
+//
+// The three transitions share one function because they share the thing that
+// makes them safe: the row is locked before its status is read, so two halts
+// arriving together cannot both decide they were the first. Without the lock a
+// concurrent pause and cancel both see 'sending', both write, and the campaign
+// ends up in whichever state committed last with the other's timestamp beside
+// it.
+var (
+	// ErrCampaignHaltIllegal is a transition the state machine forbids — a
+	// resume on a campaign that is not paused, a pause on a finished one.
+	ErrCampaignHaltIllegal = errors.New("store: campaign cannot make that transition")
+)
+
+// haltTransitions is the state machine, written out rather than reasoned about
+// at each call site.
+var haltTransitions = map[string]map[string]bool{
+	// Pausing a scheduled campaign is legal and means "do not start at the
+	// scheduled time".
+	"pause":  {"sending": true, "queued": true, "scheduled": true},
+	"resume": {"paused": true},
+	// Cancelling a paused campaign is a real path: it is how someone who hit
+	// the brake decides not to continue.
+	"cancel": {"sending": true, "queued": true, "scheduled": true, "paused": true},
+}
+
+// HaltCampaign applies pause, resume or cancel and returns the campaign as it
+// now stands. ErrNotFound if the id is not this tenant's — checked before the
+// transition, so a probe cannot tell "not yours" from "wrong state".
+func HaltCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID, action string) (Campaign, error) {
+
+	var campaign Campaign
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx,
+			`SELECT status FROM campaigns WHERE id = $1 FOR UPDATE`,
+			campaignID).Scan(&status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if !haltTransitions[action][status] {
+			return fmt.Errorf("%w: %s from %s", ErrCampaignHaltIllegal, action, status)
+		}
+
+		var query string
+		switch action {
+		case "pause":
+			query = `UPDATE campaigns SET status = 'paused', paused_at = now(),
+			         updated_at = now() WHERE id = $1`
+		case "resume":
+			// paused_at is cleared rather than kept. Leaving the previous pause
+			// instant behind is how a later elapsed-time calculation counts a
+			// hold that has already ended.
+			query = `UPDATE campaigns SET status = 'sending', paused_at = NULL,
+			         updated_at = now() WHERE id = $1`
+		case "cancel":
+			// paused_at is deliberately NOT cleared. Both instants stand, and
+			// the earlier one is the campaign's real stop time.
+			query = `UPDATE campaigns SET status = 'cancelled', cancelled_at = now(),
+			         updated_at = now() WHERE id = $1`
+		default:
+			return fmt.Errorf("store: unknown halt action %q", action)
+		}
+		if _, err := tx.Exec(ctx, query, campaignID); err != nil {
+			return err
+		}
+
+		row := tx.QueryRow(ctx,
+			`SELECT `+campaignColumns+` FROM campaigns c WHERE c.id = $1`, campaignID)
+		var scanErr error
+		campaign, scanErr = scanCampaign(row)
+		return scanErr
+	})
+	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrCampaignHaltIllegal) {
+			return Campaign{}, err
+		}
+		return Campaign{}, fmt.Errorf("store: halt campaign: %w", err)
+	}
+	return campaign, nil
+}
+
+// SaveDispatchCursor records how far fan-out has reached, so a resume picks up
+// from the same recipient rather than restarting the list.
+func SaveDispatchCursor(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID, cursor string) error {
+
+	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE campaigns SET dispatch_cursor = $2, updated_at = now() WHERE id = $1`,
+			campaignID, cursor)
+		return err
+	})
+}
+
+// CampaignStatus reads just the status. Fan-out calls it between pages, so it
+// stays a single indexed lookup rather than a full campaign read.
+func CampaignStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID) (string, error) {
+
+	status := ""
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT status FROM campaigns WHERE id = $1`, campaignID).Scan(&status)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: campaign status: %w", err)
+	}
+	return status, nil
 }

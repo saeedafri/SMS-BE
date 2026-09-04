@@ -11,6 +11,8 @@ func (unitedStates) Currency() string { return "USD" }
 // does.
 func (unitedStates) RequiresRegistrationID(Tier) bool { return false }
 
+func (unitedStates) RequiresRegisteredTemplate() bool { return false }
+
 // 10DLC traffic goes out from a number the brand owns, so there is no
 // alphanumeric header shape to police here.
 func (unitedStates) ValidateHeader(string) ValidationResult { return valid() }

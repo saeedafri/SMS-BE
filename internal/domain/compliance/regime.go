@@ -96,6 +96,23 @@ type Regime interface {
 	// The regulator issues it to the customer; we only ever store what they
 	// hand us.
 	RequiresRegistrationID(tier Tier) bool
+	// RequiresRegisteredTemplate reports whether a submit to this country must
+	// carry a content template the regulator has registered.
+	//
+	// India's operators do not judge whether a message looks reasonable. They
+	// match its content against a template registered on DLT, by id, and drop
+	// anything that does not match — all of it, not a throttled share. So a
+	// send with no template, or with text that is not an instantiation of the
+	// one it names, cannot be delivered on a real Indian route no matter what
+	// we do with it afterwards.
+	//
+	// Accepting, charging for and reporting such a message as sent is a worse
+	// failure than refusing it, because it is invisible until a customer
+	// complains that nothing arrived.
+	//
+	// A property of the regime, not a country branch on the submit path: adding
+	// the UAE later is an entry in this package.
+	RequiresRegisteredTemplate() bool
 }
 
 var registry = map[string]Regime{

@@ -280,6 +280,12 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			TemplateStatus: plan.templateStatus(), TemplateSender: plan.templateSender(),
 			Suppressed:            state.suppressed[plan.msisdn],
 			CarrierTemplateStatus: s.carrierTemplateStatusFor(plan.sender.Channel, plan.template),
+			// The destination regime's template binding, applied identically to
+			// the batched path. A gate that is weaker when messages arrive in
+			// company is not a gate.
+			RegisteredTemplateRequired: registeredTemplateRequired(plan.sender.Country),
+			TemplateBody:               templateBody(plan.template),
+			Body:                       plan.pending.request.Body,
 			// The balance already committed to earlier messages in this batch is
 			// subtracted, so a wallet that runs dry mid-batch refuses the rest
 			// instead of going negative — the same running total SendBatch keeps.
@@ -335,8 +341,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 
 		sender, err := store.CachedSenderID(ctx, s.DB, s.Hot, identity, request.SenderID)
 		if errors.Is(err, store.ErrNotFound) {
-			pending.answer(SendResult{Status: "rejected", FailureCode: "sender_not_found"},
-				messaging.ErrSenderNotApproved)
+			pending.answer(SendResult{Status: "rejected", FailureCode: "sender_not_found",
+				Currency: refusalCurrency(identity, "")}, messaging.ErrSenderNotApproved)
 			continue
 		}
 		if err != nil {
@@ -351,7 +357,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 			for _, url := range compliance.ExtractURLs(request.Body) {
 				if result := regime.ValidateCtaURL(url); !result.OK {
 					pending.answer(
-						SendResult{Status: "rejected", FailureCode: "content_not_allowed"},
+						SendResult{Status: "rejected", FailureCode: "content_not_allowed",
+							Currency: refusalCurrency(identity, sender.Country)},
 						fmt.Errorf("%w: %s", messaging.ErrContentNotAllowed, result.Reason))
 					refused = true
 					break
@@ -373,7 +380,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 		rate, err := store.CachedPricingRate(ctx, s.DB, s.Hot, identity.TenantID,
 			sender.Country, sender.Channel, "")
 		if err != nil {
-			pending.answer(SendResult{Status: "rejected", FailureCode: "no_rate"},
+			pending.answer(SendResult{Status: "rejected", FailureCode: "no_rate",
+				Currency: refusalCurrency(identity, sender.Country)},
 				fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel))
 			continue
 		}
@@ -390,7 +398,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 				template, err = store.GetTemplate(ctx, s.DB, identity, *request.TemplateID)
 				if errors.Is(err, store.ErrNotFound) {
 					pending.answer(
-						SendResult{Status: "rejected", FailureCode: "template_not_found"},
+						SendResult{Status: "rejected", FailureCode: "template_not_found",
+							Currency: refusalCurrency(identity, sender.Country)},
 						messaging.ErrTemplateNotApproved)
 					continue
 				}

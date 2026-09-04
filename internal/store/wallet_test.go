@@ -79,9 +79,12 @@ func TestOverdraftIsRefusedAndWritesNothing(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInsufficientFunds", err)
 	}
 
-	entries, _, err := store.LedgerPage(ctx, pool, id, "INR", "", 50)
+	entries, total, _, err := store.LedgerPage(ctx, pool, id, "INR", "", 50)
 	if err != nil {
 		t.Fatalf("ledger page: %v", err)
+	}
+	if total != len(entries) {
+		t.Fatalf("total = %d with %d entries on a single page", total, len(entries))
 	}
 	if len(entries) != 1 {
 		t.Fatalf("ledger has %d entries after a refused charge, want 1", len(entries))
@@ -206,7 +209,7 @@ func TestLedgerPaginationCoversEveryEntryExactlyOnce(t *testing.T) {
 	cursor := ""
 	pages := 0
 	for {
-		entries, next, err := store.LedgerPage(ctx, pool, id, "INR", cursor, 7)
+		entries, _, next, err := store.LedgerPage(ctx, pool, id, "INR", cursor, 7)
 		if err != nil {
 			t.Fatalf("page %d: %v", pages, err)
 		}
@@ -236,7 +239,7 @@ func TestLedgerPaginationCoversEveryEntryExactlyOnce(t *testing.T) {
 func TestLedgerRejectsAMalformedCursor(t *testing.T) {
 	ctx, pool, id := walletFixture(t)
 
-	if _, _, err := store.LedgerPage(ctx, pool, id, "INR", "!!!not-base64!!!", 10); !errors.Is(err, store.ErrInvalidCursor) {
+	if _, _, _, err := store.LedgerPage(ctx, pool, id, "INR", "!!!not-base64!!!", 10); !errors.Is(err, store.ErrInvalidCursor) {
 		t.Fatalf("err = %v, want ErrInvalidCursor", err)
 	}
 }

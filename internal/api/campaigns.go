@@ -62,6 +62,12 @@ func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
 		out.Fallback = &fallback
 	}
 
+	// Always emitted, null when unset. The contract makes both required keys
+	// with nullable values, so omitempty here would drop the key entirely and
+	// break the generated client that expects it.
+	out.PausedAt = campaign.PausedAt
+	out.CancelledAt = campaign.CancelledAt
+
 	// Counts are best-effort: if ClickHouse is unreachable the campaign row
 	// still renders, just without its delivery breakdown. A 500 here would
 	// hide the campaign entirely over a missing number.
@@ -71,12 +77,36 @@ func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
 			out.Counts = gen.CampaignCounts{
 				Queued: counts.Queued, Sent: counts.Sent,
 				Delivered: counts.Delivered, Failed: counts.Failed, Read: counts.Read,
+				Cancelled: cancelledCount(campaign, counts),
 			}
 			out.Delivered = counts.Delivered
 			out.Failed = counts.Failed
 		}
 	}
 	return out
+}
+
+// cancelledCount is how many of a campaign's recipients never went anywhere.
+//
+// It is DERIVED, not stored, and that is a deliberate choice worth stating.
+// Fan-out creates a message row when it reaches a recipient, so a campaign
+// cancelled at 30,000 of 100,000 has 30,000 rows and the other 70,000 have no
+// row at all — they were never dispatched, never charged, and never queued.
+// Writing 70,000 rows to say so would add no information the subtraction does
+// not already carry, and would make cancelling a large campaign an expensive
+// write amplification at exactly the moment someone is trying to stop it.
+//
+// The number the funnel needs is therefore the remainder, and it is zero for
+// every campaign that was not cancelled.
+func cancelledCount(campaign store.Campaign, counts store.CampaignCounts) int {
+	if campaign.Status != "cancelled" {
+		return 0
+	}
+	recorded := counts.Queued + counts.Sent + counts.Delivered + counts.Failed + counts.Read
+	if remaining := campaign.Recipients - recorded; remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 func (s *Server) ListCampaigns(ctx context.Context, _ gen.ListCampaignsRequestObject) (gen.ListCampaignsResponseObject, error) {

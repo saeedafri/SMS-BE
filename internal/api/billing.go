@@ -63,7 +63,7 @@ func (s *Server) ListInvoices(ctx context.Context, request gen.ListInvoicesReque
 		limit = *request.Params.Limit
 	}
 
-	invoices, next, err := store.ListInvoices(ctx, s.DB, identity, cursor, limit)
+	invoices, total, next, err := store.ListInvoices(ctx, s.DB, identity, cursor, limit)
 	if errors.Is(err, store.ErrInvalidCursor) {
 		return gen.ListInvoices401JSONResponse(
 			errorBody(codeValidation, "That page cursor is not valid.")), nil
@@ -76,7 +76,7 @@ func (s *Server) ListInvoices(ctx context.Context, request gen.ListInvoicesReque
 	for _, invoice := range invoices {
 		out = append(out, invoiceResponse(invoice))
 	}
-	page := gen.InvoicePage{Invoices: out}
+	page := gen.InvoicePage{Invoices: out, Total: total}
 	if next != "" {
 		page.NextCursor = &next
 	}

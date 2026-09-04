@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/domain/auth"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -71,6 +73,26 @@ func (s *Server) Signup(ctx context.Context, request gen.SignupRequestObject) (g
 	case len(body.Password) < minPasswordLen:
 		return gen.Signup422JSONResponse(errorBody(codeValidation,
 			"Password must be at least 8 characters.")), nil
+	}
+
+	// A country we do not operate in cannot be signed up for.
+	//
+	// Every country in the picker was accepted, so GB and AE each produced a
+	// real tenant with a real owner — and there is no tenant-delete endpoint, so
+	// each one is permanent. Worse than the litter: that tenant can never send,
+	// because a regime with no registration objects has no way to approve a
+	// sender, and the customer discovers this after onboarding rather than
+	// before signing up.
+	//
+	// A stub regime is refused for the same reason as an unknown one. It exists
+	// to prove the pattern and carries nothing a sender can be approved
+	// against, which is a different fact from "we operate there" no matter how
+	// complete the enum looks.
+	regime, known := compliance.For(string(body.Country))
+	if !known || regime.Stub() {
+		return gen.Signup422JSONResponse(errorBody(codeValidation,
+			fmt.Sprintf("Relay does not operate in %s yet. Contact us if you need it.",
+				string(body.Country)))), nil
 	}
 
 	// Self-registration is gated when an invite code is configured.
