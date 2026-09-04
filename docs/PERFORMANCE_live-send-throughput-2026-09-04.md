@@ -98,17 +98,49 @@ measured gain is not a trade worth making.
 The lesson is the ordinary one: the profile said ClickHouse, and the first change addressed
 something else.
 
+## Shipped and measured: coalescing the warehouse inserts
+
+`async_insert=1` with `wait_for_async_insert=1`, batch window 10ms. Concurrent inserts now share
+one data part instead of each becoming their own, which is what the merge storm was made of.
+`wait_for_async_insert` is what keeps it safe: the INSERT does not return until the rows are
+queryable, so the delivery-report path still finds its message.
+`TestARowIsQueryableAsSoonAsTheInsertReturns` guards that and fails on the first attempt if the
+flag goes back to 0.
+
+Measured on the deployed API, same key tier and duration throughout:
+
+| workers | before | 50ms window | 10ms window (shipped) |
+|---|---|---|---|
+| 4 | 18.2/s · p50 214ms | 11.2/s · 325ms | 15.6/s · 208ms |
+| 24 | 22.1/s | 31.4/s | 26.9/s |
+| 64 | — | 36.4/s | 34.6/s |
+
+**The ceiling went from ~22 to ~35 accepted/sec, about +57%.** Low-concurrency throughput is
+still slightly below where it started, because even a 10ms window is time a lone caller spends
+waiting for company. 50ms bought a marginally higher ceiling and cost far more at the quiet end,
+which is why 10ms is the one deployed.
+
+Run-to-run variance on this box is roughly ±15% — it shares two cores with the EMS containers —
+so treat single-digit differences as noise.
+
+### What this does not do
+
+It does not get you to thousands. It removes the warehouse from the critical path's worst
+behaviour; it leaves a synchronous wallet transaction and a carrier call inside the request.
+
 ## The two levers, in order of return
 
-1. **Batch the single-send ClickHouse write.** Accumulate accepted sends over a short window
-   (50–200 ms) and insert them as one batch. This is where the core is going. It needs care: the
-   window is a period where an accepted message is not yet durable in the warehouse, so the buffer
-   has to be flushed on shutdown and the failure path has to be explicit. Expect the largest gain
-   by far.
-2. **More cores.** Two, shared with a neighbour, is the floor for a platform advertising 100/s.
-   ClickHouse alone wants a core under load.
+1. ~~Batch the warehouse write.~~ **Done** — see above. +57% ceiling.
+2. **Accept-and-enqueue.** Validate, persist one row, return 202, and let a worker pool do route
+   selection, the wallet charge and the warehouse write. This is the change that reaches
+   thousands, because it takes the datastores off the request path entirely and makes throughput
+   a property of the pool rather than of one message's round trips. It is also the change that
+   needs real design: a message that is accepted but not yet charged is a state the product does
+   not have today, and getting it wrong means either double-charging or sending for free.
+3. **More cores.** Two, shared with a neighbour, is the floor for a platform advertising 100/s.
+   ClickHouse alone wanted a core under load before this change.
 
-Neither is done. Both are recommendations, not claims.
+2 and 3 are recommendations, not claims. Neither is done.
 
 ## How to reproduce
 
