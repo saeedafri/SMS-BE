@@ -14,8 +14,18 @@ been done already. Section 4 answered — with a decision, as asked.
 
 **Both are built and have been for some time.** `POST /v1/templates` accepts
 `registrationId` and `dltCategory`, stores both verbatim, and returns them on
-create and on read. What your probe saw was the fixtures: the seeded templates
-carry no DLT ids, so both fields come back null and look absent.
+create and on read.
+
+What your probe saw is real and is also correct: **both keys are omitted entirely
+when the value is null**, and every seeded template has null in both. Neither is
+in `Template.required` in the contract — they are declared as optional, nullable
+strings — so omitting them is contract-legal and your generated type already has
+them as `registrationId?: string | null`. There was nothing to see because the
+fixtures carry no DLT ids, not because the fields do not exist.
+
+If you would rather have the keys always present with `null`, that is a
+requiredness change on your side and we will emit them; say so and it is a
+one-line change here.
 
 `TestATemplatesDltIdentifiersRoundTripThroughTheApi` now asserts the whole
 round trip through the API rather than through the columns, so this cannot be

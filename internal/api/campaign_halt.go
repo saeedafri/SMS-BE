@@ -69,8 +69,17 @@ func haltVerb(action string) string {
 }
 
 // haltConflict is the 409 message.
+//
+// The past tense is spelled out rather than built by appending "d", which
+// produced "This campaign cannot be canceld" on production — the one of the
+// three where that trick does not work.
 func haltConflict(action string) string {
-	return fmt.Sprintf("This campaign cannot be %sd from its current state.", action)
+	return fmt.Sprintf("This campaign cannot be %s from its current state.",
+		map[string]string{
+			"pause":  "paused",
+			"resume": "resumed",
+			"cancel": "cancelled",
+		}[action])
 }
 
 func (s *Server) PauseCampaign(ctx context.Context, request gen.PauseCampaignRequestObject) (

@@ -282,3 +282,35 @@ func (h *harness) nextSenderSeq() int {
 	h.senderSeq++
 	return h.senderSeq
 }
+
+// The 409 message is customer-visible text. Built by appending "d" to the
+// action it read "This campaign cannot be canceld", which shipped to production
+// before anyone said it out loud.
+func TestTheHaltConflictMessageIsSpelledCorrectly(t *testing.T) {
+	h := newSendHarness(t)
+	acct := h.newAccount("owner")
+	// Terminal, so all three actions conflict.
+	campaign := h.seedCampaign(acct, "sent")
+
+	want := map[string]string{
+		"pause":  "This campaign cannot be paused from its current state.",
+		"resume": "This campaign cannot be resumed from its current state.",
+		"cancel": "This campaign cannot be cancelled from its current state.",
+	}
+	for action, message := range want {
+		response := h.do(http.MethodPost,
+			fmt.Sprintf("/v1/campaigns/%s/%s", campaign, action), acct.Token, nil)
+		if response.Code != http.StatusConflict {
+			t.Fatalf("%s = %d, want 409\n%s", action, response.Code, response.Body)
+		}
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		response.decode(t, &body)
+		if body.Error.Message != message {
+			t.Errorf("%s message = %q, want %q", action, body.Error.Message, message)
+		}
+	}
+}
