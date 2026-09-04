@@ -547,6 +547,10 @@ func (s *Server) applyTenantChangeWithDetail(ctx context.Context, id string, act
 	if err := apply(tenantID); err != nil {
 		return store.OperatorTenant{}, err
 	}
+	// Any change to a tenant's standing must bite on the NEXT send, not when a
+	// cache entry happens to expire. A suspended tenant that keeps sending for
+	// another second is a second of traffic nobody authorised.
+	s.Hot.Forget(store.TenantStatusKey(tenantID))
 	if detail == "" {
 		detail = auditDetail(action, before.Name)
 	}
@@ -1662,6 +1666,10 @@ func (s *Server) decideSender(ctx context.Context, id string, status, reason str
 	if status == "rejected" {
 		action = "sender.reject"
 	}
+	// A sender the operator just approved must be sendable on the next request,
+	// and one just rejected must stop being sendable on the next request. Both
+	// read through the same cached entry, so it goes now rather than on expiry.
+	s.Hot.Forget(store.SenderKey(sender.TenantID, sender.ID))
 	s.publishTenantEvent(ctx, sender.TenantID, "sender.decided", "", sender.ID.String())
 	// An approval carries no reason, so passing `reason` alone left the Audit
 	// table's most prominent column blank on every approve — half the rows on

@@ -398,5 +398,5 @@ func (s *Server) sendingService(ctx context.Context) *sending.Service {
 		return nil
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
-		Carriers: s.Carriers, Logger: s.Logger}
+		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot}
 }

@@ -381,6 +381,7 @@ func (s *Server) UpdateSenderId(ctx context.Context, request gen.UpdateSenderIdR
 		return gen.UpdateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
 	}
 
+	s.Hot.Forget(store.SenderKey(identity.TenantID, request.Id))
 	updated, err := store.UpdateSenderID(ctx, s.DB, identity, request.Id,
 		request.Body.Header, request.Body.DisplayName, request.Body.RegistrationId,
 		clearRegistration)
@@ -431,6 +432,7 @@ func (s *Server) DeleteSenderId(ctx context.Context, request gen.DeleteSenderIdR
 				". Repoint or remove those first.")), nil
 	}
 
+	s.Hot.Forget(store.SenderKey(identity.TenantID, request.Id))
 	if err := store.DeleteSenderID(ctx, s.DB, identity, request.Id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return gen.DeleteSenderId404JSONResponse(

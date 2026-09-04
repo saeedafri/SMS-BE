@@ -223,7 +223,16 @@ func run() error {
 			"passwords cannot be stored, so no connection can be enabled")
 	}
 
-	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger,
+	// The send path re-reads the same handful of configuration rows for every
+	// message — sender, rate, tenant standing. Two seconds is short enough that
+	// an operator suspending a tenant sees it take effect before they have
+	// finished reading the confirmation, and long enough that a burst of
+	// thousands of messages asks Postgres for each row once rather than once
+	// per message. The paths that change those rows drop their entry
+	// immediately, so the TTL is the ceiling on staleness, not the norm.
+	hot := store.NewHotCache(2 * time.Second)
+
+	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger, Hot: hot,
 		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
 		EnableDevEndpoints: cfg.EnableDevEndpoints,
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,

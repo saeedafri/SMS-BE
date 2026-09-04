@@ -38,6 +38,11 @@ type Service struct {
 	// must not fail silently either — landing a campaign that fan-out abandoned
 	// is the one that matters.
 	Logger *slog.Logger
+
+	// Hot is the configuration cache the send path reads through. Nil means
+	// every lookup goes to Postgres, which is the behaviour before this existed
+	// and what the tests that assert on freshness rely on.
+	Hot *store.HotCache
 }
 
 // carrierFor picks the gateway for a channel.
@@ -83,7 +88,7 @@ type SendResult struct {
 // unrecoverable — the recipient got it and we have no idea.
 func (s *Service) Send(ctx context.Context, identity store.Identity, request SendRequest) (SendResult, error) {
 	// 1. Resolve the sender and confirm it is approved for this tenant.
-	sender, err := store.GetSenderID(ctx, s.DB, identity, request.SenderID)
+	sender, err := store.CachedSenderID(ctx, s.DB, s.Hot, identity, request.SenderID)
 	if errors.Is(err, store.ErrNotFound) {
 		return SendResult{Status: "rejected", FailureCode: "sender_not_found"},
 			messaging.ErrSenderNotApproved
@@ -121,7 +126,7 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 	// 3. Price it. Segment arithmetic is shared with the estimate endpoint, so
 	// the quote a user saw and the charge they get cannot disagree.
 	segments := billing.SegmentCount(request.Body)
-	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, sender.Country, sender.Channel, "")
+	rate, err := store.CachedPricingRate(ctx, s.DB, s.Hot, identity.TenantID, sender.Country, sender.Channel, "")
 	if err != nil {
 		return SendResult{Status: "rejected", FailureCode: "no_rate"},
 			fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
@@ -163,7 +168,7 @@ func (s *Service) Send(ctx context.Context, identity store.Identity, request Sen
 		}
 	}
 
-	tenantStatus, err := store.TenantStatus(ctx, s.DB, identity)
+	tenantStatus, err := store.CachedTenantStatus(ctx, s.DB, s.Hot, identity)
 	if err != nil {
 		return SendResult{}, err
 	}

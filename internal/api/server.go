@@ -32,6 +32,10 @@ type Server struct {
 	Redis  *redis.Client
 	Logger *slog.Logger
 
+	// Hot caches the configuration rows the send path re-reads per message.
+	// Nil disables it and every send goes to Postgres for all of them.
+	Hot *store.HotCache
+
 	// EnableDevEndpoints mounts /v1/dev/*, the browser suite's state hooks.
 	// Off unless the deployment opts in.
 	EnableDevEndpoints bool
