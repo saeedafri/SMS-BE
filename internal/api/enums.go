@@ -36,6 +36,24 @@ var (
 	validRoles        = []string{"owner", "admin", "member"}
 	validCountries    = []string{"IN", "US", "GB", "AE"}
 	validStandings    = []string{"registered", "grey"}
+	// The webhook catalogue, in lifecycle order. message.inbound leads it
+	// because it is the only one that makes a class of integration possible
+	// rather than improving an existing one: without it a customer's systems
+	// never see a reply or a STOP, so every opt-out is invisible outside our
+	// own dashboard.
+	//
+	// sender.approved and template.approved keep the `approved` spelling on
+	// purpose. The customer-facing word is now "Verified" — we record a
+	// registry's approval, we never grant one — but renaming the enum value
+	// would break every stored subscription.
+	validWebhookEvents = []string{
+		"message.inbound", "message.queued", "message.sent", "message.delivered",
+		"message.read", "message.failed",
+		"campaign.completed", "campaign.failed",
+		"sender.approved", "sender.rejected",
+		"template.approved", "template.rejected",
+		"wallet.low_balance", "wallet.depleted",
+	}
 	// India DLT's content-template taxonomy. Deliberately NOT merged with
 	// TemplateCategory (Meta's WhatsApp taxonomy) even though both contain
 	// TRANSACTIONAL: Meta's is ordinary, DLT's is restricted to banking and OTP

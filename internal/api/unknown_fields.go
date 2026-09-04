@@ -2,12 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // rejectUnknownFields refuses a JSON body carrying properties the schema does
@@ -51,6 +54,15 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 			if len(bytes.TrimSpace(raw)) > 0 {
 				var body map[string]json.RawMessage
 				if err := json.Unmarshal(raw, &body); err == nil {
+					// Which keys the caller actually sent, so a handler can tell
+					// "registrationId: null" — clear it — from omitting the field,
+					// which means leave it alone. Both decode to a nil pointer, so
+					// the typed struct cannot distinguish them on its own.
+					present := make(map[string]bool, len(body))
+					for key := range body {
+						present[key] = true
+					}
+					r = r.WithContext(context.WithValue(r.Context(), bodyKeysContextKey{}, present))
 					var unknown []string
 					for key := range body {
 						if !set[key] {
@@ -74,12 +86,23 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 
 // routeKey identifies a request by method and path shape, with the trailing id
 // collapsed so /v1/operator/connections/{id} matches whatever uuid arrives.
+// routeKey turns a request into the contract route it matched, so the allowlist
+// can be written the way the contract writes paths.
+//
+// This middleware runs before chi has resolved a route pattern, so the pattern
+// is reconstructed by collapsing id-shaped segments back to {id}. It used to
+// compare literal paths with one prefix special-case for connections, which
+// worked only because that route's sibling had no id in it — every later entry
+// written as {id} silently matched nothing, and the guard passed by never
+// firing. That is how a throttle body carrying `status` got through.
 func routeKey(r *http.Request) string {
-	path := strings.TrimSuffix(r.URL.Path, "/")
-	if r.Method == http.MethodPatch && strings.HasPrefix(path, "/v1/operator/connections/") {
-		return "PATCH /v1/operator/connections/{id}"
+	segments := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	for i, segment := range segments {
+		if _, err := uuid.Parse(segment); err == nil {
+			segments[i] = "{id}"
+		}
 	}
-	return r.Method + " " + path
+	return r.Method + " " + strings.Join(segments, "/")
 }
 
 // connectionBodyFields are the properties ConnectionCreate and ConnectionUpdate
@@ -90,4 +113,14 @@ var connectionBodyFields = []string{
 	"label", "carrier", "environment", "host", "port", "systemId", "systemType",
 	"bindType", "password", "maxTps", "windowSize", "enquireLinkSeconds",
 	"reconnectBackoffSeconds",
+}
+
+type bodyKeysContextKey struct{}
+
+// bodyMentions reports whether the request body carried this key at all,
+// whatever its value. Only populated for routes in the allowlist above, which
+// is where the distinction is needed.
+func bodyMentions(ctx context.Context, field string) bool {
+	keys, ok := ctx.Value(bodyKeysContextKey{}).(map[string]bool)
+	return ok && keys[field]
 }

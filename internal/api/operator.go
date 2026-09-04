@@ -305,6 +305,10 @@ func toTenantDetail(tenant store.OperatorTenant) gen.TenantDetail {
 		Status:     gen.TenantStatus(tenantStanding(tenant)),
 		FlaggedAt:  tenant.FlaggedAt,
 		FlagReason: tenant.FlagReason,
+		// Non-null exactly when the tenant is throttled. The contract declares
+		// the key required with a nullable value, so it is always present and
+		// the console never has to distinguish "no ceiling" from "field absent".
+		ThrottledRatePerSecond: tenant.ThrottledRatePerSecond,
 		// Compliance standing per country is derived from registrations; an
 		// empty list means "nothing submitted", which is the honest answer for a
 		// tenant that has not started onboarding.
@@ -373,6 +377,12 @@ func (s *Server) SuspendTenant(ctx context.Context, request gen.SuspendTenantReq
 			if err := store.SetTenantFlag(ctx, s.operatorPool(), id, ""); err != nil {
 				return err
 			}
+			// And the throttle ceiling, for the same reason: a suspended tenant
+			// is not sending at all, so a rate limit on it is a number the
+			// console would still display and nothing would honour.
+			if err := store.SetTenantThrottled(ctx, s.operatorPool(), id, nil); err != nil {
+				return err
+			}
 			return store.SetTenantStatus(ctx, s.operatorPool(), id, "suspended")
 		})
 	if err != nil {
@@ -388,7 +398,9 @@ func (s *Server) ReinstateTenant(ctx context.Context, request gen.ReinstateTenan
 
 	tenant, err := s.applyTenantChange(ctx, request.Id, "tenant.reinstate",
 		func(id uuid.UUID) error {
-			if err := store.SetTenantThrottled(ctx, s.operatorPool(), id, false); err != nil {
+			// Clears the rate as well as the state: a reinstated tenant with a
+			// ceiling left behind reads as still capped.
+			if err := store.SetTenantThrottled(ctx, s.operatorPool(), id, nil); err != nil {
 				return err
 			}
 			return store.SetTenantStatus(ctx, s.operatorPool(), id, "active")
@@ -404,12 +416,55 @@ func (s *Server) ReinstateTenant(ctx context.Context, request gen.ReinstateTenan
 func (s *Server) ThrottleTenant(ctx context.Context, request gen.ThrottleTenantRequestObject) (
 	gen.ThrottleTenantResponseObject, error) {
 
-	tenant, err := s.applyTenantChange(ctx, request.Id, "tenant.throttle",
+	// The tenant is resolved before the rate is judged, so a bad id is still
+	// reported as a bad id. Validating the body first would answer 422 for a
+	// tenant that does not exist, and an operator chasing a typo'd id would be
+	// told their rate was wrong.
+	if _, err := s.requireOperator(ctx); err != nil {
+		return nil, err
+	}
+	tenantID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.ThrottleTenant404JSONResponse(
+			errorBody(codeNotFound, "No such tenant.")), nil
+	}
+	before, err := store.GetTenant(ctx, s.operatorPool(), tenantID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.ThrottleTenant404JSONResponse(
+			errorBody(codeNotFound, "No such tenant.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if request.Body == nil || request.Body.RatePerSecond < 1 {
+		return gen.ThrottleTenant422JSONResponse(errorBody(codeValidation,
+			"ratePerSecond must be a whole number of messages per second, at least 1.")), nil
+	}
+	// Throttling is a restriction on an ACTIVE account. Applying it to a
+	// suspended tenant would record a ceiling nothing enforces, and re-applying
+	// it to one already throttled would silently overwrite the ceiling an
+	// earlier operator set without either of them seeing the other's number.
+	if standing := tenantStanding(before); standing != "active" {
+		return gen.ThrottleTenant422JSONResponse(errorBody(codeValidation,
+			fmt.Sprintf("Only an active tenant can be throttled — this one is %s.",
+				standing))), nil
+	}
+
+	rate := request.Body.RatePerSecond
+	detail := fmt.Sprintf("Throttled %s to %d message/second", before.Name, rate)
+	if rate != 1 {
+		detail = fmt.Sprintf("Throttled %s to %d messages/second", before.Name, rate)
+	}
+	if request.Body.Reason != nil && strings.TrimSpace(*request.Body.Reason) != "" {
+		detail += " — " + strings.TrimSpace(*request.Body.Reason)
+	}
+	tenant, err := s.applyTenantChangeWithDetail(ctx, request.Id, "tenant.throttle", detail,
 		func(id uuid.UUID) error {
 			if err := store.SetTenantFlag(ctx, s.operatorPool(), id, ""); err != nil {
 				return err
 			}
-			return store.SetTenantThrottled(ctx, s.operatorPool(), id, true)
+			return store.SetTenantThrottled(ctx, s.operatorPool(), id, &rate)
 		})
 	if err != nil {
 		return tenantActionError(err, func(body gen.Error) gen.ThrottleTenantResponseObject {
@@ -467,6 +522,16 @@ func (s *Server) DismissFlag(ctx context.Context, request gen.DismissFlagRequest
 func (s *Server) applyTenantChange(ctx context.Context, id string, action string,
 	apply func(tenantID uuid.UUID) error) (store.OperatorTenant, error) {
 
+	return s.applyTenantChangeWithDetail(ctx, id, action, "", apply)
+}
+
+// applyTenantChangeWithDetail is applyTenantChange where the caller knows
+// something the generic sentence cannot say — the throttle rate, for instance.
+// "Throttled Acme" does not tell a later reader what ceiling was applied, which
+// is the only thing they will want to know.
+func (s *Server) applyTenantChangeWithDetail(ctx context.Context, id string, action string,
+	detail string, apply func(tenantID uuid.UUID) error) (store.OperatorTenant, error) {
+
 	operator, err := s.requireOperator(ctx)
 	if err != nil {
 		return store.OperatorTenant{}, err
@@ -482,8 +547,11 @@ func (s *Server) applyTenantChange(ctx context.Context, id string, action string
 	if err := apply(tenantID); err != nil {
 		return store.OperatorTenant{}, err
 	}
+	if detail == "" {
+		detail = auditDetail(action, before.Name)
+	}
 	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, action,
-		&tenantID, before.Name, before.Name, auditDetail(action, before.Name)); err != nil {
+		&tenantID, before.Name, before.Name, detail); err != nil {
 		return store.OperatorTenant{}, err
 	}
 	return store.GetTenant(ctx, s.operatorPool(), tenantID)

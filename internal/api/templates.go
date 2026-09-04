@@ -237,13 +237,19 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 	// value outside the four is refused rather than stored, because a template
 	// mis-filed under DLT is not rejected by us — it is scrubbed by the carrier,
 	// silently, after the customer believes they are live.
+	//
+	// The contract declares this as `nullable` with a `oneOf`, which the
+	// generator turns into a union wrapper rather than a plain enum, so the
+	// value comes out through an accessor. A malformed one is a validation
+	// failure, not a 500 — the same answer as a value outside the four.
 	var dltCategory *string
 	if request.Body.DltCategory != nil {
-		if !oneOf(string(*request.Body.DltCategory), validDltCategories) {
+		category, err := request.Body.DltCategory.AsDltCategory()
+		if err != nil || !oneOf(string(category), validDltCategories) {
 			return gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
 				enumMessage("dltCategory", validDltCategories))), nil
 		}
-		value := string(*request.Body.DltCategory)
+		value := string(category)
 		dltCategory = &value
 	}
 

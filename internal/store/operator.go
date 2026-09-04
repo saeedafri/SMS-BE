@@ -196,16 +196,18 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter
 // OperatorTenant is a tenant as platform staff see it: identity, standing, and
 // enough usage to judge whether it is worth attention.
 type OperatorTenant struct {
-	ID              uuid.UUID
-	Name            string
-	Country         string
-	Status          string
-	CreatedAt       time.Time
-	FlaggedAt       *time.Time
-	FlagReason      *string
-	ThrottledAt     *time.Time
-	MessagesSent30d int
-	LastActivityAt  *time.Time
+	ID          uuid.UUID
+	Name        string
+	Country     string
+	Status      string
+	CreatedAt   time.Time
+	FlaggedAt   *time.Time
+	FlagReason  *string
+	ThrottledAt *time.Time
+	// ThrottledRatePerSecond is non-null exactly when ThrottledAt is.
+	ThrottledRatePerSecond *int
+	MessagesSent30d        int
+	LastActivityAt         *time.Time
 }
 
 // ListTenants returns the tenants the operator console lists, narrowed by
@@ -258,7 +260,8 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 	}
 
 	rows, err := pool.Query(ctx, `
-		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at
+		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at,
+		       throttled_rate_per_second
 		FROM tenants
 		WHERE ($1::text IS NULL OR CASE
 		           WHEN status = 'suspended'      THEN 'suspended'
@@ -278,7 +281,7 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		var tenant OperatorTenant
 		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status,
 			&tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
-			&tenant.ThrottledAt); err != nil {
+			&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond); err != nil {
 			return nil, 0, "", fmt.Errorf("store: scan tenant: %w", err)
 		}
 		out = append(out, tenant)
@@ -321,10 +324,11 @@ func AllTenantIDs(ctx context.Context, pool *pgxpool.Pool) ([]uuid.UUID, error) 
 func GetTenant(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (OperatorTenant, error) {
 	var tenant OperatorTenant
 	err := pool.QueryRow(ctx, `
-		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at
+		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at,
+		       throttled_rate_per_second
 		FROM tenants WHERE id = $1`, id).Scan(&tenant.ID, &tenant.Name, &tenant.Country,
 		&tenant.Status, &tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
-		&tenant.ThrottledAt)
+		&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OperatorTenant{}, ErrNotFound
 	}
@@ -346,16 +350,26 @@ func SetTenantStatus(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, stat
 	return nil
 }
 
-// SetTenantThrottled marks or clears a throttle. Throttling is separate from
-// suspension: a throttled tenant still sends, just slower, and collapsing the
-// two would make "slow them down" indistinguishable from "cut them off".
-func SetTenantThrottled(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, on bool) error {
+// SetTenantThrottled applies or lifts a send-rate ceiling.
+//
+// The rate and the throttled state move together, always. A transition out that
+// cleared throttled_at and left the rate behind would leave the console
+// reporting a live ceiling on a tenant that no longer has one — so both columns
+// are written by the same statement, and a CHECK constraint refuses the pair if
+// they ever disagree.
+func SetTenantThrottled(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
+	ratePerSecond *int) error {
+
 	var tag pgconn.CommandTag
 	var err error
-	if on {
-		tag, err = pool.Exec(ctx, `UPDATE tenants SET throttled_at = now() WHERE id = $1`, id)
+	if ratePerSecond != nil {
+		tag, err = pool.Exec(ctx, `UPDATE tenants
+			SET throttled_at = now(), throttled_rate_per_second = $2
+			WHERE id = $1`, id, *ratePerSecond)
 	} else {
-		tag, err = pool.Exec(ctx, `UPDATE tenants SET throttled_at = NULL WHERE id = $1`, id)
+		tag, err = pool.Exec(ctx, `UPDATE tenants
+			SET throttled_at = NULL, throttled_rate_per_second = NULL
+			WHERE id = $1`, id)
 	}
 	if err != nil {
 		return fmt.Errorf("store: throttle tenant: %w", err)
@@ -954,7 +968,8 @@ func DecideTemplate(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
 // not yet decided on.
 func ListFlaggedTenants(ctx context.Context, pool *pgxpool.Pool) ([]OperatorTenant, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at
+		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at,
+		       throttled_rate_per_second
 		FROM tenants WHERE flagged_at IS NOT NULL ORDER BY flagged_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list flagged tenants: %w", err)
@@ -965,7 +980,7 @@ func ListFlaggedTenants(ctx context.Context, pool *pgxpool.Pool) ([]OperatorTena
 		var tenant OperatorTenant
 		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status,
 			&tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
-			&tenant.ThrottledAt); err != nil {
+			&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond); err != nil {
 			return nil, fmt.Errorf("store: scan flagged tenant: %w", err)
 		}
 		out = append(out, tenant)

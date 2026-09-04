@@ -679,3 +679,110 @@ func ApplyCarrierTemplateStatus(ctx context.Context, operatorPool *pgxpool.Pool,
 	}
 	return templateID, nil
 }
+
+// SenderReferences counts what still points at a sender, by kind.
+//
+// Only two of the five kinds are foreign keys. A journey's steps and a Verify
+// service's channels carry senderId inside JSONB, so the database would let a
+// delete through and strand them silently — the campaign would stop and nothing
+// would say why. Counting them here is what makes the refusal honest.
+type SenderReferences struct {
+	Templates        int
+	Campaigns        int
+	CampaignFallback int
+	Journeys         int
+	VerifyServices   int
+}
+
+// Total is what decides whether a delete may proceed.
+func (r SenderReferences) Total() int {
+	return r.Templates + r.Campaigns + r.CampaignFallback + r.Journeys + r.VerifyServices
+}
+
+// CountSenderReferences reports everything using a sender, per kind, so the
+// refusal can name what is in the way rather than saying "in use" and leaving
+// the caller with nothing to act on.
+func CountSenderReferences(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	senderID uuid.UUID) (SenderReferences, error) {
+
+	var refs SenderReferences
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT
+			  (SELECT count(*) FROM templates WHERE sender_id = $1),
+			  (SELECT count(*) FROM campaigns WHERE sender_id = $1),
+			  (SELECT count(*) FROM campaigns WHERE fallback_sender_id = $1),
+			  -- steps and channels are JSONB arrays of objects; a sender is in
+			  -- use if any element names it.
+			  (SELECT count(*) FROM journeys
+			     WHERE steps @> jsonb_build_array(jsonb_build_object('senderId', $1::text))),
+			  (SELECT count(*) FROM verify_services
+			     WHERE channels @> jsonb_build_array(jsonb_build_object('senderId', $1::text)))`,
+			senderID).Scan(&refs.Templates, &refs.Campaigns, &refs.CampaignFallback,
+			&refs.Journeys, &refs.VerifyServices)
+	})
+	if err != nil {
+		return SenderReferences{}, fmt.Errorf("store: count sender references: %w", err)
+	}
+	return refs, nil
+}
+
+// DeleteSenderID removes a sender and the DNS records that hang off it.
+//
+// Callers must have checked CountSenderReferences first; this is the last line
+// rather than the only one, because the JSONB references have no foreign key to
+// stop them.
+func DeleteSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	senderID uuid.UUID) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM sender_ids WHERE id = $1`, senderID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if errors.Is(err, ErrNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("store: delete sender id: %w", err)
+	}
+	return nil
+}
+
+// UpdateSenderID applies a correction. Only non-nil fields change; clearing the
+// registry id is expressed by clearRegistrationID rather than by a nil pointer,
+// because nil already means "leave it alone".
+func UpdateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, senderID uuid.UUID,
+	header, displayName, registrationID *string, clearRegistrationID bool) (SenderID, error) {
+
+	var updated SenderID
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		updated, err = scanSender(tx.QueryRow(ctx, `
+			UPDATE sender_ids SET
+			    header       = COALESCE($2, header),
+			    display_name = COALESCE($3, display_name),
+			    external_id  = CASE WHEN $5 THEN NULL ELSE COALESCE($4, external_id) END
+			WHERE id = $1
+			RETURNING `+senderColumns,
+			senderID, header, displayName, registrationID, clearRegistrationID))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SenderID{}, ErrNotFound
+	}
+	// The corrected header may already belong to another sender on the same
+	// channel and country — the same collision the create path reports.
+	if isUniqueViolation(err) {
+		return SenderID{}, ErrConflict
+	}
+	if err != nil {
+		return SenderID{}, fmt.Errorf("store: update sender id: %w", err)
+	}
+	return updated, nil
+}

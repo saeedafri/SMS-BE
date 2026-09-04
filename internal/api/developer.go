@@ -261,8 +261,14 @@ func (s *Server) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWe
 	if err := webhook.ValidateURL(request.Body.Url); err != nil {
 		return gen.CreateWebhookEndpoint422JSONResponse(errorBody(codeValidation, err.Error())), nil
 	}
+	// A typo'd event name is a subscription that silently never fires, which
+	// looks identical to a broken integration from the customer's side.
 	events := make([]string, 0, len(request.Body.SubscribedEvents))
 	for _, event := range request.Body.SubscribedEvents {
+		if !oneOf(string(event), validWebhookEvents) {
+			return gen.CreateWebhookEndpoint422JSONResponse(errorBody(codeValidation,
+				enumMessage("SubscribedEvents", validWebhookEvents))), nil
+		}
 		events = append(events, string(event))
 	}
 	if !oneOf(string(request.Body.Environment), validEnvironments) {

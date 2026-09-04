@@ -337,6 +337,23 @@ func (s *Server) devReceiveInbound(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
 	}
+
+	// Fires on EVERY inbound message, opt-out keywords included. A STOP that
+	// suppressed the contact but told the customer's systems nothing is how an
+	// opt-out stays invisible to everything outside our own dashboard — which
+	// is the gap the whole inbound event exists to close.
+	//
+	// The payload carries enough to reply without a second call: who it came
+	// from, what arrived on, what it said, and when.
+	s.emitWebhookEvent(r.Context(), identity, "message.inbound", map[string]any{
+		"messageId":      message.ID,
+		"conversationId": message.ConversationID,
+		"contactId":      contactID,
+		"channel":        body.Channel,
+		"body":           message.Body,
+		"keywordMatched": message.KeywordMatched,
+		"receivedAt":     message.CreatedAt,
+	})
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(message)
