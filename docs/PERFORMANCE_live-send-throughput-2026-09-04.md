@@ -73,6 +73,31 @@ per-row overhead.
 that. The limiter is not what stops it — no request in any run was throttled — the hardware and
 the insert pattern are.
 
+## Tested and rejected: caching the configuration reads
+
+The six repeated Postgres lookups per send looked like the obvious win, so they were put behind a
+two-second cache with immediate invalidation on every path that changes one.
+
+**It moved nothing.** Same key tier, same four workers, same two minutes, against the deployed
+API:
+
+| | accepted/sec | p50 |
+|---|---|---|
+| before | 19.2 | 189 ms |
+| after | 18.4 | 185 ms |
+
+Within noise, and if anything slightly worse. Those reads were never the constraint — which the
+CPU numbers had already said and the change did not respect: ClickHouse holds a full core while
+control-api uses a fifth of one.
+
+The cache is therefore **shipped disabled** (`NewHotCache(0)`). Its code and tests stay, because
+Postgres becomes the next wall once the warehouse write is batched, and turning it on is one
+number. Carrying a staleness window on tenant standing — a compliance-relevant check — for zero
+measured gain is not a trade worth making.
+
+The lesson is the ordinary one: the profile said ClickHouse, and the first change addressed
+something else.
+
 ## The two levers, in order of return
 
 1. **Batch the single-send ClickHouse write.** Accumulate accepted sends over a short window
