@@ -47,19 +47,32 @@ func OpenClickHouse(ctx context.Context, raw string) (driver.Conn, error) {
 		Addr: []string{host + ":9000"},
 		Auth: clickhouse.Auth{Database: database, Username: username, Password: password},
 		Settings: clickhouse.Settings{
-			// ClickHouse 26.x defaults async_insert to 1, which buffers an
-			// insert server-side for up to async_insert_busy_timeout_ms before
-			// it becomes readable. That breaks read-after-write, and on this
-			// codepath read-after-write is a money problem: a delivery report
-			// arriving within that window finds no message, is dropped as
-			// untrusted, and the hold against an undelivered message is never
-			// released. The tenant is then charged forever for a message that
-			// never arrived — the exact billing behaviour this product exists
-			// to replace.
+			// Coalesce concurrent inserts into one data part, WITHOUT giving up
+			// read-after-write.
 			//
-			// We already batch inserts explicitly in the send path, so async
-			// insert buys us nothing and costs correctness.
-			"async_insert": 0,
+			// Every send used to issue its own one-row INSERT, and in ClickHouse
+			// every INSERT becomes its own data part — so the server spent a full
+			// core of the two this box has merging parts while the API used a
+			// fifth of one. Measured: 19 sends/second, with the warehouse pinned.
+			//
+			// async_insert alone would break read-after-write, and on this
+			// codepath that is a money problem: a delivery report arriving before
+			// the row is visible finds no message, is dropped as untrusted, and
+			// the hold against an undelivered message is never released — the
+			// tenant is billed forever for a message that never arrived.
+			//
+			// wait_for_async_insert is what makes it safe. The INSERT does not
+			// return until the buffer has been flushed and the rows are
+			// queryable, so a caller that reads its own write still finds it.
+			// What changes is only that CONCURRENT inserts share one flush and
+			// one part, which is the whole win. TestARowIsQueryableAsSoonAsTheInsertReturns
+			// is the guard on that claim.
+			"async_insert":          1,
+			"wait_for_async_insert": 1,
+			// How long the server may wait to fill a batch. The default 200ms
+			// would put a floor under single-send latency; 50ms keeps the batch
+			// worth having without making one caller wait on a quiet system.
+			"async_insert_busy_timeout_ms": 50,
 		},
 		// Connections are recycled rather than held forever. Without a
 		// lifetime the pool keeps handles to a server that has since restarted
