@@ -23,6 +23,13 @@ vet:
 test:
 	$(ENV) && go test ./... -race -count=1 -timeout 40m
 
+# The complete API reference, read out of the contract and out of the key-scope
+# table rather than written by hand. 177 operations is more than anyone will keep
+# accurate manually.
+api-reference:
+	python3 scripts/gen-api-reference.py openapi/control.json \
+	    internal/api/key_scopes.go docs/API_REFERENCE.md
+
 check: vet build test
 
 generate:
