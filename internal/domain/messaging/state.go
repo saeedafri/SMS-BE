@@ -78,11 +78,19 @@ func EffectOf(state State) BillingEffect {
 }
 
 // ContractStatus maps an internal state to the dashboard contract's
-// MessageStatus, whose enum is only queued/sent/delivered/failed/read.
+// MessageStatus.
 //
 // Accepted maps to "sent", NOT "delivered". That single line is where the
 // honesty claim is kept or broken: a carrier accepting a message is not a
 // handset receiving it, and the UI must never show otherwise.
+//
+// Rejected maps to "rejected" and no longer collapses into "failed". Those are
+// the two moments a customer actually tells apart — "we would not take it"
+// versus "we took it and it did not arrive" — and they lead to different
+// fixes: one is a configuration the sender can correct, the other is not. The
+// log could only spell the second until MessageStatus gained `rejected`, so
+// the send result and the log disagreed about the same message. They no longer
+// do.
 func ContractStatus(state State) string {
 	switch state {
 	case StateQueued, StateSubmitting:
@@ -91,31 +99,13 @@ func ContractStatus(state State) string {
 		return "sent"
 	case StateDelivered:
 		return "delivered"
-	case StateUndelivered, StateRejected, StateExpired:
+	case StateRejected:
+		return "rejected"
+	case StateUndelivered, StateExpired:
 		return "failed"
 	default:
 		return "queued"
 	}
-}
-
-// SubmitStatus maps a state to the SEND RESULT's vocabulary, which is not the
-// log's.
-//
-// The two enums differ on purpose and the difference is the customer's:
-// SendMessageResult.status carries `rejected`, MessageStatus does not. So a
-// message we refuse at submit is `rejected` in the answer the caller gets, and
-// `failed` in the log they read afterwards, because the log has no way to spell
-// the distinction.
-//
-// Refusing at submit and failing in delivery are the two moments a customer
-// actually tells apart — "you would not take it" versus "you took it and it did
-// not arrive" — and they lead to different fixes. Reporting both as `failed`,
-// which is what ContractStatus does, collapses them.
-func SubmitStatus(state State) string {
-	if state == StateRejected {
-		return "rejected"
-	}
-	return ContractStatus(state)
 }
 
 // ErrorClass groups failure reasons for the logs explorer, so a user can tell

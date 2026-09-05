@@ -25,7 +25,7 @@ func toAPIKey(key store.APIKey) gen.ApiKey {
 	return gen.ApiKey{
 		Id: key.ID, Name: key.Name,
 		Environment: gen.Environment(key.Environment),
-		Scopes:      key.Scopes, KeyPrefix: key.KeyPrefix,
+		Scopes:      toContractScopes(key.Scopes), KeyPrefix: key.KeyPrefix,
 		Status: gen.ApiKeyStatus(key.Status), LastUsedAt: key.LastUsedAt,
 		CreatedAt: key.CreatedAt,
 	}
@@ -93,7 +93,7 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 				bad, scopeVocabulary()))), nil
 	}
 	key, err := store.CreateAPIKey(ctx, s.DB, identity, request.Body.Name,
-		string(request.Body.Environment), request.Body.Scopes)
+		string(request.Body.Environment), toStoredScopes(request.Body.Scopes))
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (s *Server) CreateApiKey(ctx context.Context, request gen.CreateApiKeyReque
 		fmt.Sprintf("Created %s key %q", key.Environment, key.Name))
 	return gen.CreateApiKey201JSONResponse(gen.ApiKeyCreated{
 		Id: key.ID, Name: key.Name, Environment: gen.Environment(key.Environment),
-		Scopes: key.Scopes, KeyPrefix: key.KeyPrefix,
+		Scopes: toContractScopes(key.Scopes), KeyPrefix: key.KeyPrefix,
 		Status: gen.ApiKeyStatus(key.Status), LastUsedAt: key.LastUsedAt,
 		CreatedAt: key.CreatedAt, Secret: key.Secret,
 	}), nil
@@ -131,7 +131,7 @@ func (s *Server) RotateApiKey(ctx context.Context, request gen.RotateApiKeyReque
 		fmt.Sprintf("Rotated %s key %q", key.Environment, key.Name))
 	return gen.RotateApiKey200JSONResponse(gen.ApiKeyCreated{
 		Id: key.ID, Name: key.Name, Environment: gen.Environment(key.Environment),
-		Scopes: key.Scopes, KeyPrefix: key.KeyPrefix,
+		Scopes: toContractScopes(key.Scopes), KeyPrefix: key.KeyPrefix,
 		Status: gen.ApiKeyStatus(key.Status), LastUsedAt: key.LastUsedAt,
 		CreatedAt: key.CreatedAt, Secret: key.Secret,
 	}), nil

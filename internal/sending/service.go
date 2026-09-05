@@ -317,7 +317,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	}
 
 	return SendResult{
-		MessageID: messageID, Status: messaging.SubmitStatus(state),
+		MessageID: messageID, Status: messaging.ContractStatus(state),
 		CostMinor: update.CostMinor, Currency: rate.Currency, Segments: segments,
 	}, nil
 }
