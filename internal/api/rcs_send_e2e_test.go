@@ -176,8 +176,10 @@ func TestASendIsRefusedBeforeAnyMoneyMovesWhenTheCarrierHasNotApproved(t *testin
 	}
 	var sent gen.SendMessageResult
 	res.decode(t, &sent)
-	if sent.Status != "failed" {
-		t.Fatalf("status = %q, want failed; body = %s", sent.Status, res.Body)
+	// rejected, not failed: the carrier would not take it. `failed` is reserved
+	// for a message that WAS accepted and then did not arrive.
+	if sent.Status != "rejected" {
+		t.Fatalf("status = %q, want rejected; body = %s", sent.Status, res.Body)
 	}
 	// Distinct from template_not_approved, which is OUR review. Collapsing them
 	// sends the customer arguing with the wrong team.

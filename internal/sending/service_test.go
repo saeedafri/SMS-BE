@@ -218,8 +218,9 @@ func TestCarrierRejectionReleasesTheHoldImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed", result.Status)
+	// A carrier refusing at submit is a refusal, not a delivery failure.
+	if result.Status != "rejected" {
+		t.Fatalf("status = %q, want rejected", result.Status)
 	}
 	if after := f.balance(); after != before {
 		t.Fatalf("balance = %d after a carrier rejection, want %d", after, before)

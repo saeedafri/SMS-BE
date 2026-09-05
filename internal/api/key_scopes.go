@@ -80,6 +80,23 @@ var keyRoutes = map[string]string{
 	"GET /v1/campaigns/{id}":          "read:logs",
 	"GET /v1/campaigns/{id}/messages": "read:logs",
 
+	// Discovery, added because the submit path now REQUIRES a registered
+	// template for an India send. An integrator obliged to quote a template id
+	// with no programmatic way to find out which templates they have, or which
+	// senders are approved to carry them, has been handed a rule and no way to
+	// obey it. These read the same configuration a send is validated against,
+	// so they carry the same scope as reading a message.
+	"GET /v1/templates":       "read:messages",
+	"GET /v1/templates/{id}":  "read:messages",
+	"GET /v1/sender-ids":      "read:messages",
+	"GET /v1/sender-ids/{id}": "read:messages",
+	"GET /v1/contacts":        "read:messages",
+	"GET /v1/contacts/{id}":   "read:messages",
+
+	// Read-only reporting, and the obvious thing for an integration to poll.
+	"GET /v1/automation/journeys":      "read:logs",
+	"GET /v1/automation/journeys/{id}": "read:logs",
+
 	"GET /v1/analytics":              "read:analytics",
 	"GET /v1/analytics/reports":      "read:analytics",
 	"GET /v1/analytics/reports/{id}": "read:analytics",

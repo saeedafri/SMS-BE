@@ -524,7 +524,7 @@ func (s *Service) holdForBatch(ctx context.Context, plans []*mixedPlan,
 		}
 		if errors.Is(err, store.ErrInsufficientFunds) {
 			plan.pending.answer(
-				SendResult{Status: "failed", FailureCode: "insufficient_balance"},
+				SendResult{Status: "rejected", FailureCode: "insufficient_balance"},
 				messaging.ErrInsufficientFunds)
 			continue
 		}
@@ -636,7 +636,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 		if plan.refusal != "" {
 			outcomes[plan] = sendOutcome{
 				result: SendResult{
-					MessageID: plan.messageID, Status: "failed",
+					MessageID: plan.messageID, Status: "rejected",
 					FailureCode: plan.refusal, Segments: plan.segments,
 					Currency: plan.rate.Currency,
 				},
@@ -690,7 +690,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			Currency: plan.rate.Currency,
 		})
 		outcomes[plan] = sendOutcome{result: SendResult{
-			MessageID: plan.messageID, Status: messaging.ContractStatus(state),
+			MessageID: plan.messageID, Status: messaging.SubmitStatus(state),
 			CostMinor: cost, Currency: plan.rate.Currency, Segments: plan.segments,
 		}}
 	}
