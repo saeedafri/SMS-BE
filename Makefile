@@ -23,12 +23,15 @@ vet:
 test:
 	$(ENV) && go test ./... -race -count=1 -timeout 40m
 
-# The complete API reference, read out of the contract and out of the key-scope
-# table rather than written by hand. 177 operations is more than anyone will keep
-# accurate manually.
+# ONE document for the UI team: the narrative from
+# docs/api-reference-preamble.md, then every operation and schema read out of the
+# contract and out of the key-scope table. Generated because 177 operations is
+# more than anyone keeps accurate by hand, and one file because handing another
+# team nine of them is handing them a filing problem.
 api-reference:
 	python3 scripts/gen-api-reference.py openapi/control.json \
-	    internal/api/key_scopes.go docs/API_REFERENCE.md
+	    internal/api/key_scopes.go docs/RELAY_BACKEND_API.md \
+	    docs/api-reference-preamble.md
 
 # Proves the reference matches the DEPLOYED api: every documented GET route
 # exists, and every route it says accepts a key under a scope accepts one
