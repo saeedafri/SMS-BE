@@ -53,7 +53,8 @@ the `registration.approve`/`reject` pair you already added.
 
 **One more we are adding, and it is ours to declare rather than yours to have
 missed:** `422` on `PATCH /v1/developer/webhooks/{id}`. Section 2 below explains
-why we now need it. That makes **eleven**.
+why we now need it. That makes **eleven** — **twelve** with `GET /v1/messages/{id}` from §0.4, which
+is a new operation rather than a missing declaration and is yours to add.
 
 We are carrying all eleven in the union we generate from, so production is
 unaffected either way. Add them and `make generate` becomes the no-op you
@@ -128,6 +129,37 @@ response — but we are not going to emit a value your enum forbids.
 
 `TestAnAcceptedSendStillReportsSentAndTheLogStillSaysFailed` pins both halves so
 neither drifts.
+
+### 0.4 `GET /v1/messages/{id}` — **yes, your shape, and it is already built**
+
+We owed you a proper answer on this and the first version of this reply only said
+"add it and we will implement it". Here is the answer.
+
+**Your proposed shape is right and we have taken it exactly as written:**
+`200 MessageLogEntry | 401 | 403 | 404`, authorised by `read:messages`, the same
+scope as the list. `operationId: getMessage`.
+
+It is implemented, tested and deployed against that shape, so the moment you
+declare it in `openapi.json` it is live — no second round trip. Behaviour:
+
+- **Tenant-scoped in the query itself**, so another tenant's id is a `404` rather
+  than a leak. A missing id and someone else's id are the same answer.
+- **A refused message is readable**, which is the whole reason a refusal carries
+  an id. It comes back with its `errorCode`.
+- **`read:messages` is enforced**: a send-only key gets `403`.
+
+One thing to note when you write the UI against it, because it is the enum
+difference from §0.3 showing up in a second place: a message refused at submit
+reads **`rejected`** in the send response and **`failed`** here, because
+`MessageLogEntry.status` is `MessageStatus` and that enum has no `rejected`.
+`TestARefusedMessageIsReadableByIdWithItsReason` asserts both halves.
+
+**One refinement we did not make unilaterally.** `MessageLogEntry` carries no
+`costMinor` or `currency`, so an integration polling a message to reconcile spend
+gets the status and not the price — while the send response it is following up on
+did return both. If you want them, adding `costMinor` and `currency` to
+`MessageLogEntry` would improve the list too, and we already read both columns.
+Your call: it changes a shared schema, so we are not touching it without you.
 
 ---
 

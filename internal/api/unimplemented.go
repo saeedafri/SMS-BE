@@ -320,6 +320,10 @@ func (Unimplemented) SendMessage(ctx context.Context, request gen.SendMessageReq
 	return nil, errNotImplemented("SendMessage")
 }
 
+func (Unimplemented) GetMessage(ctx context.Context, request gen.GetMessageRequestObject) (gen.GetMessageResponseObject, error) {
+	return nil, errNotImplemented("GetMessage")
+}
+
 func (Unimplemented) GetAbuseQueue(ctx context.Context, request gen.GetAbuseQueueRequestObject) (gen.GetAbuseQueueResponseObject, error) {
 	return nil, errNotImplemented("GetAbuseQueue")
 }

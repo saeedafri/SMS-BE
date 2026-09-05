@@ -74,7 +74,8 @@ const scopeCheckedByHandler = ""
 var keyRoutes = map[string]string{
 	"POST /v1/messages": scopeCheckedByHandler,
 
-	"GET /v1/messages": "read:messages",
+	"GET /v1/messages":      "read:messages",
+	"GET /v1/messages/{id}": "read:messages",
 
 	"GET /v1/campaigns":               "read:logs",
 	"GET /v1/campaigns/{id}":          "read:logs",
