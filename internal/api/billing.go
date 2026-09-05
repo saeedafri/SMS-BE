@@ -55,19 +55,16 @@ func (s *Server) ListInvoices(ctx context.Context, request gen.ListInvoicesReque
 			errorBody(codeForbidden, "Member role has no access to billing.")), nil
 	}
 
-	cursor, limit := "", 50
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListInvoices422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit := 50
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
 
-	invoices, total, next, err := store.ListInvoices(ctx, s.DB, identity, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.ListInvoices401JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	invoices, total, err := store.ListInvoices(ctx, s.DB, identity, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -76,11 +73,8 @@ func (s *Server) ListInvoices(ctx context.Context, request gen.ListInvoicesReque
 	for _, invoice := range invoices {
 		out = append(out, invoiceResponse(invoice))
 	}
-	page := gen.InvoicePage{Invoices: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListInvoices200JSONResponse(page), nil
+	result := gen.InvoicePage{Invoices: out, Total: total}
+	return gen.ListInvoices200JSONResponse(result), nil
 }
 
 func (s *Server) GetInvoice(ctx context.Context, request gen.GetInvoiceRequestObject) (gen.GetInvoiceResponseObject, error) {

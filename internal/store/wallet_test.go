@@ -79,7 +79,7 @@ func TestOverdraftIsRefusedAndWritesNothing(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInsufficientFunds", err)
 	}
 
-	entries, total, _, err := store.LedgerPage(ctx, pool, id, "INR", "", 50)
+	entries, total, err := store.LedgerPage(ctx, pool, id, "INR", 1, 50)
 	if err != nil {
 		t.Fatalf("ledger page: %v", err)
 	}
@@ -205,29 +205,35 @@ func TestLedgerPaginationCoversEveryEntryExactlyOnce(t *testing.T) {
 		}
 	}
 
+	// Walk every page and prove the union is the whole ledger exactly once.
+	// This is the assertion that would have caught the message log returning
+	// 35,624 of 45,822 rows while reporting the larger number: reading page one
+	// and checking its shape cannot see a row that paging never reaches.
 	seen := map[uuid.UUID]int{}
-	cursor := ""
 	pages := 0
-	for {
-		entries, _, next, err := store.LedgerPage(ctx, pool, id, "INR", cursor, 7)
+	for page := 1; ; page++ {
+		entries, reported, err := store.LedgerPage(ctx, pool, id, "INR", page, 7)
 		if err != nil {
-			t.Fatalf("page %d: %v", pages, err)
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if reported != total {
+			t.Fatalf("page %d reports total %d, want %d — the denominator must not move", page, reported, total)
 		}
 		for _, entry := range entries {
 			seen[entry.ID]++
 		}
 		pages++
-		if next == "" {
+		if len(entries) == 0 {
 			break
 		}
-		cursor = next
 		if pages > 10 {
 			t.Fatal("pagination did not terminate")
 		}
 	}
 
 	if len(seen) != total {
-		t.Fatalf("saw %d distinct entries across %d pages, want %d", len(seen), pages, total)
+		t.Fatalf("saw %d distinct entries across %d pages, want %d — paging must reach every row it counts",
+			len(seen), pages, total)
 	}
 	for id, count := range seen {
 		if count != 1 {
@@ -236,10 +242,25 @@ func TestLedgerPaginationCoversEveryEntryExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestLedgerRejectsAMalformedCursor(t *testing.T) {
+// A page past the end is empty, not an error. A UI with a page box lets someone
+// type 40 when there are 12, and answering that with a 500 would be worse than
+// answering with nothing.
+func TestLedgerPagePastTheEndIsEmpty(t *testing.T) {
 	ctx, pool, id := walletFixture(t)
+	if _, err := store.AppendLedgerEntry(ctx, pool, id, store.LedgerEntry{
+		Currency: "INR", Type: "topup", AmountMinor: 500,
+	}); err != nil {
+		t.Fatalf("topup: %v", err)
+	}
 
-	if _, _, _, err := store.LedgerPage(ctx, pool, id, "INR", "!!!not-base64!!!", 10); !errors.Is(err, store.ErrInvalidCursor) {
-		t.Fatalf("err = %v, want ErrInvalidCursor", err)
+	entries, total, err := store.LedgerPage(ctx, pool, id, "INR", 9999, 10)
+	if err != nil {
+		t.Fatalf("page past the end: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("got %d entries past the end, want 0", len(entries))
+	}
+	if total == 0 {
+		t.Fatal("total is 0 past the end — the denominator must not depend on the page")
 	}
 }

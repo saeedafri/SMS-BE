@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -17,11 +18,11 @@ import (
 // Before this, seven of the eight operator endpoints declared cursor and limit
 // and read neither, and no operator page carried total — so ?limit=1 returned
 // all 19 rows and the footer had no denominator. The screens absorbed it by
-// exhausting the cursor and counting what arrived, which worked only because
-// nextCursor was always null.
+// exhausting the pager and counting what arrived, which worked only because
+// there was never a second page.
 //
-// That is why total and the cursor had to land together: shipping the cursor
-// alone would have started those screens walking pages they previously got in
+// That is why total and paging had to land together: paging alone would
+// have started those screens walking pages they previously got in
 // one request, to compute a number the server could have sent in one field.
 func TestAuditLogPagesAndCountsWhatTheFilterMatches(t *testing.T) {
 	h := newHarness(t)
@@ -50,8 +51,7 @@ func TestAuditLogPagesAndCountsWhatTheFilterMatches(t *testing.T) {
 			Action string `json:"action"`
 			Detail string `json:"detail"`
 		} `json:"entries"`
-		Total      int     `json:"total"`
-		NextCursor *string `json:"nextCursor"`
+		Total int `json:"total"`
 	}
 	get := func(query string) page {
 		t.Helper()
@@ -72,12 +72,13 @@ func TestAuditLogPagesAndCountsWhatTheFilterMatches(t *testing.T) {
 	if first.Total <= 5 {
 		t.Fatalf("total = %d, want more than the page size", first.Total)
 	}
-	if first.NextCursor == nil || *first.NextCursor == "" {
-		t.Fatal("no nextCursor, so a client cannot tell 'no more data' from 'paging not implemented'")
+	if first.Total <= len(first.Entries) {
+		t.Fatalf("total = %d with %d rows on the page, so a client cannot tell "+
+			"'no more data' from 'paging not implemented'", first.Total, len(first.Entries))
 	}
 
 	// 2. The cursor walks: page two is different rows.
-	second := get("?range=90d&limit=5&cursor=" + *first.NextCursor)
+	second := get("?range=90d&limit=5&page=2")
 	if len(second.Entries) == 0 {
 		t.Fatal("page two is empty")
 	}
@@ -105,26 +106,18 @@ func TestAuditLogPagesAndCountsWhatTheFilterMatches(t *testing.T) {
 		t.Fatalf("filtered total = %d, want at least the 3 rows just written", filtered.Total)
 	}
 
-	// 4. Walking the cursor to exhaustion yields exactly total rows.
-	walked, cursor, guard := 0, "", 0
-	for {
-		guard++
-		if guard > 100 {
-			t.Fatal("cursor did not terminate within 100 pages")
-		}
-		query := "?range=90d&limit=4&action=route.disable"
-		if cursor != "" {
-			query += "&cursor=" + cursor
-		}
-		p := get(query)
-		walked += len(p.Entries)
-		if p.NextCursor == nil || *p.NextCursor == "" {
+	// 4. Walking every page yields exactly total rows — the assertion that
+	// catches a pager reporting more than it can actually reach.
+	walked := 0
+	for page := 1; page <= 100; page++ {
+		p := get(fmt.Sprintf("?range=90d&limit=4&action=route.disable&page=%d", page))
+		if len(p.Entries) == 0 {
 			break
 		}
-		cursor = *p.NextCursor
+		walked += len(p.Entries)
 	}
 	if walked != filtered.Total {
-		t.Errorf("walking the cursor yielded %d rows, total said %d", walked, filtered.Total)
+		t.Errorf("walking every page yielded %d rows, total said %d", walked, filtered.Total)
 	}
 }
 

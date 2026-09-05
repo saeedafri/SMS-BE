@@ -41,19 +41,16 @@ type SupportMessage struct {
 // ask for a second page, so the customer Support screen could only ever show
 // the first slice of its own tickets.
 func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	status, category *string, cursor string, limit int) ([]SupportTicket, int, string, error) {
+	status, category *string, page, limit int) ([]SupportTicket, int, error) {
 
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(page, limit)
 
 	var out []SupportTicket
 	var total int
-	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM support_tickets t
 			WHERE ($1::text IS NULL OR t.status   = $1)
@@ -67,9 +64,8 @@ func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id
 			WHERE ($1::text IS NULL OR t.status   = $1)
 			  AND ($2::text IS NULL OR t.category = $2)
-			  AND ($3::timestamptz IS NULL OR (t.updated_at, t.id) < ($3, $4))
 			ORDER BY t.updated_at DESC, t.id DESC
-			LIMIT $5`, status, category, cursorTime, cursorID, limit+1)
+			LIMIT $3 OFFSET $4`, status, category, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -86,15 +82,9 @@ func ListSupportTickets(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list support tickets: %w", err)
+		return nil, 0, fmt.Errorf("store: list support tickets: %w", err)
 	}
-
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 func GetSupportTicket(ctx context.Context, pool *pgxpool.Pool, id Identity,
@@ -304,7 +294,7 @@ type ConversationFilter struct {
 	Channel *string
 	Status  *string
 	Unread  *bool
-	Cursor  string
+	Page    int
 	Limit   int
 }
 
@@ -314,20 +304,17 @@ type ConversationFilter struct {
 // for three threads returned every one. total was the length of that response,
 // which looked correct only because nothing was ever cut.
 func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	filter ConversationFilter) ([]Conversation, int, string, error) {
+	filter ConversationFilter) ([]Conversation, int, error) {
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(filter.Page, limit)
 
 	var out []Conversation
 	var total int
-	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			SELECT count(*) FROM conversations c
 			WHERE ($1::text IS NULL OR c.channel = $1)
@@ -344,10 +331,10 @@ func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			  -- Only filters when the caller asked. unread=false is a real
 			  -- request for read threads, not the same as omitting it.
 			  AND ($3::bool IS NULL OR c.unread  = $3)
-			  AND ($4::timestamptz IS NULL OR (c.updated_at, c.id) < ($4, $5))
+
 			ORDER BY c.updated_at DESC, c.id DESC
-			LIMIT $6`,
-			filter.Channel, filter.Status, filter.Unread, cursorTime, cursorID, limit+1)
+			LIMIT $4 OFFSET $5`,
+			filter.Channel, filter.Status, filter.Unread, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -362,15 +349,9 @@ func ListConversations(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list conversations: %w", err)
+		return nil, 0, fmt.Errorf("store: list conversations: %w", err)
 	}
-
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 func GetConversation(ctx context.Context, pool *pgxpool.Pool, id Identity,

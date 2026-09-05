@@ -167,19 +167,16 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // footer say "showing 50 of N", and for a ledger N is the number a customer
 // actually wants: how many transactions they have, not how many fit on screen.
 func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	currency, cursor string, limit int) ([]LedgerEntry, int, string, error) {
+	currency string, page, limit int) ([]LedgerEntry, int, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(page, limit)
 
 	var entries []LedgerEntry
 	var total int
-	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		// Counted inside the same transaction as the page, so the total and the
 		// rows describe one consistent state of the ledger rather than two
 		// moments either side of a concurrent charge.
@@ -188,16 +185,13 @@ func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			WHERE ($1 = '' OR currency = $1)`, currency).Scan(&total); err != nil {
 			return err
 		}
-		// Fetch one extra row to learn whether another page exists without a
-		// second count query.
 		rows, err := tx.Query(ctx, `
 			SELECT id, currency, entry_type, amount_minor, balance_after_minor,
 			       description, campaign_id, campaign_name, journey_id, journey_name, created_at
 			FROM wallet_ledger
 			WHERE ($1 = '' OR currency = $1)
-			  AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3))
 			ORDER BY created_at DESC, id DESC
-			LIMIT $4`, currency, cursorTime, cursorID, limit+1)
+			LIMIT $2 OFFSET $3`, currency, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -215,49 +209,70 @@ func LedgerPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: ledger page: %w", err)
+		return nil, 0, fmt.Errorf("store: ledger page: %w", err)
 	}
-
-	next := ""
-	if len(entries) > limit {
-		last := entries[limit-1]
-		entries = entries[:limit]
-		next = encodeLedgerCursor(last.CreatedAt, last.ID)
-	}
-	return entries, total, next, nil
+	return entries, total, nil
 }
 
-func encodeLedgerCursor(at time.Time, id uuid.UUID) string {
+// encodeDispatchCursor / decodeDispatchCursor are what is left of the keyset
+// cursor after the lists moved to page numbers.
+//
+// They are NOT an API concern any more — no endpoint accepts or returns one.
+// The campaign fan-out still uses them, and deliberately: it pages a contact
+// list while sending, and OFFSET paging shifts rows when the list changes
+// underneath it. On a UI list that means a repeated row; on a fan-out it means
+// a contact skipped or messaged twice, which costs money and annoys a real
+// person. The cursor is also persisted in campaigns.dispatch_cursor so a
+// paused campaign resumes from the contact it actually reached.
+func encodeDispatchCursor(at time.Time, id uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString(
 		[]byte(at.UTC().Format(time.RFC3339Nano) + "|" + id.String()))
 }
 
-func decodeLedgerCursor(cursor string) (*time.Time, *uuid.UUID, error) {
+func decodeDispatchCursor(cursor string) (*time.Time, *uuid.UUID, error) {
 	if cursor == "" {
 		return nil, nil, nil
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(cursor)
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: %w: malformed cursor", ErrInvalidCursor)
+		return nil, nil, errors.New("store: malformed dispatch cursor")
 	}
 	parts := strings.SplitN(string(raw), "|", 2)
 	if len(parts) != 2 {
-		return nil, nil, fmt.Errorf("store: %w: malformed cursor", ErrInvalidCursor)
+		return nil, nil, errors.New("store: malformed dispatch cursor")
 	}
 	at, err := time.Parse(time.RFC3339Nano, parts[0])
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: %w: malformed cursor", ErrInvalidCursor)
+		return nil, nil, errors.New("store: malformed dispatch cursor")
 	}
 	id, err := uuid.Parse(parts[1])
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: %w: malformed cursor", ErrInvalidCursor)
+		return nil, nil, errors.New("store: malformed dispatch cursor")
 	}
 	return &at, &id, nil
 }
 
-// ErrInvalidCursor lets handlers answer 422 rather than 500 when a client
-// echoes back something we never issued.
-var ErrInvalidCursor = errors.New("invalid cursor")
+// pageOffset turns a 1-based page number into a SQL OFFSET.
+//
+// This replaced a keyset cursor. Keyset paging is the better algorithm — it is
+// stable while rows are being written, and it does not get slower the deeper
+// you go — but it can only answer "the page after this row", and the console
+// needs to answer "page 7 of 12". A cursor cannot jump.
+//
+// The costs are real and accepted rather than unnoticed. Rows shift between
+// pages when new data arrives, so a message sent while someone reads page 1
+// pushes a row onto page 2 and they see it twice; and OFFSET n makes the
+// database walk n rows before returning any. At current volumes neither is
+// measurable. If a list ever grows to where it is, the fix is a filter, not a
+// deeper page.
+//
+// The caller has already clamped limit, because the cap differs per list.
+func pageOffset(page, limit int) int {
+	if page < 2 {
+		return 0
+	}
+	return (page - 1) * limit
+}
 
 // LedgerSum totals a wallet straight from the entries. It exists so the
 // balance can be checked against its own history rather than trusted.
@@ -656,28 +671,23 @@ const invoiceColumns = `id, currency, period_start, period_end, status,
 	subtotal_minor, tax_rate_percent, tax_minor, total_minor, created_at`
 
 func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	cursor string, limit int) ([]Invoice, int, string, error) {
+	page, limit int) ([]Invoice, int, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(page, limit)
 
 	var invoices []Invoice
-	var createdAts []time.Time
 	var total int
-	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM invoices`).Scan(&total); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx, `
 			SELECT `+invoiceColumns+` FROM invoices
-			WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1, $2))
 			ORDER BY created_at DESC, id DESC
-			LIMIT $3`, cursorTime, cursorID, limit+1)
+			LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -693,20 +703,13 @@ func ListInvoices(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			}
 			invoice.LineItems = []InvoiceLineItem{}
 			invoices = append(invoices, invoice)
-			createdAts = append(createdAts, createdAt)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list invoices: %w", err)
+		return nil, 0, fmt.Errorf("store: list invoices: %w", err)
 	}
-
-	next := ""
-	if len(invoices) > limit {
-		next = encodeLedgerCursor(createdAts[limit-1], invoices[limit-1].ID)
-		invoices = invoices[:limit]
-	}
-	return invoices, total, next, nil
+	return invoices, total, nil
 }
 
 func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID uuid.UUID) (Invoice, error) {

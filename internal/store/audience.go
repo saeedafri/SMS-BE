@@ -255,32 +255,23 @@ const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
 
 // ListContacts pages contacts, optionally restricted to one list. Total is
 // returned alongside because the audience screen shows "1–50 of 12,480".
-func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	listID *uuid.UUID, cursor string, limit int) ([]Contact, int, string, error) {
+// ListContactsAfter pages a contact list by keyset, for the campaign fan-out.
+//
+// Separate from ListContacts, which the API uses and which pages by number.
+// See encodeDispatchCursor for why the send path does not share it.
+func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, cursor string, limit int) ([]Contact, string, error) {
 
-	// An out-of-range limit falls back to 50 rather than being clamped to the
-	// maximum, because a caller asking for something impossible has a bug and a
-	// small page makes that obvious instead of silently serving a huge one.
-	// The ceiling is high enough for the campaign fan-out to page in real
-	// batches; user-supplied limits are bounded at the API layer.
 	if limit <= 0 || limit > maxContactPage {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
+	cursorTime, cursorID, err := decodeDispatchCursor(cursor)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, "", err
 	}
 
 	var contacts []Contact
-	var total int
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*) FROM contacts c
-			WHERE ($1::uuid IS NULL OR EXISTS (
-			    SELECT 1 FROM contact_list_members m
-			    WHERE m.contact_id = c.id AND m.list_id = $1))`, listID).Scan(&total); err != nil {
-			return err
-		}
 		rows, err := tx.Query(ctx, `
 			SELECT `+contactColumns+` FROM contacts c
 			WHERE ($1::uuid IS NULL OR EXISTS (
@@ -303,15 +294,64 @@ func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list contacts: %w", err)
+		return nil, "", fmt.Errorf("store: list contacts after: %w", err)
 	}
 
 	next := ""
 	if len(contacts) > limit {
-		next = encodeLedgerCursor(contacts[limit-1].CreatedAt, contacts[limit-1].ID)
+		next = encodeDispatchCursor(contacts[limit-1].CreatedAt, contacts[limit-1].ID)
 		contacts = contacts[:limit]
 	}
-	return contacts, total, next, nil
+	return contacts, next, nil
+}
+
+func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, page, limit int) ([]Contact, int, error) {
+
+	// An out-of-range limit falls back to 50 rather than being clamped to the
+	// maximum, because a caller asking for something impossible has a bug and a
+	// small page makes that obvious instead of silently serving a huge one.
+	// The ceiling is high enough for the campaign fan-out to page in real
+	// batches; user-supplied limits are bounded at the API layer.
+	if limit <= 0 || limit > maxContactPage {
+		limit = 50
+	}
+	offset := pageOffset(page, limit)
+
+	var contacts []Contact
+	var total int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM contacts c
+			WHERE ($1::uuid IS NULL OR EXISTS (
+			    SELECT 1 FROM contact_list_members m
+			    WHERE m.contact_id = c.id AND m.list_id = $1))`, listID).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `
+			SELECT `+contactColumns+` FROM contacts c
+			WHERE ($1::uuid IS NULL OR EXISTS (
+			        SELECT 1 FROM contact_list_members m
+			        WHERE m.contact_id = c.id AND m.list_id = $1))
+			ORDER BY c.created_at DESC, c.id DESC
+			LIMIT $2 OFFSET $3`, listID, limit, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			contact, err := scanContact(rows)
+			if err != nil {
+				return err
+			}
+			contacts = append(contacts, contact)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: list contacts: %w", err)
+	}
+	return contacts, total, nil
 }
 
 // ImportRow is one CSV row after client-side normalisation.
@@ -447,21 +487,17 @@ type Suppression struct {
 }
 
 func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	cursor string, limit int) ([]Suppression, int, string, error) {
+	page, limit int) ([]Suppression, int, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(page, limit)
 
 	var out []Suppression
-	var ids []uuid.UUID
 	var total int
-	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		// Counted without the cursor: this is the footer's denominator, and one
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Counted without the page: this is the footer's denominator, and one
 		// that shrank as the reader paged would be worse than none.
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM suppressions`).Scan(&total); err != nil {
 			return err
@@ -469,9 +505,8 @@ func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		rows, err := tx.Query(ctx, `
 			SELECT id, identity, msisdn, email, reason, note, created_at
 			FROM suppressions
-			WHERE ($1::timestamptz IS NULL OR (created_at, id) < ($1, $2))
 			ORDER BY created_at DESC, id DESC
-			LIMIT $3`, cursorTime, cursorID, limit+1)
+			LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -485,20 +520,13 @@ func ListSuppressions(ctx context.Context, pool *pgxpool.Pool, id Identity,
 				return err
 			}
 			out = append(out, suppression)
-			ids = append(ids, rowID)
 		}
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list suppressions: %w", err)
+		return nil, 0, fmt.Errorf("store: list suppressions: %w", err)
 	}
-
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].CreatedAt, ids[limit-1])
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 // AddSuppression records an opt-out. Re-suppressing an identity is a no-op

@@ -2,12 +2,10 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -222,18 +220,15 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 		value := string(*request.Params.Country)
 		country = &value
 	}
-	cursor, limit := "", 0
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetTenants422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit := 0
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
-	tenants, total, next, err := store.ListTenants(ctx, s.operatorPool(), status, country, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.GetTenants422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	tenants, total, err := store.ListTenants(ctx, s.operatorPool(), status, country, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -241,11 +236,8 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 	for _, tenant := range tenants {
 		out = append(out, toOperatorTenant(tenant))
 	}
-	page := gen.GetTenants200JSONResponse{Tenants: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return page, nil
+	result := gen.GetTenants200JSONResponse{Tenants: out, Total: total}
+	return result, nil
 }
 
 // operatorAction applies a state change to a tenant and records who did it.
@@ -743,17 +735,16 @@ func (s *Server) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequest
 	filter := store.AuditLogFilter{
 		TenantID: request.Params.TenantId, Action: auditAction, Since: since,
 	}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetAuditLog422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
-	entries, total, next, err := store.ListAuditLog(ctx, s.DB, filter)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.GetAuditLog422JSONResponse(
-			errorBody(codeValidation, "Malformed cursor.")), nil
-	}
+	entries, total, err := store.ListAuditLog(ctx, s.DB, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -777,11 +768,8 @@ func (s *Server) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequest
 		}
 		out = append(out, row)
 	}
-	page := gen.GetAuditLog200JSONResponse{Entries: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return page, nil
+	result := gen.GetAuditLog200JSONResponse{Entries: out, Total: total}
+	return result, nil
 }
 
 // routeAction changes a route and records who did it. Route order decides which
@@ -1450,60 +1438,29 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 	// ponytail: offset cursor over a merged queue; keyset it if the pending
 	// backlog ever justifies the three-way merge.
 	total := len(items)
-	offset := 0
-	if request.Params.Cursor != nil && *request.Params.Cursor != "" {
-		decoded, err := decodeOffsetCursor(*request.Params.Cursor)
-		if err != nil {
-			return gen.GetApprovalQueue422JSONResponse(
-				errorBody(codeValidation, "That page cursor is not valid.")), nil
-		}
-		offset = decoded
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetApprovalQueue422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
 	limit := 100
 	if request.Params.Limit != nil && *request.Params.Limit > 0 {
 		limit = *request.Params.Limit
 	}
+	offset := (page - 1) * limit
 	if offset > total {
 		offset = total
 	}
 	window := items[offset:]
-	page := gen.GetApprovalQueue200JSONResponse{Total: total}
 	if len(window) > limit {
 		window = window[:limit]
-		next := encodeOffsetCursor(offset + limit)
-		page.NextCursor = &next
 	}
-	page.Items = window
-	return page, nil
+	return gen.GetApprovalQueue200JSONResponse{Total: total, Items: window}, nil
 }
 
 // encodeOffsetCursor and decodeOffsetCursor carry a position through an opaque
 // string, so a client cannot come to depend on it being an offset. The contract
 // promises opacity, not a keyset.
-func encodeOffsetCursor(offset int) string {
-	return base64.RawURLEncoding.EncodeToString([]byte("offset:" + strconv.Itoa(offset)))
-}
-
-func decodeOffsetCursor(cursor string) (int, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(cursor)
-	if err != nil {
-		return 0, fmt.Errorf("malformed cursor")
-	}
-	value, ok := strings.CutPrefix(string(raw), "offset:")
-	if !ok {
-		return 0, fmt.Errorf("malformed cursor")
-	}
-	offset, err := strconv.Atoi(value)
-	if err != nil || offset < 0 {
-		return 0, fmt.Errorf("malformed cursor")
-	}
-	return offset, nil
-}
-
-// decodeRegistrationFields turns the stored jsonb into the map the contract
-// declares. A registration whose fields cannot be read is still worth showing —
-// the operator can see who submitted what and when, and chase the rest — so a
-// decode failure yields an empty map rather than failing the whole queue.
 func decodeRegistrationFields(raw []byte) map[string]any {
 	fields := map[string]any{}
 	if len(raw) == 0 {
@@ -1869,17 +1826,16 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 		value := string(*request.Params.Category)
 		filter.Category = &value
 	}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetOperatorSupportTickets422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
-	tickets, total, next, err := store.ListAllSupportTickets(ctx, s.operatorPool(), filter)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.GetOperatorSupportTickets422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	tickets, total, err := store.ListAllSupportTickets(ctx, s.operatorPool(), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -1897,11 +1853,8 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 		}
 		out = append(out, toGenTicket(ticket))
 	}
-	page := gen.GetOperatorSupportTickets200JSONResponse{Tickets: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return page, nil
+	result := gen.GetOperatorSupportTickets200JSONResponse{Tickets: out, Total: total}
+	return result, nil
 }
 
 func (s *Server) GetOperatorSupportTicket(ctx context.Context,
@@ -2246,15 +2199,14 @@ func (s *Server) GetUserActivity(ctx context.Context,
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
-	}
-
-	activity, total, next, err := store.ListUserActivity(ctx, s.operatorPool(), filter)
-	if errors.Is(err, store.ErrInvalidCursor) {
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
 		return gen.GetUserActivity422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
+
+	activity, total, err := store.ListUserActivity(ctx, s.operatorPool(), filter)
 	if err != nil {
 		return nil, err
 	}
@@ -2268,11 +2220,8 @@ func (s *Server) GetUserActivity(ctx context.Context,
 			Detail: event.Detail,
 		})
 	}
-	page := gen.GetUserActivity200JSONResponse{Entries: entries, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return page, nil
+	result := gen.GetUserActivity200JSONResponse{Entries: entries, Total: total}
+	return result, nil
 }
 
 // rangeStart turns the contract's analytics range into the timestamp to look

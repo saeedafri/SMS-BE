@@ -84,7 +84,7 @@ func (s *Server) journeyCounts(ctx context.Context, identity store.Identity,
 	if journey.TriggerListID == nil {
 		return 0, 0
 	}
-	contacts, _, _, err := store.ListContacts(ctx, s.DB, identity, journey.TriggerListID, "", 1000)
+	contacts, _, err := store.ListContacts(ctx, s.DB, identity, journey.TriggerListID, 1, 1000)
 	if err != nil {
 		return 0, 0
 	}
@@ -240,8 +240,8 @@ func (s *Server) CreateJourney(ctx context.Context, request gen.CreateJourneyReq
 	journey.Steps = encoded
 
 	// Freeze the cohort size, same role as a campaign's estimate.
-	if _, total, _, err := store.ListContacts(ctx, s.DB, identity,
-		journey.TriggerListID, "", 1); err == nil {
+	if _, total, err := store.ListContacts(ctx, s.DB, identity,
+		journey.TriggerListID, 1, 1); err == nil {
 		journey.Recipients = total
 	}
 

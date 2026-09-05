@@ -197,7 +197,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			return sent, failed, nil
 		}
 
-		contacts, _, next, err := store.ListContacts(ctx, s.DB, identity,
+		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity,
 			campaign.ListID, cursor, batchSize)
 		if err != nil {
 			return sent, failed, err

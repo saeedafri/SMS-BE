@@ -320,19 +320,32 @@ type WebhookDelivery struct {
 	Payload         []byte
 }
 
+// ListWebhookEvents pages a endpoint's delivery history.
+//
+// It used to take a limit and nothing else: the route declared a cursor, the
+// handler never read it, and the response never carried one — so nobody could
+// see past the newest 50 deliveries of an endpoint, which is exactly when you
+// need the history. It now pages and reports a total like every other list.
 func ListWebhookEvents(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	hookID uuid.UUID, limit int) ([]WebhookDelivery, error) {
+	hookID uuid.UUID, page, limit int) ([]WebhookDelivery, int, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	offset := pageOffset(page, limit)
 	var out []WebhookDelivery
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM webhook_events WHERE endpoint_id = $1`,
+			hookID).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT id, endpoint_id, event_type, attempt, outcome, http_status,
 			       response_snippet, occurred_at
 			FROM webhook_events WHERE endpoint_id = $1
-			ORDER BY occurred_at DESC, id DESC LIMIT $2`, hookID, limit)
+			ORDER BY occurred_at DESC, id DESC LIMIT $2 OFFSET $3`, hookID, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -349,9 +362,9 @@ func ListWebhookEvents(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list webhook events: %w", err)
+		return nil, 0, fmt.Errorf("store: list webhook events: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func RecordWebhookEvent(ctx context.Context, pool *pgxpool.Pool, id Identity,

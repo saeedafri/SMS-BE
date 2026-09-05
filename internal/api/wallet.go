@@ -74,23 +74,19 @@ func (s *Server) ListLedger(ctx context.Context, request gen.ListLedgerRequestOb
 		return gen.ListLedger401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
-	currency, cursor, limit := "", "", 50
+	currency, limit := "", 50
 	if request.Params.Currency != nil {
 		currency = string(*request.Params.Currency)
 	}
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListLedger422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
 
-	entries, total, next, err := store.LedgerPage(ctx, s.DB, identity, currency, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		// A cursor we never issued is the client's error, not ours.
-		return gen.ListLedger401JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	entries, total, err := store.LedgerPage(ctx, s.DB, identity, currency, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -99,11 +95,8 @@ func (s *Server) ListLedger(ctx context.Context, request gen.ListLedgerRequestOb
 	for _, entry := range entries {
 		out = append(out, ledgerEntryResponse(entry))
 	}
-	page := gen.LedgerPage{Entries: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListLedger200JSONResponse(page), nil
+	result := gen.LedgerPage{Entries: out, Total: total}
+	return gen.ListLedger200JSONResponse(result), nil
 }
 
 func (s *Server) TopUpWallet(ctx context.Context, request gen.TopUpWalletRequestObject) (gen.TopUpWalletResponseObject, error) {

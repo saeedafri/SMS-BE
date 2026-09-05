@@ -49,9 +49,6 @@ func TestNewTenantHasNoBalancesOrLedger(t *testing.T) {
 	if page.Entries == nil {
 		t.Error("entries is null, want an empty array")
 	}
-	if page.NextCursor != nil {
-		t.Errorf("nextCursor = %v on an empty ledger, want null", *page.NextCursor)
-	}
 }
 
 func TestTopUpCreatesTheWalletAndCreditsIt(t *testing.T) {

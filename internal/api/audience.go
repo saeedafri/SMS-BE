@@ -224,10 +224,11 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 		}
 		listID = &parsed
 	}
-	cursor, limit := "", 50
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListContacts422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit := 50
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 		// Bound user input here rather than trusting the store's ceiling: the
@@ -238,11 +239,7 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 		}
 	}
 
-	contacts, total, next, err := store.ListContacts(ctx, s.DB, identity, listID, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.ListContacts401JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	contacts, total, err := store.ListContacts(ctx, s.DB, identity, listID, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -251,11 +248,8 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 	for _, contact := range contacts {
 		out = append(out, contactResponse(contact))
 	}
-	page := gen.ContactPage{Contacts: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListContacts200JSONResponse(page), nil
+	result := gen.ContactPage{Contacts: out, Total: total}
+	return gen.ListContacts200JSONResponse(result), nil
 }
 
 // ImportContacts upserts a batch of rows into a list.
@@ -450,10 +444,11 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	cursor, limit := "", 50
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListSuppressions422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit := 50
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 		// Bound user input here rather than trusting the store's ceiling: the
@@ -464,11 +459,7 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 		}
 	}
 
-	suppressions, total, next, err := store.ListSuppressions(ctx, s.DB, identity, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.ListSuppressions422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	suppressions, total, err := store.ListSuppressions(ctx, s.DB, identity, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -482,11 +473,8 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 			CreatedAt: suppression.CreatedAt,
 		})
 	}
-	page := gen.SuppressionPage{Suppressions: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListSuppressions200JSONResponse(page), nil
+	result := gen.SuppressionPage{Suppressions: out, Total: total}
+	return gen.ListSuppressions200JSONResponse(result), nil
 }
 
 func (s *Server) AddSuppressions(ctx context.Context, request gen.AddSuppressionsRequestObject) (gen.AddSuppressionsResponseObject, error) {

@@ -121,7 +121,7 @@ type MessageFilter struct {
 	Channel    string
 	ErrorClass string
 	CampaignID *uuid.UUID
-	Cursor     string
+	Page       int
 	Limit      int
 }
 
@@ -132,16 +132,13 @@ type MessageFilter struct {
 // FINAL costs read performance, which is the accepted trade for never showing
 // a user two copies of their own message.
 func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
-	filter MessageFilter) ([]MessageRecord, uint64, string, error) {
+	filter MessageFilter) ([]MessageRecord, uint64, error) {
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(filter.Page, limit)
 
 	where := "tenant_id = ?"
 	args := []any{tenantID}
@@ -165,26 +162,26 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	var total uint64
 	if err := conn.QueryRow(ctx,
 		`SELECT count() FROM messages FINAL WHERE `+where, args...).Scan(&total); err != nil {
-		return nil, 0, "", fmt.Errorf("store: count messages: %w", err)
+		return nil, 0, fmt.Errorf("store: count messages: %w", err)
 	}
 
-	pageWhere, pageArgs := where, append([]any{}, args...)
-	if cursorTime != nil {
-		pageWhere += " AND (created_at, id) < (?, ?)"
-		pageArgs = append(pageArgs, *cursorTime, *cursorID)
-	}
-	pageArgs = append(pageArgs, limit+1)
+	// OFFSET rather than a keyset comparison, and that fixes a defect as well
+	// as changing the API. The keyset form bound created_at through the
+	// ClickHouse driver at second precision, so every row sharing a second with
+	// the cursor row was skipped — 10,198 of 45,822 on the demo tenant, while
+	// `total` reported all of them. An integer offset has no such edge.
+	pageArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := conn.Query(ctx, `
 		SELECT id, campaign_id, campaign_name, channel, msisdn, email, status,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
 		       created_at, sent_at, delivered_at, updated_at
 		FROM messages FINAL
-		WHERE `+pageWhere+`
+		WHERE `+where+`
 		ORDER BY created_at DESC, id DESC
-		LIMIT ?`, pageArgs...)
+		LIMIT ? OFFSET ?`, pageArgs...)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: query messages: %w", err)
+		return nil, 0, fmt.Errorf("store: query messages: %w", err)
 	}
 	defer rows.Close()
 
@@ -197,20 +194,15 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 			&record.CostMinor, &record.Currency,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
 			&record.UpdatedAt); err != nil {
-			return nil, 0, "", fmt.Errorf("store: scan message: %w", err)
+			return nil, 0, fmt.Errorf("store: scan message: %w", err)
 		}
 		out = append(out, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, "", fmt.Errorf("store: iterate messages: %w", err)
+		return nil, 0, fmt.Errorf("store: iterate messages: %w", err)
 	}
 
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].CreatedAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 // LoadMessageState reads the fields a delivery report needs in order to write

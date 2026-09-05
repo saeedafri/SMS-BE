@@ -369,9 +369,12 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 
 	campaignID := request.Id
 	filter := store.MessageFilter{CampaignID: &campaignID, Limit: 50}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListCampaignMessages422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
@@ -379,7 +382,7 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 		filter.Status = contractStatusToState(string(*request.Params.Status))
 	}
 
-	records, total, next, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
+	records, total, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -413,11 +416,8 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 		messages = append(messages, message)
 	}
 
-	page := gen.MessagePage{Messages: messages, Total: int(total)}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListCampaignMessages200JSONResponse(page), nil
+	result := gen.MessagePage{Messages: messages, Total: int(total)}
+	return gen.ListCampaignMessages200JSONResponse(result), nil
 }
 
 // sendingService builds the data-plane service. Campaigns need ClickHouse for
