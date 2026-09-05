@@ -89,33 +89,7 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 
 	entries := make([]gen.MessageLogEntry, 0, len(records))
 	for _, record := range records {
-		entry := gen.MessageLogEntry{
-			Id:          record.ID,
-			Msisdn:      record.Msisdn,
-			Email:       record.Email,
-			Segments:    int(record.Segments),
-			UpdatedAt:   record.UpdatedAt,
-			SentAt:      record.SentAt,
-			DeliveredAt: record.DeliveredAt,
-			ErrorCode:   record.ErrorCode,
-		}
-		// The whole honesty claim in one line: an internal "accepted" surfaces
-		// as "sent", never "delivered".
-		entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))
-		entry.CampaignId = record.CampaignID
-		entry.CampaignName = record.CampaignName
-		entry.Channel = gen.ChannelId(record.Channel)
-		if record.ErrorClass != nil && *record.ErrorClass != "" {
-			// Nullable oneOf in the contract, so a generated union type.
-			var class gen.MessageLogEntry_ErrorClass
-			_ = class.FromMessageErrorClass(gen.MessageErrorClass(*record.ErrorClass))
-			entry.ErrorClass = &class
-		}
-		if record.FraudFlag != "" {
-			flag := gen.MessageFraudFlag(record.FraudFlag)
-			entry.FraudFlag = &flag
-		}
-		entries = append(entries, entry)
+		entries = append(entries, messageLogEntry(record))
 	}
 
 	page := gen.MessageLogPage{Messages: entries, Total: int(total)}
@@ -300,4 +274,69 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 		}
 	}
 	return gen.SendMessage202JSONResponse(out), nil
+}
+
+// messageLogEntry maps a stored message to the contract's log entry.
+//
+// Shared by the list and the single-message read, because two mappings of the
+// same row is how a field ends up rendered on one screen and missing from the
+// other.
+func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
+	entry := gen.MessageLogEntry{
+		Id:          record.ID,
+		Msisdn:      record.Msisdn,
+		Email:       record.Email,
+		Segments:    int(record.Segments),
+		UpdatedAt:   record.UpdatedAt,
+		SentAt:      record.SentAt,
+		DeliveredAt: record.DeliveredAt,
+		ErrorCode:   record.ErrorCode,
+	}
+	// The whole honesty claim in one line: an internal "accepted" surfaces as
+	// "sent", never "delivered".
+	entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))
+	entry.CampaignId = record.CampaignID
+	entry.CampaignName = record.CampaignName
+	entry.Channel = gen.ChannelId(record.Channel)
+	if record.ErrorClass != nil && *record.ErrorClass != "" {
+		// Nullable oneOf in the contract, so a generated union type.
+		var class gen.MessageLogEntry_ErrorClass
+		_ = class.FromMessageErrorClass(gen.MessageErrorClass(*record.ErrorClass))
+		entry.ErrorClass = &class
+	}
+	if record.FraudFlag != "" {
+		flag := gen.MessageFraudFlag(record.FraudFlag)
+		entry.FraudFlag = &flag
+	}
+	return entry
+}
+
+// GetMessage reads one message.
+//
+// The endpoint an integration actually needs: after a send returns an id, the
+// next thing any client does is ask what happened to it. Narrowing the list to
+// find one row was the only way to do that, which is a poor substitute and gets
+// worse as the log grows.
+func (s *Server) GetMessage(ctx context.Context, request gen.GetMessageRequestObject) (
+	gen.GetMessageResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return gen.GetMessage401JSONResponse(errorBody(codeUnauthenticated,
+			"Missing or invalid bearer token")), nil
+	}
+	clickhouse, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Scoped to the caller's tenant in the query itself, so another tenant's id
+	// is a 404 rather than a leak — the same answer as an id that never existed.
+	record, err := store.GetMessage(ctx, clickhouse, identity.TenantID, request.Id)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.GetMessage404JSONResponse(errorBody("not_found", "No such message.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.GetMessage200JSONResponse(messageLogEntry(record)), nil
 }

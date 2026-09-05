@@ -254,6 +254,38 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 	return record, nil
 }
 
+// GetMessage reads one message for display.
+//
+// Deliberately NOT LoadMessageState. That function feeds the settle path, where
+// its column list is a safety property — a column it fails to read is erased
+// when a delivery report replaces the row — so coupling a display read to it
+// would mean every field the UI wants becomes a field settlement has to carry.
+// This one reads what MessageLogEntry needs and nothing has to carry it
+// anywhere.
+func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.UUID) (
+	MessageRecord, error) {
+
+	var record MessageRecord
+	err := conn.QueryRow(ctx, `
+		SELECT id, campaign_id, campaign_name, channel, country, sender_header,
+		       msisdn, email, status, error_code, error_class, fraud_flag,
+		       segments, cost_minor, currency, carrier, carrier_ref,
+		       created_at, sent_at, delivered_at, updated_at
+		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
+		tenantID, messageID,
+	).Scan(&record.ID, &record.CampaignID, &record.CampaignName, &record.Channel,
+		&record.Country, &record.SenderHeader, &record.Msisdn, &record.Email,
+		&record.Status, &record.ErrorCode, &record.ErrorClass, &record.FraudFlag,
+		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,
+		&record.CarrierRef, &record.CreatedAt, &record.SentAt, &record.DeliveredAt,
+		&record.UpdatedAt)
+	if err != nil {
+		return MessageRecord{}, ErrNotFound
+	}
+	record.TenantID = tenantID
+	return record, nil
+}
+
 // RollupRow is one hourly aggregate. Rollups are permanent while raw rows age
 // out, so every analytics read comes from here.
 type RollupRow struct {
