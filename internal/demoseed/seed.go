@@ -20,6 +20,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
+	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -1720,6 +1721,15 @@ func seedMessageHistory(ctx context.Context, url, tenant string) error {
 				cost = 55
 			case "VOICE":
 				cost = 45
+			}
+			// A message we refused, or one that never arrived, is not charged:
+			// every live write path zeroes the cost the moment the outcome
+			// releases the hold. Seeding a price against one put money on the
+			// customer's screen they never spent — 41 rows of it on the demo
+			// tenant — and contradicted the invariant on the one dataset the
+			// frontend probes to learn the shape of a log entry.
+			if messaging.EffectOf(messaging.State(outcome.status)) == messaging.EffectRelease {
+				cost = 0
 			}
 			messageID := uuid.New()
 			var deliveredAt *time.Time

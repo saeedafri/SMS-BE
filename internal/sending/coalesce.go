@@ -690,7 +690,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			Currency: plan.rate.Currency,
 		})
 		outcomes[plan] = sendOutcome{result: SendResult{
-			MessageID: plan.messageID, Status: messaging.SubmitStatus(state),
+			MessageID: plan.messageID, Status: messaging.ContractStatus(state),
 			CostMinor: cost, Currency: plan.rate.Currency, Segments: plan.segments,
 		}}
 	}

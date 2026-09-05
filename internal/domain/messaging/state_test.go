@@ -98,22 +98,6 @@ func TestAcceptedIsReportedAsSentNotDelivered(t *testing.T) {
 	}
 }
 
-func TestContractStatusCoversEveryState(t *testing.T) {
-	valid := map[string]bool{
-		"queued": true, "sent": true, "delivered": true, "failed": true, "read": true,
-	}
-	for _, state := range []messaging.State{
-		messaging.StateQueued, messaging.StateSubmitting, messaging.StateSubmitted,
-		messaging.StateAccepted, messaging.StateDelivered, messaging.StateUndelivered,
-		messaging.StateRejected, messaging.StateExpired,
-	} {
-		got := messaging.ContractStatus(state)
-		if !valid[got] {
-			t.Errorf("%s maps to %q, which is not in the contract's MessageStatus enum", state, got)
-		}
-	}
-}
-
 // A carrier code on its own tells a developer nothing. The PRD calls plain
 // -language error explanations a differentiator, so every class carries one.
 func TestCarrierErrorsAreClassifiedAndExplained(t *testing.T) {

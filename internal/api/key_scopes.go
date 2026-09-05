@@ -26,7 +26,13 @@ var apiScopeCatalogue = []gen.ApiScope{
 
 // knownScopes reports whether every scope is one we publish, and names the
 // first that is not.
-func knownScopes(scopes []string) (bad string, ok bool) {
+//
+// The contract now closes this set (ApiKeyScope), so oapi-codegen hands us a
+// named type rather than a string. That does not make this check redundant:
+// Go converts any untyped string literal to gen.ApiKeyScope silently, and a
+// JSON body is decoded into one without validation. The enum documents the
+// set; this refuses everything outside it.
+func knownScopes(scopes []gen.ApiKeyScope) (bad gen.ApiKeyScope, ok bool) {
 	for _, scope := range scopes {
 		found := false
 		for _, known := range apiScopeCatalogue {
@@ -47,9 +53,29 @@ func knownScopes(scopes []string) (bad string, ok bool) {
 func scopeVocabulary() string {
 	keys := make([]string, 0, len(apiScopeCatalogue))
 	for _, scope := range apiScopeCatalogue {
-		keys = append(keys, scope.Key)
+		keys = append(keys, string(scope.Key))
 	}
 	return strings.Join(keys, ", ")
+}
+
+// toContractScopes and toStoredScopes cross the one boundary the ApiKeyScope
+// enum created: the column is a Postgres text[] and stays []string, while the
+// wire is now a closed set. Converting here keeps the store ignorant of the
+// contract, which is what lets a scope be renamed in one place.
+func toContractScopes(scopes []string) []gen.ApiKeyScope {
+	out := make([]gen.ApiKeyScope, 0, len(scopes))
+	for _, scope := range scopes {
+		out = append(out, gen.ApiKeyScope(scope))
+	}
+	return out
+}
+
+func toStoredScopes(scopes []gen.ApiKeyScope) []string {
+	out := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		out = append(out, string(scope))
+	}
+	return out
 }
 
 // scopeCheckedByHandler marks a route an API key may call where the scope

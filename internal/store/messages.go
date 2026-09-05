@@ -177,8 +177,8 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 
 	rows, err := conn.Query(ctx, `
 		SELECT id, campaign_id, campaign_name, channel, msisdn, email, status,
-		       error_code, error_class, fraud_flag, segments, created_at,
-		       sent_at, delivered_at, updated_at
+		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
+		       created_at, sent_at, delivered_at, updated_at
 		FROM messages FINAL
 		WHERE `+pageWhere+`
 		ORDER BY created_at DESC, id DESC
@@ -194,6 +194,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		if err := rows.Scan(&record.ID, &record.CampaignID, &record.CampaignName,
 			&record.Channel, &record.Msisdn, &record.Email, &record.Status,
 			&record.ErrorCode, &record.ErrorClass, &record.FraudFlag, &record.Segments,
+			&record.CostMinor, &record.Currency,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
 			&record.UpdatedAt); err != nil {
 			return nil, 0, "", fmt.Errorf("store: scan message: %w", err)

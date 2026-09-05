@@ -3,6 +3,9 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"github.com/saeedafri/sms-be/internal/domain/messaging"
+	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
 
 // The contract's enums are the authority; these lists must not drift from them.
@@ -87,5 +90,60 @@ func TestEnumMessageNamesTheAllowedValues(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "Channel must be one of") {
 		t.Fatalf("enumMessage should name the field first: %s", got)
+	}
+}
+
+// Every state a message can be in must map to a status the contract can spell.
+//
+// This lived in the messaging package against a hand-copied list of the enum,
+// which is how it went stale: `rejected` was added to MessageStatus and the
+// list still said the six values it had the day it was written. Here the
+// generated Valid() is the authority, so the check cannot drift from the
+// contract — it fails the moment a state maps to something the frontend would
+// not recognise.
+func TestEveryMessageStateMapsToAContractStatus(t *testing.T) {
+	for _, state := range []messaging.State{
+		messaging.StateQueued, messaging.StateSubmitting, messaging.StateSubmitted,
+		messaging.StateAccepted, messaging.StateDelivered, messaging.StateUndelivered,
+		messaging.StateRejected, messaging.StateExpired,
+	} {
+		got := gen.MessageStatus(messaging.ContractStatus(state))
+		if !got.Valid() {
+			t.Errorf("%s maps to %q, which is not a MessageStatus the contract declares",
+				state, got)
+		}
+	}
+	// The distinction the log gained. A refusal and a failed delivery lead to
+	// different fixes, and reporting both as "failed" collapses them.
+	if got := messaging.ContractStatus(messaging.StateRejected); got != "rejected" {
+		t.Errorf("rejected maps to %q, want rejected — the log can spell a refusal now", got)
+	}
+	if got := messaging.ContractStatus(messaging.StateUndelivered); got != "failed" {
+		t.Errorf("undelivered maps to %q, want failed", got)
+	}
+}
+
+// The scope catalogue and the route table are two hand-written lists that the
+// contract now closes with an enum. Both directions matter: a catalogue entry
+// outside the enum is a scope we publish that the frontend cannot render, and
+// a route demanding a scope outside the catalogue is policy no key could ever
+// satisfy — a route quietly unreachable by any API key at all.
+func TestKeyScopesAgreeWithTheContractEnum(t *testing.T) {
+	for _, scope := range apiScopeCatalogue {
+		if !scope.Key.Valid() {
+			t.Errorf("catalogue publishes %q, which is not an ApiKeyScope", scope.Key)
+		}
+	}
+	for route, scope := range keyRoutes {
+		if scope == scopeCheckedByHandler {
+			continue
+		}
+		if !gen.ApiKeyScope(scope).Valid() {
+			t.Errorf("%s requires %q, which is not an ApiKeyScope", route, scope)
+		}
+		if _, ok := knownScopes([]gen.ApiKeyScope{gen.ApiKeyScope(scope)}); !ok {
+			t.Errorf("%s requires %q, which the catalogue does not publish — no key can hold it",
+				route, scope)
+		}
 	}
 }

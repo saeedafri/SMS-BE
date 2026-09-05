@@ -292,6 +292,21 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 		DeliveredAt: record.DeliveredAt,
 		ErrorCode:   record.ErrorCode,
 	}
+	// What this message actually cost the tenant, on every row rather than only
+	// on the send result. A log that shows what was sent but not what it cost
+	// leaves reconciling a bill against traffic to a spreadsheet.
+	//
+	// The number follows the money rather than the price list: it is the amount
+	// HELD while a message is in flight, the amount CHARGED once a handset
+	// confirms it, and 0 for anything we refused or that never arrived — which
+	// is what every write path already stores, because a released hold is not a
+	// charge.
+	cost := record.CostMinor
+	entry.CostMinor = &cost
+	if record.Currency != "" {
+		currency := record.Currency
+		entry.Currency = &currency
+	}
 	// The whole honesty claim in one line: an internal "accepted" surfaces as
 	// "sent", never "delivered".
 	entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))
