@@ -206,7 +206,7 @@ func TestACampaignWithNoHaltStillCompletesNormally(t *testing.T) {
 func (f *fixture) contactCursorAfter(listID uuid.UUID, n int) string {
 	f.t.Helper()
 	listRef := listID
-	_, _, cursor, err := store.ListContacts(context.Background(), f.service.DB,
+	_, cursor, err := store.ListContactsAfter(context.Background(), f.service.DB,
 		f.identity, &listRef, "", n)
 	if err != nil {
 		f.t.Fatalf("list contacts: %v", err)

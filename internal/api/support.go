@@ -48,19 +48,16 @@ func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTi
 		value := string(*request.Params.Category)
 		category = &value
 	}
-	cursor, limit := "", 0
-	if request.Params.Cursor != nil {
-		cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetSupportTickets422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit := 0
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
-	tickets, total, next, err := store.ListSupportTickets(ctx, s.DB, identity,
-		status, category, cursor, limit)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.GetSupportTickets422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	tickets, total, err := store.ListSupportTickets(ctx, s.DB, identity,
+		status, category, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -73,11 +70,8 @@ func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTi
 			CreatedAt: ticket.CreatedAt, UpdatedAt: ticket.UpdatedAt,
 		})
 	}
-	page := gen.SupportTicketPage{Tickets: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.GetSupportTickets200JSONResponse(page), nil
+	result := gen.SupportTicketPage{Tickets: out, Total: total}
+	return gen.GetSupportTickets200JSONResponse(result), nil
 }
 
 func (s *Server) GetSupportTicket(ctx context.Context, request gen.GetSupportTicketRequestObject) (gen.GetSupportTicketResponseObject, error) {
@@ -204,17 +198,16 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 		value := string(*request.Params.Status)
 		filter.Status = &value
 	}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListConversations422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
-	conversations, total, next, err := store.ListConversations(ctx, s.DB, identity, filter)
-	if errors.Is(err, store.ErrInvalidCursor) {
-		return gen.ListConversations422JSONResponse(
-			errorBody(codeValidation, "That page cursor is not valid.")), nil
-	}
+	conversations, total, err := store.ListConversations(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -224,11 +217,8 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 	}
 	// total is the count matching the filter, not len(out). They were the same
 	// number only while this endpoint returned everything.
-	page := gen.ConversationPage{Conversations: out, Total: total}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return gen.ListConversations200JSONResponse(page), nil
+	result := gen.ConversationPage{Conversations: out, Total: total}
+	return gen.ListConversations200JSONResponse(result), nil
 }
 
 // conversationDetail is the shared read-back every conversation mutation ends

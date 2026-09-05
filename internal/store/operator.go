@@ -126,7 +126,7 @@ type AuditLogFilter struct {
 	TenantID *uuid.UUID
 	Action   *string
 	Since    time.Time
-	Cursor   string
+	Page     int
 	Limit    int
 }
 
@@ -138,16 +138,13 @@ type AuditLogFilter struct {
 // filters would read as the filter being broken, and one that included the
 // cursor would shrink as the operator paged.
 func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter) (
-	[]AuditEntry, int, string, error) {
+	[]AuditEntry, int, error) {
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(filter.Page, limit)
 
 	var total int
 	if err := pool.QueryRow(ctx, `
@@ -156,7 +153,7 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter
 		  AND ($2::text IS NULL OR action    = $2)
 		  AND occurred_at >= $3`,
 		filter.TenantID, filter.Action, filter.Since).Scan(&total); err != nil {
-		return nil, 0, "", fmt.Errorf("store: count audit log: %w", err)
+		return nil, 0, fmt.Errorf("store: count audit log: %w", err)
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -165,11 +162,10 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter
 		WHERE ($2::uuid IS NULL OR tenant_id = $2)
 		  AND ($3::text IS NULL OR action    = $3)
 		  AND occurred_at >= $4
-		  AND ($5::timestamptz IS NULL OR (occurred_at, id) < ($5, $6))
-		ORDER BY occurred_at DESC, id DESC LIMIT $1`,
-		limit+1, filter.TenantID, filter.Action, filter.Since, cursorTime, cursorID)
+		ORDER BY occurred_at DESC, id DESC LIMIT $1 OFFSET $5`,
+		limit, filter.TenantID, filter.Action, filter.Since, offset)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list audit log: %w", err)
+		return nil, 0, fmt.Errorf("store: list audit log: %w", err)
 	}
 	defer rows.Close()
 	out := []AuditEntry{}
@@ -177,20 +173,15 @@ func ListAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter
 		var entry AuditEntry
 		if err := rows.Scan(&entry.ID, &entry.OccurredAt, &entry.Actor, &entry.Action,
 			&entry.TenantID, &entry.TenantName, &entry.TargetLabel, &entry.Detail); err != nil {
-			return nil, 0, "", fmt.Errorf("store: scan audit entry: %w", err)
+			return nil, 0, fmt.Errorf("store: scan audit entry: %w", err)
 		}
 		out = append(out, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, "", err
+		return nil, 0, err
 	}
 
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].OccurredAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 // OperatorTenant is a tenant as platform staff see it: identity, standing, and
@@ -224,15 +215,12 @@ type OperatorTenant struct {
 // empty, and quietly turning that into "all tenants" is how a filtered screen
 // ends up showing rows it said it had excluded.
 func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *string,
-	cursor string, limit int) ([]OperatorTenant, int, string, error) {
+	page, limit int) ([]OperatorTenant, int, error) {
 
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(page, limit)
 
 	// The status filter matches the STANDING the console displays, not the raw
 	// status column — and those are not the same thing.
@@ -256,7 +244,7 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		           ELSE status
 		       END = $1)
 		  AND ($2::text IS NULL OR country = $2)`, status, country).Scan(&total); err != nil {
-		return nil, 0, "", fmt.Errorf("store: count tenants: %w", err)
+		return nil, 0, fmt.Errorf("store: count tenants: %w", err)
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -269,11 +257,10 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		           ELSE status
 		       END = $1)
 		  AND ($2::text IS NULL OR country = $2)
-		  AND ($3::timestamptz IS NULL OR (created_at, id) < ($3, $4))
 		ORDER BY created_at DESC, id DESC
-		LIMIT $5`, status, country, cursorTime, cursorID, limit+1)
+		LIMIT $3 OFFSET $4`, status, country, limit, offset)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list tenants: %w", err)
+		return nil, 0, fmt.Errorf("store: list tenants: %w", err)
 	}
 	defer rows.Close()
 	out := []OperatorTenant{}
@@ -282,20 +269,15 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status,
 			&tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
 			&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond); err != nil {
-			return nil, 0, "", fmt.Errorf("store: scan tenant: %w", err)
+			return nil, 0, fmt.Errorf("store: scan tenant: %w", err)
 		}
 		out = append(out, tenant)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, "", err
+		return nil, 0, err
 	}
 
-	next := ""
-	if len(out) > limit {
-		next = encodeLedgerCursor(out[limit-1].CreatedAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 // AllTenantIDs returns every tenant id, unpaged.
@@ -997,7 +979,7 @@ type SupportTicketFilter struct {
 	TenantID *uuid.UUID
 	Status   *string
 	Category *string
-	Cursor   string
+	Page     int
 	Limit    int
 }
 
@@ -1009,16 +991,13 @@ type SupportTicketFilter struct {
 // choice, and returned the same rows — which reads as "there are no open
 // tickets" rather than "the filter does nothing".
 func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
-	filter SupportTicketFilter) ([]SupportTicket, int, string, error) {
+	filter SupportTicketFilter) ([]SupportTicket, int, error) {
 
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	cursorTime, cursorID, err := decodeLedgerCursor(filter.Cursor)
-	if err != nil {
-		return nil, 0, "", err
-	}
+	offset := pageOffset(filter.Page, limit)
 
 	where := `
 		WHERE ($1::uuid IS NULL OR t.tenant_id = $1)
@@ -1029,19 +1008,19 @@ func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM support_tickets t`+where,
 		filter.TenantID, filter.Status, filter.Category).Scan(&total); err != nil {
-		return nil, 0, "", fmt.Errorf("store: count support tickets: %w", err)
+		return nil, 0, fmt.Errorf("store: count support tickets: %w", err)
 	}
 
 	rows, err := pool.Query(ctx, `
 		SELECT t.id, t.tenant_id, n.name, t.subject, t.category, t.status,
 		       t.created_at, t.updated_at
 		FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id`+where+`
-		  AND ($4::timestamptz IS NULL OR (t.updated_at, t.id) < ($4, $5))
+
 		ORDER BY t.updated_at DESC, t.id DESC
-		LIMIT $6`,
-		filter.TenantID, filter.Status, filter.Category, cursorTime, cursorID, limit+1)
+		LIMIT $4 OFFSET $5`,
+		filter.TenantID, filter.Status, filter.Category, limit, offset)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("store: list all support tickets: %w", err)
+		return nil, 0, fmt.Errorf("store: list all support tickets: %w", err)
 	}
 	defer rows.Close()
 	out := []SupportTicket{}
@@ -1050,23 +1029,15 @@ func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
 		if err := rows.Scan(&ticket.ID, &ticket.TenantID, &ticket.TenantName,
 			&ticket.Subject, &ticket.Category, &ticket.Status,
 			&ticket.CreatedAt, &ticket.UpdatedAt); err != nil {
-			return nil, 0, "", fmt.Errorf("store: scan ticket: %w", err)
+			return nil, 0, fmt.Errorf("store: scan ticket: %w", err)
 		}
 		out = append(out, ticket)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, "", err
+		return nil, 0, err
 	}
 
-	next := ""
-	if len(out) > limit {
-		// Keyed on updated_at, which is what this list is ordered by. Using
-		// created_at here would hand back a cursor that does not match the sort
-		// and silently skip or repeat rows.
-		next = encodeLedgerCursor(out[limit-1].UpdatedAt, out[limit-1].ID)
-		out = out[:limit]
-	}
-	return out, total, next, nil
+	return out, total, nil
 }
 
 // GetSupportTicketAnyTenant reads one ticket without a tenant context.

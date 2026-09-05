@@ -82,11 +82,12 @@ func TestARefusedMessageIsReadableByIdWithItsReason(t *testing.T) {
 		ErrorCode *string `json:"errorCode"`
 	}
 	read.decode(t, &entry)
-	// The LOG's vocabulary has no `rejected`, so a refusal reads `failed` here
-	// while the send response said `rejected`. Asserted so the difference stays
-	// deliberate.
-	if entry.Status != "failed" {
-		t.Fatalf("log status = %q, want failed", entry.Status)
+	// The log and the send result now agree. They did not before: MessageStatus
+	// had no `rejected`, so a refusal read `failed` in the log and `rejected` in
+	// the response, and the same message was described two ways. The enum gained
+	// the value and this is the assertion that the two stayed together.
+	if entry.Status != "rejected" {
+		t.Fatalf("log status = %q, want rejected — the log and the send result must agree", entry.Status)
 	}
 	if entry.ErrorCode == nil || *entry.ErrorCode != "registered_template_required" {
 		t.Fatalf("errorCode = %v", entry.ErrorCode)

@@ -394,15 +394,20 @@ func (s *Server) ListWebhookEvents(ctx context.Context, request gen.ListWebhookE
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListWebhookEvents422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
 	limit := 50
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
-	hookID, ok2 := parsePathID(request.Id)
-	if !ok2 {
+	hookID, ok3 := parsePathID(request.Id)
+	if !ok3 {
 		return gen.ListWebhookEvents404JSONResponse(errorBody("not_found", "No such endpoint.")), nil
 	}
-	events, err := store.ListWebhookEvents(ctx, s.DB, identity, hookID, limit)
+	events, total, err := store.ListWebhookEvents(ctx, s.DB, identity, hookID, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +415,8 @@ func (s *Server) ListWebhookEvents(ctx context.Context, request gen.ListWebhookE
 	for _, event := range events {
 		out = append(out, toWebhookEvent(event))
 	}
-	return gen.ListWebhookEvents200JSONResponse(gen.WebhookEventPage{Events: out}), nil
+	return gen.ListWebhookEvents200JSONResponse(
+		gen.WebhookEventPage{Events: out, Total: total}), nil
 }
 
 // SendWebhookTestEvent posts a real signed request to the endpoint.

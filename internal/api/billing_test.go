@@ -48,9 +48,6 @@ func TestNewTenantHasNoInvoices(t *testing.T) {
 	if len(page.Invoices) != 0 {
 		t.Errorf("got %d invoices for a new tenant, want 0", len(page.Invoices))
 	}
-	if page.NextCursor != nil {
-		t.Errorf("nextCursor = %v on an empty page, want null", *page.NextCursor)
-	}
 }
 
 // India charges 18% GST on INR. The contract says plainly that no other

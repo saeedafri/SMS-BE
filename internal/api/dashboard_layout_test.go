@@ -61,9 +61,6 @@ func TestDashboardLayoutEndpointsAnswerForANewTenant(t *testing.T) {
 		if page.Total != 0 {
 			t.Errorf("total = %d, want 0", page.Total)
 		}
-		if page.NextCursor != nil {
-			t.Errorf("nextCursor = %v, want null", *page.NextCursor)
-		}
 	})
 }
 

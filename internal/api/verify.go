@@ -283,11 +283,16 @@ func (s *Server) ListVerificationAttempts(ctx context.Context, request gen.ListV
 		return nil, errUnauthenticated
 	}
 	serviceID := request.Id
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListVerificationAttempts422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
 	limit := 50
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
-	verifications, total, err := store.ListVerifications(ctx, s.DB, identity, serviceID, limit)
+	verifications, total, err := store.ListVerifications(ctx, s.DB, identity, serviceID, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +336,7 @@ func (s *Server) GetVerifyAnalytics(ctx context.Context, request gen.GetVerifyAn
 		return nil, errUnauthenticated
 	}
 	serviceID := request.Id
-	verifications, _, err := store.ListVerifications(ctx, s.DB, identity, serviceID, 200)
+	verifications, _, err := store.ListVerifications(ctx, s.DB, identity, serviceID, 1, 200)
 	if err != nil {
 		return nil, err
 	}

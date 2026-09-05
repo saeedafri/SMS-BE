@@ -76,9 +76,8 @@ func TestTheWalletLedgerReportsATotalBeyondThePage(t *testing.T) {
 		t.Fatalf("ledger = %d\n%s", page.Code, page.Body)
 	}
 	var body struct {
-		Entries    []map[string]any `json:"entries"`
-		Total      int              `json:"total"`
-		NextCursor *string          `json:"nextCursor"`
+		Entries []map[string]any `json:"entries"`
+		Total   int              `json:"total"`
 	}
 	page.decode(t, &body)
 
@@ -89,8 +88,9 @@ func TestTheWalletLedgerReportsATotalBeyondThePage(t *testing.T) {
 		t.Fatalf("total = %d, want %d — the total is the whole ledger, not the page",
 			body.Total, topups)
 	}
-	if body.NextCursor == nil {
-		t.Fatal("no nextCursor with more rows behind the page")
+	if body.Total <= len(body.Entries) {
+		t.Fatalf("total = %d with %d rows on the page — nothing tells the client "+
+			"there is a second page", body.Total, len(body.Entries))
 	}
 }
 

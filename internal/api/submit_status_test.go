@@ -94,7 +94,7 @@ func TestASuppressedRecipientIsRejectedNotFailed(t *testing.T) {
 // The other half of the distinction: an accepted send still reports `sent`, and
 // the message log — whose enum has no `rejected` — still reads `failed` for a
 // refused message, because MessageStatus cannot spell it.
-func TestAnAcceptedSendStillReportsSentAndTheLogStillSaysFailed(t *testing.T) {
+func TestASendResultAndTheLogDescribeAMessageTheSameWay(t *testing.T) {
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -123,9 +123,10 @@ func TestAnAcceptedSendStillReportsSentAndTheLogStillSaysFailed(t *testing.T) {
 		t.Fatalf("status = %q, want rejected", rejected.Status)
 	}
 
-	// The log's own vocabulary has no `rejected`, so the same message reads
-	// `failed` there. That is a real difference between the two enums and the
-	// frontend needs to know it rather than discover it.
+	// The same message must read `rejected` in the log too. It read `failed`
+	// until MessageStatus gained the value, which meant "we would not take it"
+	// and "we took it and it did not arrive" were the same word to anyone
+	// reading the log.
 	page := h.do(http.MethodGet, "/v1/messages?limit=50", tenant.Token, nil)
 	var log struct {
 		Messages []struct {
@@ -135,9 +136,10 @@ func TestAnAcceptedSendStillReportsSentAndTheLogStillSaysFailed(t *testing.T) {
 	}
 	page.decode(t, &log)
 	for _, row := range log.Messages {
-		if row.ID == rejected.ID && row.Status != "failed" {
-			t.Fatalf("the log reports %q for a refused message; MessageStatus has "+
-				"no `rejected`, so it must read failed", row.Status)
+		if row.ID == rejected.ID && row.Status != "rejected" {
+			t.Fatalf("the log reports %q for a refused message, want rejected — "+
+				"the log and the send result must not describe one message two ways",
+				row.Status)
 		}
 	}
 }

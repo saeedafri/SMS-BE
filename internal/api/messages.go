@@ -59,18 +59,21 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if request.Params.CampaignId != nil {
 		filter.CampaignID = request.Params.CampaignId
 	}
-	if request.Params.Cursor != nil {
-		filter.Cursor = *request.Params.Cursor
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.ListMessages422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
 	}
+	filter.Page = page
 	if request.Params.Limit != nil {
 		filter.Limit = *request.Params.Limit
 	}
 
-	page, err := s.messagePage(ctx, identity, filter)
+	result, err := s.messagePage(ctx, identity, filter)
 	if err != nil {
 		return nil, err
 	}
-	return gen.ListMessages200JSONResponse(page), nil
+	return gen.ListMessages200JSONResponse(result), nil
 }
 
 // messagePage renders a filtered page of message logs. Shared with the campaign
@@ -82,7 +85,7 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return gen.MessageLogPage{}, err
 	}
-	records, total, next, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
+	records, total, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
 	if err != nil {
 		return gen.MessageLogPage{}, s.clickhouseFailed(err)
 	}
@@ -92,11 +95,8 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 		entries = append(entries, messageLogEntry(record))
 	}
 
-	page := gen.MessageLogPage{Messages: entries, Total: int(total)}
-	if next != "" {
-		page.NextCursor = &next
-	}
-	return page, nil
+	result := gen.MessageLogPage{Messages: entries, Total: int(total)}
+	return result, nil
 }
 
 // contractStatusToState maps the contract's coarse filter value back to the
@@ -275,6 +275,29 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	}
 	return gen.SendMessage202JSONResponse(out), nil
 }
+
+// pageNumber reads the 1-based page parameter every list takes.
+//
+// Absent is page 1. Zero or negative is a client error rather than a silent
+// clamp: ?page=0 is almost always an off-by-one in the caller, and quietly
+// serving page 1 hides the bug on the one request that would have revealed it.
+//
+// A page past the end is NOT an error — it returns an empty array with the
+// same total, because "you asked for page 40 of 12" is a reasonable thing for
+// a UI to do while someone is typing in a page box.
+func pageNumber(page *int) (int, bool) {
+	if page == nil {
+		return 1, true
+	}
+	if *page < 1 {
+		return 0, false
+	}
+	return *page, true
+}
+
+// pageTooLow is the one message every list gives for a bad page number, so the
+// console can render it without knowing which list it came from.
+const pageTooLow = "Page must be 1 or greater."
 
 // messageLogEntry maps a stored message to the contract's log entry.
 //

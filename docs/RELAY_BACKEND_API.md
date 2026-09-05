@@ -826,7 +826,7 @@ restricted by IP allowlist.
 | `fraudFlag` | query | [`MessageFraudFlag`](#messagefraudflag) | no |
 | `campaignId` | query | `string(uuid)` | no |
 | `journeyId` | query | `string` | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -834,6 +834,7 @@ restricted by IP allowlist.
 | Status | Body |
 | --- | --- |
 | `200` | [`MessageLogPage`](#messagelogpage) — Messages across every campaign |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1messages"></a>`POST /v1/messages`
@@ -937,7 +938,7 @@ One message's current state, including a submit-time refusal and its errorCode �
 | `status` | query | [`ConversationStatus`](#conversationstatus) | no |
 | `unread` | query | `boolean` | no |
 | `limit` | query | `integer` | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 
 **Responses**
 
@@ -945,7 +946,7 @@ One message's current state, including a submit-time refusal and its errorCode �
 | --- | --- |
 | `200` | [`ConversationPage`](#conversationpage) — The caller's own tenant's conversations, most recently active first |
 | `401` | [`Error`](#error) — Missing or invalid bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1conversationsid"></a>`GET /v1/conversations/{id}`
@@ -1171,7 +1172,7 @@ Stop a campaign for good. Recipients not yet dispatched are cancelled and never 
 | --- | --- | --- | --- |
 | `id` | path | `string(uuid)` | **yes** |
 | `status` | query | [`MessageStatus`](#messagestatus) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -1180,6 +1181,7 @@ Stop a campaign for good. Recipients not yet dispatched are cancelled and never 
 | --- | --- |
 | `200` | [`MessagePage`](#messagepage) — Messages |
 | `404` | [`Error`](#error) — Not found |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1campaignsidpause"></a>`POST /v1/campaigns/{id}/pause`
@@ -1505,7 +1507,7 @@ Restore an archived journey. A journey that had never been activated returns to 
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
 | `listId` | query | `string` | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -1514,6 +1516,7 @@ Restore an archived journey. A journey that had never been activated returns to 
 | --- | --- |
 | `200` | [`ContactPage`](#contactpage) — Contacts |
 | `401` | [`Error`](#error) — Unauthenticated |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1contactsimport"></a>`POST /v1/contacts/import`
@@ -1553,7 +1556,7 @@ Restore an archived journey. A journey that had never been activated returns to 
 
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -1561,7 +1564,7 @@ Restore an archived journey. A journey that had never been activated returns to 
 | Status | Body |
 | --- | --- |
 | `200` | [`SuppressionPage`](#suppressionpage) — Suppression list |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1suppressions"></a>`POST /v1/suppressions`
@@ -2069,7 +2072,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `status` | query | [`VerificationStatus`](#verificationstatus) | no |
 | `channel` | query | [`ChannelId`](#channelid) | no |
 | `fraudFlag` | query | [`VerificationFraudFlag`](#verificationfraudflag) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -2078,6 +2081,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- |
 | `200` | [`VerificationAttemptPage`](#verificationattemptpage) — Attempts |
 | `404` | [`Error`](#error) — Not found |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1verifyservicesidverifications"></a>`POST /v1/verify/services/{id}/verifications`
@@ -2169,7 +2173,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -2179,6 +2183,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `200` | [`InvoicePage`](#invoicepage) — Invoices, newest first, one per calendar month with billed charges |
 | `401` | [`Error`](#error) — Unauthenticated |
 | `403` | [`Error`](#error) — Member role has no access to billing. |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1billinginvoicesid"></a>`GET /v1/billing/invoices/{id}`
@@ -2289,7 +2294,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
 | `currency` | query | [`CurrencyCode`](#currencycode) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -2298,6 +2303,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- |
 | `200` | [`LedgerPage`](#ledgerpage) — Append-only ledger, newest first |
 | `401` | [`Error`](#error) — Unauthenticated |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1walletpayment-methods"></a>`GET /v1/wallet/payment-methods`
@@ -2675,7 +2681,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
 | `id` | path | `string` | **yes** |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -2685,6 +2691,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `200` | [`WebhookEventPage`](#webhookeventpage) — Webhook delivery events, newest first |
 | `403` | [`Error`](#error) — Member role has no access to developer settings. |
 | `404` | [`Error`](#error) — No such endpoint |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1developerwebhooksideventseventidresend"></a>`POST /v1/developer/webhooks/{id}/events/{eventId}/resend`
@@ -2908,7 +2915,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `status` | query | [`TicketStatus`](#ticketstatus) | no |
 | `category` | query | [`TicketCategory`](#ticketcategory) | no |
 | `limit` | query | `integer` | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 
 **Responses**
 
@@ -2916,7 +2923,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- |
 | `200` | [`SupportTicketPage`](#supportticketpage) — The caller's own tenant's support tickets |
 | `401` | [`Error`](#error) — Missing or invalid bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1supporttickets"></a>`POST /v1/support/tickets`
@@ -3112,7 +3119,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `type` | query | [`ApprovalQueueItemType`](#approvalqueueitemtype) | no |
 | `country` | query | [`CountryCode`](#countrycode) | no |
 | `status` | query | [`ApprovalStatus`](#approvalstatus) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -3121,7 +3128,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- |
 | `200` | [`ApprovalQueuePage`](#approvalqueuepage) — Cross-tenant sender/template approval queue, optionally filtered |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1operatoraudit-log"></a>`GET /v1/operator/audit-log`
@@ -3135,7 +3142,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | `tenantId` | query | `string(uuid)` | no |
 | `action` | query | [`AuditAction`](#auditaction) | no |
 | `range` | query | [`AnalyticsRange`](#analyticsrange) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -3144,7 +3151,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- |
 | `200` | [`AuditLogPage`](#auditlogpage) — Operator-performed mutating actions, newest first |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1operatorconnections"></a>`GET /v1/operator/connections`
@@ -3832,7 +3839,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | `tenantId` | query | `string(uuid)` | no |
 | `status` | query | [`TicketStatus`](#ticketstatus) | no |
 | `category` | query | [`TicketCategory`](#ticketcategory) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -3841,7 +3848,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | --- | --- |
 | `200` | [`SupportTicketPage`](#supportticketpage) — Support tickets across all tenants |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1operatorsupportticketsid"></a>`GET /v1/operator/support/tickets/{id}`
@@ -3982,7 +3989,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | --- | --- | --- | --- |
 | `status` | query | [`TenantStatus`](#tenantstatus) | no |
 | `country` | query | [`CountryCode`](#countrycode) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -3991,7 +3998,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | --- | --- |
 | `200` | [`TenantPage`](#tenantpage) — Every tenant on the platform, optionally filtered. If limit is omitted, returns every matching tenant unbounded with nextCursor null. |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1operatortenantsid"></a>`GET /v1/operator/tenants/{id}`
@@ -4156,7 +4163,7 @@ Caps the tenant's send rate at ratePerSecond messages per second across every ch
 | `tenantId` | query | `string(uuid)` | no |
 | `eventType` | query | [`UserActivityEventType`](#useractivityeventtype) | no |
 | `range` | query | [`AnalyticsRange`](#analyticsrange) | no |
-| `cursor` | query | `string` | no |
+| `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
 **Responses**
@@ -4165,7 +4172,7 @@ Caps the tenant's send rate at ratePerSecond messages per second across every ch
 | --- | --- |
 | `200` | [`UserActivityPage`](#useractivitypage) — Tenant-side security/access-relevant user activity, system-wide, newest first |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
-| `422` | [`Error`](#error) — Malformed cursor |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 ### Other
@@ -4341,7 +4348,6 @@ One of: `sender`, `template`, `registration`
 | Field | Type | Required |
 | --- | --- | --- |
 | `items` | [`ApprovalQueueItem`](#approvalqueueitem)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="approvalqueueregistrationitem"></a>`ApprovalQueueRegistrationItem`
@@ -4432,7 +4438,6 @@ One of: `tenant.suspend`, `tenant.reinstate`, `tenant.flag_abuse`, `tenant.throt
 | Field | Type | Required |
 | --- | --- | --- |
 | `entries` | [`AuditLogEntry`](#auditlogentry)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="authsession"></a>`AuthSession`
@@ -4692,7 +4697,6 @@ One of: `opted_in`, `opted_out`, `unknown`
 | --- | --- | --- |
 | `contacts` | [`Contact`](#contact)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 
 ### <a id="conversation"></a>`Conversation`
 
@@ -4739,7 +4743,6 @@ Type: [`Conversation`](#conversation) & `object`
 | --- | --- | --- |
 | `conversations` | [`Conversation`](#conversation)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | no |
 
 ### <a id="conversationstatus"></a>`ConversationStatus`
 
@@ -4858,7 +4861,6 @@ One of: `live`, `test`
 | --- | --- | --- |
 | `invoices` | [`Invoice`](#invoice)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 
 ### <a id="invoicestatus"></a>`InvoiceStatus`
 
@@ -4984,7 +4986,6 @@ One of: `charge`, `topup`, `auto_recharge`, `refund`
 | --- | --- | --- |
 | `entries` | [`LedgerEntry`](#ledgerentry)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 
 ### <a id="loginmfachallengeresult"></a>`LoginMfaChallengeResult`
 
@@ -5107,7 +5108,6 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 | --- | --- | --- |
 | `messages` | [`MessageLogEntry`](#messagelogentry)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | no |
 | `campaignName` | `string` \| `null` | no |
 | `journeyName` | `string` \| `null` | no |
 
@@ -5117,7 +5117,6 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 | --- | --- | --- |
 | `messages` | [`Message`](#message)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | no |
 
 ### <a id="messagestatus"></a>`MessageStatus`
 
@@ -5631,7 +5630,6 @@ Type: [`SupportTicket`](#supportticket) & `object`
 | Field | Type | Required |
 | --- | --- | --- |
 | `tickets` | [`SupportTicket`](#supportticket)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="suppression"></a>`Suppression`
@@ -5649,7 +5647,6 @@ Type: [`SupportTicket`](#supportticket) & `object`
 | Field | Type | Required |
 | --- | --- | --- |
 | `suppressions` | [`Suppression`](#suppression)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="suppressionreason"></a>`SuppressionReason`
@@ -5749,7 +5746,6 @@ One of: `MARKETING`, `UTILITY`, `AUTHENTICATION`, `TRANSACTIONAL`
 | Field | Type | Required |
 | --- | --- | --- |
 | `tenants` | [`Tenant`](#tenant)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="tenantrateoverride"></a>`TenantRateOverride`
@@ -5873,7 +5869,6 @@ One of: `login`, `team.invite`, `team.role_change`, `api_key.create`, `api_key.r
 | Field | Type | Required |
 | --- | --- | --- |
 | `entries` | [`UserActivityEntry`](#useractivityentry)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
 | `total` | `integer` | **yes** |
 
 ### <a id="verification"></a>`Verification`
@@ -5910,7 +5905,6 @@ One of: `login`, `team.invite`, `team.role_change`, `api_key.create`, `api_key.r
 | --- | --- | --- |
 | `attempts` | [`VerificationAttempt`](#verificationattempt)[] | **yes** |
 | `total` | `integer` | **yes** |
-| `nextCursor` | `string` \| `null` | no |
 
 ### <a id="verificationcheck"></a>`VerificationCheck`
 
@@ -6177,7 +6171,7 @@ One of: `succeeded`, `failed`
 | Field | Type | Required |
 | --- | --- | --- |
 | `events` | [`WebhookEvent`](#webhookevent)[] | **yes** |
-| `nextCursor` | `string` \| `null` | **yes** |
+| `total` | `integer` | **yes** |
 
 ### <a id="webhookeventtype"></a>`WebhookEventType`
 

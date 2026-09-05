@@ -266,11 +266,12 @@ func CheckVerification(ctx context.Context, pool *pgxpool.Pool, id Identity,
 
 // ListVerifications returns a service's attempt history.
 func ListVerifications(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	serviceID uuid.UUID, limit int) ([]Verification, int, error) {
+	serviceID uuid.UUID, page, limit int) ([]Verification, int, error) {
 
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	offset := pageOffset(page, limit)
 	var out []Verification
 	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
@@ -283,7 +284,7 @@ func ListVerifications(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			SELECT id, service_id, msisdn, country, channel, status, attempts_used,
 			       max_attempts, cost_minor, currency, fraud_flag, expires_at, created_at
 			FROM verifications WHERE service_id = $1
-			ORDER BY created_at DESC, id DESC LIMIT $2`, serviceID, limit)
+			ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3`, serviceID, limit, offset)
 		if err != nil {
 			return err
 		}
