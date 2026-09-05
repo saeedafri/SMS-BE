@@ -2,7 +2,7 @@
 
 **Base URL:** `https://sms-api.saqibsaeed.cloud`
 **Operations:** 177 across 142 paths
-**Schemas:** 226
+**Schemas:** 227
 **Date:** 5 September 2026
 
 Regenerate with `make api-reference`. **Do not hand-edit:** the reference half is
@@ -862,7 +862,7 @@ Sends one message immediately. Authenticate with an API key (sk_live_... or sk_t
 
 | Status | Body |
 | --- | --- |
-| `202` | [`SendMessageResult`](#sendmessageresult) — The request was well-formed and we have decided. Read `status`: `queued` or `sent` means accepted; `rejected` or `failed` means refused, is terminal, and carries `errorCode`. A refusal is a 202 rather than a 4xx because it carries a real message id that is inspectable in the logs; a malformed body is still 422. |
+| `202` | [`SendMessageResult`](#sendmessageresult) — The request was well-formed and we have decided. Read `status`: `queued` or `sent` means accepted; `rejected` means refused at submit — terminal, carrying `errorCode` and a `costMinor` of 0, with nothing debited. `failed` is not a submit outcome and is retained in the enum only for compatibility: it means a message we accepted later failed in delivery. A refusal is a 202 rather than a 4xx because it carries a real message id that is inspectable in the logs; a malformed body is still 422. |
 | `401` | [`Error`](#error) — Missing or invalid credential |
 | `403` | [`Error`](#error) — The API key does not carry the scope for this channel |
 | `422` | [`Error`](#error) — The request could not be turned into a send |
@@ -871,7 +871,7 @@ Sends one message immediately. Authenticate with an API key (sk_live_... or sk_t
 
 #### <a id="get-v1messagesid"></a>`GET /v1/messages/{id}`
 
-One message's current state. Authorised by read:messages, the same scope as the list, and scoped to the caller's tenant.
+One message's current state, including a submit-time refusal and its errorCode — which is why a refusal carries a real message id. Authorised by read:messages, the same scope as the list, and scoped to the caller's tenant, so another tenant's id is a 404 rather than a leak.
 
 **Auth:** session **or** API key (`read:messages`)
 
@@ -887,7 +887,7 @@ One message's current state. Authorised by read:messages, the same scope as the 
 | --- | --- |
 | `200` | [`MessageLogEntry`](#messagelogentry) — The message |
 | `401` | [`Error`](#error) — Unauthenticated |
-| `403` | [`Error`](#error) — Forbidden |
+| `403` | [`Error`](#error) — The API key does not carry the read:messages scope |
 | `404` | [`Error`](#error) — No such message |
 
 
@@ -2425,7 +2425,7 @@ Calling without a code against a carrier that has no template API returns 409 wi
 | --- | --- | --- |
 | `name` | `string` | **yes** |
 | `environment` | [`Environment`](#environment) | **yes** |
-| `scopes` | `string`[] | **yes** |
+| `scopes` | [`ApiKeyScope`](#apikeyscope)[] | **yes** |
 
 **Responses**
 
@@ -4300,7 +4300,7 @@ One of: `7d`, `30d`, `90d`
 | `id` | `string(uuid)` | **yes** |
 | `name` | `string` | **yes** |
 | `environment` | [`Environment`](#environment) | **yes** |
-| `scopes` | `string`[] | **yes** |
+| `scopes` | [`ApiKeyScope`](#apikeyscope)[] | **yes** |
 | `keyPrefix` | `string` | **yes** |
 | `status` | [`ApiKeyStatus`](#apikeystatus) | **yes** |
 | `createdAt` | `string(date-time)` | **yes** |
@@ -4310,6 +4310,12 @@ One of: `7d`, `30d`, `90d`
 
 Type: [`ApiKey`](#apikey) & `object`
 
+### <a id="apikeyscope"></a>`ApiKeyScope`
+
+What an API key is permitted to do. Creation refuses anything outside this set (422), case-sensitively, so the set cannot grow behind the contract.
+
+One of: `send:sms`, `send:rcs`, `read:messages`, `read:analytics`, `read:logs`, `webhooks:manage`
+
 ### <a id="apikeystatus"></a>`ApiKeyStatus`
 
 One of: `active`, `revoked`
@@ -4318,7 +4324,7 @@ One of: `active`, `revoked`
 
 | Field | Type | Required |
 | --- | --- | --- |
-| `key` | `string` | **yes** |
+| `key` | [`ApiKeyScope`](#apikeyscope) | **yes** |
 | `label` | `string` | **yes** |
 | `category` | `string` | **yes** |
 
@@ -5092,6 +5098,8 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 | `fraudFlag` | [`MessageFraudFlag`](#messagefraudflag) | no |
 | `callOutcome` | `answered` \| `no_answer` \| `busy` \| `failed` \| `voicemail` \| `null` | no |
 | `durationSeconds` | `integer` \| `null` | no |
+| `costMinor` | `integer(int64)` | no |
+| `currency` | `string` | no |
 
 ### <a id="messagelogpage"></a>`MessageLogPage`
 
@@ -5113,7 +5121,7 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 
 ### <a id="messagestatus"></a>`MessageStatus`
 
-One of: `queued`, `sent`, `delivered`, `failed`, `read`, `cancelled`
+One of: `queued`, `sent`, `delivered`, `failed`, `read`, `cancelled`, `rejected`
 
 ### <a id="mfachallenge"></a>`MfaChallenge`
 

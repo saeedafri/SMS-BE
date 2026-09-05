@@ -245,7 +245,12 @@ for title, rows in grouped.items():
         body = operation.get("requestBody")
         if body:
             schema = body.get("content", {}).get("application/json", {}).get("schema")
-            required = " (required)" if body.get("required", True) else " (optional)"
+            # OpenAPI 3 defaults requestBody.required to FALSE. Defaulting it
+            # to true here documented POST /v1/templates/{id}/carrier-registration
+            # as needing a body when a body-less call is the whole point of it —
+            # that route registers with the carrier's API, and the body only
+            # exists to attach a portal code instead.
+            required = " (required)" if body.get("required", False) else " (optional)"
             w(f"**Request body**{required} — {type_of(schema)}\n\n")
             table = fields_table(schema)
             if table:
