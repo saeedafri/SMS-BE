@@ -19,12 +19,19 @@ func TestASendCarryingABannedShortenerIsRefused(t *testing.T) {
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	sender := h.approvedSender(acct)
+	// India also requires a registered template on every send now, so this
+	// carries one. Without it BOTH sends below are refused for the missing
+	// template and the shortener rule is never reached — which is what this
+	// test was silently doing until submit refusals stopped being spelled the
+	// same as delivery failures.
+	template := h.wildcardTemplate(acct, sender)
 	h.fundWallet(acct)
 
 	res := h.do(http.MethodPost, "/v1/messages", acct.Token, map[string]any{
-		"senderId": sender,
-		"to":       "+919820000002",
-		"body":     "WIN FREE CASH NOW!!! Click http://bit.ly/xyz claim 10 lakh prize",
+		"senderId":   sender,
+		"templateId": template,
+		"to":         "+919820000002",
+		"body":       "WIN FREE CASH NOW!!! Click http://bit.ly/xyz claim 10 lakh prize",
 	})
 	// A refusal is an answer, not an error: this endpoint returns 202 with the
 	// verdict in the body so an integrator gets the message id and the reason.
@@ -50,9 +57,10 @@ func TestASendCarryingABannedShortenerIsRefused(t *testing.T) {
 	// The same send without the shortener must still work — the rule is about
 	// the link, not about links.
 	ok := h.do(http.MethodPost, "/v1/messages", acct.Token, map[string]any{
-		"senderId": sender,
-		"to":       "+919820000002",
-		"body":     "Your order has shipped. Track it at https://acme.example/orders/42",
+		"senderId":   sender,
+		"templateId": template,
+		"to":         "+919820000002",
+		"body":       "Your order has shipped. Track it at https://acme.example/orders/42",
 	})
 	if ok.Code != http.StatusAccepted {
 		t.Fatalf("a legitimate full URL was refused: %d\n%s", ok.Code, ok.Body)

@@ -125,8 +125,14 @@ func TestAKeyIsStillNotACredentialOnSessionOnlyRoutes(t *testing.T) {
 		"read:logs", "read:analytics", "webhooks:manage"})
 
 	// Every scope there is, and still no reach into any of these.
+	//
+	// Templates, sender ids, contacts and journeys were moved ONTO the
+	// allowlist deliberately — an integrator obliged to quote a template id
+	// needs to be able to find one. What stays off it is the roster, the money
+	// and the tenant's own settings.
 	for _, path := range []string{"/v1/team", "/v1/billing/invoices", "/v1/me",
-		"/v1/wallet/ledger", "/v1/sender-ids", "/v1/suppressions"} {
+		"/v1/wallet/ledger", "/v1/suppressions", "/v1/contact-lists",
+		"/v1/verify/services"} {
 		res := h.do(http.MethodGet, path, secret, nil)
 		if res.Code != http.StatusUnauthorized {
 			t.Errorf("GET %s with a fully-scoped API key = %d, want 401\n%s",
@@ -222,6 +228,51 @@ func TestEveryPublishedScopeIsAcceptedOnCreation(t *testing.T) {
 		if created.Code != http.StatusCreated {
 			t.Fatalf("creating a key with the published scope %q = %d\n%s",
 				scope.Key, created.Code, created.Body)
+		}
+	}
+}
+
+// The submit path now REQUIRES a registered template for an India send, so an
+// integrator obliged to quote a template id needs a programmatic way to find
+// out which templates they have and which senders are approved to carry them.
+// Handing them a rule and no way to obey it is the hole these four close.
+func TestAKeyCanDiscoverTheConfigurationItsSendsAreValidatedAgainst(t *testing.T) {
+	h := newSendHarness(t)
+	tenant := h.newAccount("owner")
+	h.approvedSender(tenant)
+	readKey := h.apiKey(tenant, []string{"read:messages"})
+	logsKey := h.apiKey(tenant, []string{"read:logs"})
+
+	for _, route := range []struct {
+		path string
+		key  string
+	}{
+		{"/v1/templates", readKey},
+		{"/v1/sender-ids", readKey},
+		{"/v1/contacts", readKey},
+		{"/v1/automation/journeys", logsKey},
+	} {
+		response := h.do(http.MethodGet, route.path, route.key, nil)
+		if response.Code != http.StatusOK {
+			t.Errorf("GET %s with the right scope = %d, want 200\n%s",
+				route.path, response.Code, response.Body)
+		}
+	}
+}
+
+// Widening the allowlist must not have widened the scopes. Each of the four
+// still needs the scope it was mapped to.
+func TestTheDiscoveryRoutesStillRequireTheirScope(t *testing.T) {
+	h := newSendHarness(t)
+	tenant := h.newAccount("owner")
+	sendOnly := h.apiKey(tenant, []string{"send:sms"})
+
+	for _, path := range []string{"/v1/templates", "/v1/sender-ids", "/v1/contacts",
+		"/v1/automation/journeys"} {
+		response := h.do(http.MethodGet, path, sendOnly, nil)
+		if response.Code != http.StatusForbidden {
+			t.Errorf("GET %s with a send-only key = %d, want 403\n%s",
+				path, response.Code, response.Body)
 		}
 	}
 }

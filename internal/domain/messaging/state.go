@@ -98,6 +98,26 @@ func ContractStatus(state State) string {
 	}
 }
 
+// SubmitStatus maps a state to the SEND RESULT's vocabulary, which is not the
+// log's.
+//
+// The two enums differ on purpose and the difference is the customer's:
+// SendMessageResult.status carries `rejected`, MessageStatus does not. So a
+// message we refuse at submit is `rejected` in the answer the caller gets, and
+// `failed` in the log they read afterwards, because the log has no way to spell
+// the distinction.
+//
+// Refusing at submit and failing in delivery are the two moments a customer
+// actually tells apart — "you would not take it" versus "you took it and it did
+// not arrive" — and they lead to different fixes. Reporting both as `failed`,
+// which is what ContractStatus does, collapses them.
+func SubmitStatus(state State) string {
+	if state == StateRejected {
+		return "rejected"
+	}
+	return ContractStatus(state)
+}
+
 // ErrorClass groups failure reasons for the logs explorer, so a user can tell
 // "the number is unreachable" from "we blocked it ourselves".
 type ErrorClass string

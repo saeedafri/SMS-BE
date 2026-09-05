@@ -264,6 +264,20 @@ func (s *Server) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWe
 	if err := webhook.ValidateURL(request.Body.Url); err != nil {
 		return gen.CreateWebhookEndpoint422JSONResponse(errorBody(codeValidation, err.Error())), nil
 	}
+	// A webhook subscribed to nothing is worse than a rejected one. It presents
+	// as enabled, mints a signing secret, and is permanently silent — and the
+	// customer has nothing on the screen or in the response telling them why
+	// their integration never fires.
+	//
+	// The field is required in the contract, but an omitted array decodes to an
+	// empty one rather than to an error, so the requiredness has to be checked
+	// here. Environment, on this same handler, was already validated; this is
+	// the sibling field that was not.
+	if len(request.Body.SubscribedEvents) == 0 {
+		return gen.CreateWebhookEndpoint422JSONResponse(errorBody(codeValidation,
+			"At least one subscribed event is required. "+
+				enumMessage("SubscribedEvents", validWebhookEvents))), nil
+	}
 	// A typo'd event name is a subscription that silently never fires, which
 	// looks identical to a broken integration from the customer's side.
 	events := make([]string, 0, len(request.Body.SubscribedEvents))
@@ -301,10 +315,25 @@ func (s *Server) UpdateWebhookEndpoint(ctx context.Context, request gen.UpdateWe
 		return gen.UpdateWebhookEndpoint403JSONResponse(
 			errorBody(codeForbidden, "Member role cannot change webhook endpoints.")), nil
 	}
+	// The same two rules create applies, because a webhook can be silenced by
+	// editing it just as easily as by creating it wrong. The pointer is what
+	// separates "not supplied" — leave the subscription alone — from "supplied
+	// as empty", which is a request to make this endpoint permanently silent.
 	var events []string
 	if request.Body.SubscribedEvents != nil {
+		if len(*request.Body.SubscribedEvents) == 0 {
+			return gen.UpdateWebhookEndpoint422JSONResponse(errorBody(codeValidation,
+				"At least one subscribed event is required. "+
+					enumMessage("SubscribedEvents", validWebhookEvents))), nil
+		}
 		events = make([]string, 0, len(*request.Body.SubscribedEvents))
 		for _, event := range *request.Body.SubscribedEvents {
+			// Create rejected a typo'd event name and this did not, so the same
+			// unknown value was refused on one verb and stored on the other.
+			if !oneOf(string(event), validWebhookEvents) {
+				return gen.UpdateWebhookEndpoint422JSONResponse(errorBody(codeValidation,
+					enumMessage("SubscribedEvents", validWebhookEvents))), nil
+			}
 			events = append(events, string(event))
 		}
 	}

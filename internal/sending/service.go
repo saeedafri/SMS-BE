@@ -224,7 +224,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		}, "", string(messaging.StateRejected), code); err != nil {
 			return SendResult{}, err
 		}
-		return SendResult{MessageID: messageID, Status: "failed", FailureCode: code,
+		return SendResult{MessageID: messageID, Status: "rejected", FailureCode: code,
 			Segments: segments, Currency: rate.Currency}, gateErr
 	}
 
@@ -235,7 +235,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		Description: "Message hold " + messageID.String(),
 	}); err != nil {
 		if errors.Is(err, store.ErrInsufficientFunds) {
-			return SendResult{Status: "failed", FailureCode: "insufficient_balance"},
+			return SendResult{Status: "rejected", FailureCode: "insufficient_balance"},
 				messaging.ErrInsufficientFunds
 		}
 		return SendResult{}, err
@@ -317,7 +317,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	}
 
 	return SendResult{
-		MessageID: messageID, Status: messaging.ContractStatus(state),
+		MessageID: messageID, Status: messaging.SubmitStatus(state),
 		CostMinor: update.CostMinor, Currency: rate.Currency, Segments: segments,
 	}, nil
 }
