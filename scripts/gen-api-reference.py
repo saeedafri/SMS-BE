@@ -17,6 +17,10 @@ from collections import OrderedDict
 spec = json.load(open(sys.argv[1]))
 key_scopes_source = open(sys.argv[2]).read()
 out = open(sys.argv[3], "w")
+# Optional narrative, inserted after the header. Kept in its own source file so it
+# survives regeneration — the whole point of one document is that nobody has to
+# remember to paste the other half back in.
+preamble = open(sys.argv[4]).read() if len(sys.argv) > 4 else ""
 
 # ---------------------------------------------------------------- key scopes
 key_routes = {}
@@ -157,22 +161,30 @@ print(f"generating reference for {len(operations)} operations across {len(groupe
 # ---------------------------------------------------------------- rendering
 w = out.write
 
-w(f"""# Relay backend — complete API reference
+w(f"""# Relay backend — everything the UI team needs
 
 **Base URL:** `https://sms-api.saqibsaeed.cloud`
 **Operations:** {len(operations)} across {len(spec['paths'])} paths
 **Schemas:** {len(schemas)}
-**Generated from:** `openapi/control.json` — the same file the server is generated
-from, so this reference cannot describe an API the server does not implement.
+**Date:** 5 September 2026
 
-Regenerate with `make api-reference` after any contract change. **Do not
-hand-edit:** every operation, field, type and requiredness below is read out of
-the contract, and the auth column is parsed out of `internal/api/key_scopes.go`,
-so neither can drift from what is actually enforced.
+Regenerate with `make api-reference`. **Do not hand-edit:** the reference half is
+read out of `openapi/control.json` — the same file the server is generated from —
+and the auth column is parsed out of `internal/api/key_scopes.go`, so neither can
+describe an API we do not actually serve. The narrative half lives in
+`docs/api-reference-preamble.md`.
 
 ---
 
-## How authentication works
+""")
+
+w(preamble)
+
+w("""
+
+---
+
+## 7. How authentication works
 
 Two credential kinds, and they are not interchangeable.
 
@@ -182,13 +194,11 @@ dashboard uses.
 
 **API key** — from `POST /v1/developer/api-keys`, prefixed `sk_live_` or `sk_test_`,
 sent the same way. Authorised by **scopes**, not by role. A key is only a
-credential on the routes listed below as accepting one; on every other route it
-answers `401`, deliberately — the team roster, billing, the wallet and tenant
-settings are session-only.
+credential on the routes marked below as accepting one; on every other route it
+answers `401`, deliberately.
 
 The six scopes: `send:sms`, `send:rcs`, `read:messages`, `read:analytics`,
-`read:logs`, `webhooks:manage`. Anything else is refused at key creation with
-`422`.
+`read:logs`, `webhooks:manage`. Anything else is refused at key creation with `422`.
 
 | Status | Means |
 | --- | --- |
@@ -201,65 +211,23 @@ restricted by IP allowlist.
 
 ---
 
-## Two things that will surprise you
-
-**1. A refused send is `202`, not `4xx`.**
-
-`POST /v1/messages` answers `202` whenever the request was well-formed and we
-reached a decision. Read `status`:
-
-| `status` | Means |
-| --- | --- |
-| `sent` / `queued` | Accepted |
-| `rejected` | **Refused at submit.** Terminal, carries `errorCode`, `costMinor` is `0` |
-| `failed` | Reserved for a message that was accepted and then failed in delivery |
-
-A malformed body is still `422`. A refusal is `202` because it carries a real
-message id you can look up afterwards — an error body would not.
-
-**2. The send result and the message log use different status vocabularies.**
-
-`SendMessageResult.status` carries `rejected`. `MessageStatus` — what
-`GET /v1/messages` returns — does not. So a message refused at submit reads
-`rejected` in the send response and `failed` in the log. That is a real
-difference between two enums, not a bug.
-
-**Submit refusal codes** (`errorCode` on a `rejected` result):
-
-| Code | Cause |
-| --- | --- |
-| `registered_template_required` | The destination regime requires a registered template and none was named (India) |
-| `template_body_mismatch` | The body is not a legal instantiation of the named template |
-| `content_not_allowed` | The country's content rules refuse the body (e.g. India's public-shortener ban) |
-| `sender_not_approved` | The sender is not approved for this tenant |
-| `sender_not_found` | No such sender on this account |
-| `template_not_approved` | Our own review has not passed |
-| `carrier_template_not_approved` | The carrier's separate review has not passed (RCS) |
-| `sender_template_mismatch` | The template is registered against a different sender |
-| `recipient_suppressed` | The recipient is on this tenant's suppression list |
-| `invalid_recipient` | Not a valid number for this corridor |
-| `insufficient_balance` | The wallet cannot cover the send |
-| `no_rate` | No price configured for this country/channel |
-
----
-
-## Index
+## 8. Index
 
 """)
 
 for title, rows in grouped.items():
-    w(f"### {title}\n\n| Method | Path | Auth | Summary |\n| --- | --- | --- | --- |\n")
+    w(f"#### {title}\n\n| Method | Path | Auth | Summary |\n| --- | --- | --- | --- |\n")
     for path, method, operation in rows:
         w(f"| `{method}` | [`{path}`](#{anchor(path, method)}) | "
           f"{auth_for(method, path, operation)} | {summary_of(operation)} |\n")
     w("\n")
 
-w("\n---\n\n# Operations\n\n")
+w("\n---\n\n## 9. Operations\n\n")
 
 for title, rows in grouped.items():
-    w(f"## {title}\n\n")
+    w(f"### {title}\n\n")
     for path, method, operation in rows:
-        w(f'### <a id="{anchor(path, method)}"></a>`{method} {path}`\n\n')
+        w(f'#### <a id="{anchor(path, method)}"></a>`{method} {path}`\n\n')
         description = operation.get("description") or operation.get("summary")
         if description:
             w(description.strip() + "\n\n")
@@ -300,10 +268,10 @@ for title, rows in grouped.items():
         w("\n")
 
 # ---------------------------------------------------------------- schemas
-w("\n---\n\n# Schemas\n\n")
+w("\n---\n\n## 10. Schemas\n\n")
 for name in sorted(schemas):
     schema = schemas[name]
-    w(f'## <a id="{name.lower()}"></a>`{name}`\n\n')
+    w(f'### <a id="{name.lower()}"></a>`{name}`\n\n')
     if schema.get("description"):
         w(schema["description"].strip() + "\n\n")
     if schema.get("enum"):
