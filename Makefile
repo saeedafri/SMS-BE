@@ -30,6 +30,13 @@ api-reference:
 	python3 scripts/gen-api-reference.py openapi/control.json \
 	    internal/api/key_scopes.go docs/API_REFERENCE.md
 
+# Proves the reference matches the DEPLOYED api: every documented GET route
+# exists, and every route it says accepts a key under a scope accepts one
+# holding it and refuses one that does not.
+verify-api-reference:
+	SPEC=openapi/control.json KEY_SCOPES=internal/api/key_scopes.go \
+	    python3 scripts/verify-api-reference.py
+
 check: vet build test
 
 generate:
