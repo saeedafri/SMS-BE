@@ -324,12 +324,8 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 	// confirms it, and 0 for anything we refused or that never arrived — which
 	// is what every write path already stores, because a released hold is not a
 	// charge.
-	cost := record.CostMinor
-	entry.CostMinor = &cost
-	if record.Currency != "" {
-		currency := record.Currency
-		entry.Currency = &currency
-	}
+	entry.CostMinor = record.CostMinor
+	entry.Currency = record.Currency
 	// The whole honesty claim in one line: an internal "accepted" surfaces as
 	// "sent", never "delivered".
 	entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))

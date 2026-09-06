@@ -4502,6 +4502,7 @@ One of: `transmitter`, `receiver`, `transceiver`
 | `sent` | `integer` | **yes** |
 | `delivered` | `integer` | **yes** |
 | `failed` | `integer` | **yes** |
+| `rejected` | `integer` | **yes** |
 | `read` | `integer` | **yes** |
 | `cancelled` | `integer` | **yes** |
 
@@ -5099,8 +5100,8 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 | `fraudFlag` | [`MessageFraudFlag`](#messagefraudflag) | no |
 | `callOutcome` | `answered` \| `no_answer` \| `busy` \| `failed` \| `voicemail` \| `null` | no |
 | `durationSeconds` | `integer` \| `null` | no |
-| `costMinor` | `integer(int64)` | no |
-| `currency` | `string` | no |
+| `costMinor` | `integer(int64)` | **yes** |
+| `currency` | `string` | **yes** |
 
 ### <a id="messagelogpage"></a>`MessageLogPage`
 
@@ -5528,7 +5529,7 @@ One of: `active`, `disabled`
 | Field | Type | Required |
 | --- | --- | --- |
 | `id` | `string(uuid)` \| `null` | **yes** |
-| `status` | `queued` \| `sent` \| `failed` \| `rejected` | **yes** |
+| `status` | `queued` \| `sent` \| `rejected` | **yes** |
 | `segments` | `integer` | **yes** |
 | `costMinor` | `integer(int64)` | **yes** |
 | `currency` | `string` | **yes** |
