@@ -282,14 +282,14 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 			ref := receipts[0].CarrierRef
 			carrierRef = &ref
 		} else {
-			state = messaging.StateRejected
+			state = messaging.StateCarrierRejected
 			errorCode = receipts[0].ErrorCode
 		}
 	}
 
 	// A carrier rejection releases the hold immediately: nothing was delivered,
 	// so nothing is owed.
-	if state == messaging.StateRejected {
+	if state == messaging.StateCarrierRejected {
 		if err := s.release(ctx, identity, rate.Currency, cost, messageID); err != nil {
 			return SendResult{}, err
 		}

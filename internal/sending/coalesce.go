@@ -651,7 +651,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 		var errorCode, errorClass, carrierRef *string
 
 		if !found || !receipt.Accepted {
-			state = messaging.StateRejected
+			state = messaging.StateCarrierRejected
 			cost = 0
 			code := "SUBMIT_FAILED"
 			if found {

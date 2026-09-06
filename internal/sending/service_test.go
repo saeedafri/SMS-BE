@@ -218,9 +218,12 @@ func TestCarrierRejectionReleasesTheHoldImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	// A carrier refusing at submit is a refusal, not a delivery failure.
-	if result.Status != "rejected" {
-		t.Fatalf("status = %q, want rejected", result.Status)
+	// A carrier refusing at submit is a FAILURE, not a refusal. We accepted the
+	// message and dispatched it; the operator is who said no. `rejected` now
+	// means only that we would not take it in the first place — the two lead to
+	// different fixes and the log used to describe them the same way.
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed — a carrier rejection is not our refusal", result.Status)
 	}
 	if after := f.balance(); after != before {
 		t.Fatalf("balance = %d after a carrier rejection, want %d", after, before)

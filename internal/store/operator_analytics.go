@@ -40,7 +40,9 @@ type PlatformUsage struct {
 func QueryPlatformUsage(ctx context.Context, conn driver.Conn, since time.Time) (
 	PlatformUsage, error) {
 
-	const attempted = `status IN ('accepted','submitted','rejected')`
+	// A submit refusal was never attempted — we did not hand it to anyone — so
+	// `rejected` is not here. carrier_rejected was dispatched and is.
+	const attempted = `status IN ('accepted','submitted','carrier_rejected')`
 	var usage PlatformUsage
 
 	if err := conn.QueryRow(ctx, `
@@ -163,7 +165,9 @@ type TenantUsageSnapshot struct {
 func QueryTenantUsage(ctx context.Context, conn driver.Conn, tenantID string,
 	since time.Time) (TenantUsageSnapshot, error) {
 
-	const attempted = `status IN ('accepted','submitted','rejected')`
+	// A submit refusal was never attempted — we did not hand it to anyone — so
+	// `rejected` is not here. carrier_rejected was dispatched and is.
+	const attempted = `status IN ('accepted','submitted','carrier_rejected')`
 	var snapshot TenantUsageSnapshot
 	var total uint64
 	var lastHour time.Time

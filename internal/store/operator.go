@@ -214,7 +214,7 @@ type OperatorTenant struct {
 // treated as absent: `?status=` is a client asking for tenants whose status is
 // empty, and quietly turning that into "all tenants" is how a filtered screen
 // ends up showing rows it said it had excluded.
-func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *string,
+func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country, search *string,
 	page, limit int) ([]OperatorTenant, int, error) {
 
 	if limit <= 0 || limit > 500 {
@@ -243,7 +243,9 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		           WHEN throttled_at IS NOT NULL  THEN 'throttled'
 		           ELSE status
 		       END = $1)
-		  AND ($2::text IS NULL OR country = $2)`, status, country).Scan(&total); err != nil {
+		  AND ($2::text IS NULL OR country = $2)
+		  AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%' OR id::text ILIKE '%' || $3 || '%')`,
+		status, country, search).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("store: count tenants: %w", err)
 	}
 
@@ -257,8 +259,13 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country *strin
 		           ELSE status
 		       END = $1)
 		  AND ($2::text IS NULL OR country = $2)
+		  -- Searched in the WHERE, never over the returned page. Filtering
+		  -- after the slice turns a search box into a search-within-this-page
+		  -- box, which is worse than no search because it looks like it works:
+		  -- a tenant at position 400 would simply never be findable.
+		  AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%' OR id::text ILIKE '%' || $3 || '%')
 		ORDER BY created_at DESC, id DESC
-		LIMIT $3 OFFSET $4`, status, country, limit, offset)
+		LIMIT $4 OFFSET $5`, status, country, search, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list tenants: %w", err)
 	}
@@ -979,8 +986,12 @@ type SupportTicketFilter struct {
 	TenantID *uuid.UUID
 	Status   *string
 	Category *string
-	Page     int
-	Limit    int
+	// Search is the free-text q. It is applied in the WHERE alongside the
+	// other filters and ANDs with them, so it narrows a filtered view rather
+	// than replacing it.
+	Search *string
+	Page   int
+	Limit  int
 }
 
 // ListAllSupportTickets returns one page of tickets across every tenant, and
@@ -1002,12 +1013,13 @@ func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
 	where := `
 		WHERE ($1::uuid IS NULL OR t.tenant_id = $1)
 		  AND ($2::text IS NULL OR t.status    = $2)
-		  AND ($3::text IS NULL OR t.category  = $3)`
+		  AND ($3::text IS NULL OR t.category  = $3)
+		  AND ($4::text IS NULL OR t.subject ILIKE '%' || $4 || '%' OR t.id::text ILIKE '%' || $4 || '%')`
 
 	var total int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM support_tickets t`+where,
-		filter.TenantID, filter.Status, filter.Category).Scan(&total); err != nil {
+		filter.TenantID, filter.Status, filter.Category, filter.Search).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("store: count support tickets: %w", err)
 	}
 
@@ -1017,8 +1029,8 @@ func ListAllSupportTickets(ctx context.Context, pool *pgxpool.Pool,
 		FROM support_tickets t JOIN tenants n ON n.id = t.tenant_id`+where+`
 
 		ORDER BY t.updated_at DESC, t.id DESC
-		LIMIT $4 OFFSET $5`,
-		filter.TenantID, filter.Status, filter.Category, limit, offset)
+		LIMIT $5 OFFSET $6`,
+		filter.TenantID, filter.Status, filter.Category, filter.Search, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list all support tickets: %w", err)
 	}

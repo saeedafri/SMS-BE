@@ -354,6 +354,7 @@ type CampaignCounts struct {
 	Sent      int
 	Delivered int
 	Failed    int
+	Rejected  int
 	Read      int
 }
 
@@ -391,8 +392,14 @@ func CountCampaignMessages(ctx context.Context, conn driver.Conn, tenantID,
 			counts.Sent += int(total)
 		case "delivered":
 			counts.Delivered += int(total)
-		case "undelivered", "rejected", "expired":
+		case "undelivered", "carrier_rejected", "expired":
 			counts.Failed += int(total)
+		// Refusals are their own bucket. Folded into failed, a campaign
+		// stopped by one unregistered template read as a delivery problem
+		// — which sends someone to look at carrier health for something
+		// they could fix in their own template settings.
+		case "rejected":
+			counts.Rejected += int(total)
 		}
 	}
 	return counts, rows.Err()

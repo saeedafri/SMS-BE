@@ -76,7 +76,8 @@ func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
 			identity.TenantID, campaign.ID); err == nil {
 			out.Counts = gen.CampaignCounts{
 				Queued: counts.Queued, Sent: counts.Sent,
-				Delivered: counts.Delivered, Failed: counts.Failed, Read: counts.Read,
+				Delivered: counts.Delivered, Failed: counts.Failed,
+				Rejected: counts.Rejected, Read: counts.Read,
 				Cancelled: cancelledCount(campaign, counts),
 			}
 			out.Delivered = counts.Delivered
@@ -102,19 +103,29 @@ func cancelledCount(campaign store.Campaign, counts store.CampaignCounts) int {
 	if campaign.Status != "cancelled" {
 		return 0
 	}
-	recorded := counts.Queued + counts.Sent + counts.Delivered + counts.Failed + counts.Read
+	recorded := counts.Queued + counts.Sent + counts.Delivered + counts.Failed +
+		counts.Rejected + counts.Read
 	if remaining := campaign.Recipients - recorded; remaining > 0 {
 		return remaining
 	}
 	return 0
 }
 
-func (s *Server) ListCampaigns(ctx context.Context, _ gen.ListCampaignsRequestObject) (gen.ListCampaignsResponseObject, error) {
+func (s *Server) ListCampaigns(ctx context.Context, request gen.ListCampaignsRequestObject) (gen.ListCampaignsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	campaigns, err := store.ListCampaigns(ctx, s.DB, identity)
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListCampaigns422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
+	limit := 0
+	if request.Params.Limit != nil {
+		limit = *request.Params.Limit
+	}
+	campaigns, total, err := store.ListCampaigns(ctx, s.DB, identity, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +133,9 @@ func (s *Server) ListCampaigns(ctx context.Context, _ gen.ListCampaignsRequestOb
 	for _, campaign := range campaigns {
 		out = append(out, s.toCampaign(ctx, identity, campaign))
 	}
-	return gen.ListCampaigns200JSONResponse(out), nil
+	return gen.ListCampaigns200JSONResponse(gen.CampaignPage{
+		Campaigns: out, Total: total,
+	}), nil
 }
 
 func (s *Server) GetCampaign(ctx context.Context, request gen.GetCampaignRequestObject) (gen.GetCampaignResponseObject, error) {

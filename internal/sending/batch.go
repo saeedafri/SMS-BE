@@ -255,7 +255,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		var carrierRef *string
 
 		if !found || !receipt.Accepted {
-			state = messaging.StateRejected
+			state = messaging.StateCarrierRejected
 			cost = 0
 			code := "SUBMIT_FAILED"
 			if found {

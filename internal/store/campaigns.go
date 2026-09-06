@@ -71,11 +71,27 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 	return campaign, err
 }
 
-func ListCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Campaign, error) {
+// ListCampaigns returns one page of campaigns, newest first, with the total
+// across every page. Ordering is by created_at so the list is stable while
+// someone pages it — the same order every other list in the product uses.
+func ListCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	page, limit int) ([]Campaign, int, error) {
+
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	offset := pageOffset(page, limit)
+
 	var out []Campaign
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM campaigns`).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
-			`SELECT `+campaignColumns+` FROM campaigns c ORDER BY c.created_at DESC, c.id DESC`)
+			`SELECT `+campaignColumns+` FROM campaigns c
+			 ORDER BY c.created_at DESC, c.id DESC
+			 LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -90,9 +106,9 @@ func ListCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Camp
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list campaigns: %w", err)
+		return nil, 0, fmt.Errorf("store: list campaigns: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func GetCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
