@@ -235,8 +235,13 @@ watches and confirm it noticed *for the right reason*.
 
 `make generate` clean against `feat/page-number-pagination@c480f1b`.
 
-Live, after deploy: the split, the migration, all three asks, and the invariant you are
-about to assert.
+Live, after deploy — **19 assertions, 19 passing**: every `rejected` row carries no
+`errorClass` and a lowercase code (67 of them, down from 141); `rejected | failed ⟹
+costMinor === 0` across every row in the log; `q` finding a mid-word case-insensitive
+match with a filtered total, ANDing with `country`, and answering an empty `200` on no
+match; the campaigns envelope paging without overlap, `422` on `page=0`, and a page past
+the end returning the same total; the abuse queue reporting a real total; and
+`counts.rejected` present on every campaign.
 
 Two tests changed with the split rather than around it: a carrier rejection now asserts
 `failed` instead of `rejected`, and the campaigns list test reads the envelope. Both were
