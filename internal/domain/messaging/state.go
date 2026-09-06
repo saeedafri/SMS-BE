@@ -19,22 +19,35 @@ const (
 	StateDelivered   State = "delivered"
 	StateUndelivered State = "undelivered"
 	StateRejected    State = "rejected"
-	StateExpired     State = "expired"
+	// StateCarrierRejected is the carrier refusing a message we DID dispatch.
+	//
+	// Split out from StateRejected, which now means only "we would not take
+	// it". Both release the hold and neither reaches a handset, but they are
+	// different facts about who said no, and they lead to different fixes: a
+	// submit refusal is configuration the sender can correct, a carrier
+	// rejection is not. Collapsing them meant the log told a customer we had
+	// refused a message we had in fact sent.
+	StateCarrierRejected State = "carrier_rejected"
+	StateExpired         State = "expired"
 )
 
 // legalTransitions is the whole state machine in one place. A transition
 // absent from this map is a bug, not an edge case — and a carrier replaying a
 // receipt must not be able to walk a message backwards out of a terminal state.
 var legalTransitions = map[State][]State{
+	// Rejected is reachable only BEFORE submission — it is our own gate saying
+	// no. Once a message has been handed over, a refusal is the carrier's and
+	// lands in CarrierRejected.
 	StateQueued:     {StateSubmitting, StateRejected},
 	StateSubmitting: {StateSubmitted, StateRejected},
-	StateSubmitted:  {StateAccepted, StateRejected, StateExpired},
+	StateSubmitted:  {StateAccepted, StateCarrierRejected, StateExpired},
 	StateAccepted:   {StateDelivered, StateUndelivered, StateExpired},
 	// Terminal states go nowhere.
-	StateDelivered:   {},
-	StateUndelivered: {},
-	StateRejected:    {},
-	StateExpired:     {},
+	StateDelivered:       {},
+	StateUndelivered:     {},
+	StateRejected:        {},
+	StateCarrierRejected: {},
+	StateExpired:         {},
 }
 
 func CanTransition(from, to State) bool {
@@ -70,7 +83,7 @@ func EffectOf(state State) BillingEffect {
 	switch state {
 	case StateDelivered:
 		return EffectCharge
-	case StateUndelivered, StateRejected, StateExpired:
+	case StateUndelivered, StateRejected, StateCarrierRejected, StateExpired:
 		return EffectRelease
 	default:
 		return EffectNone
@@ -101,7 +114,9 @@ func ContractStatus(state State) string {
 		return "delivered"
 	case StateRejected:
 		return "rejected"
-	case StateUndelivered, StateExpired:
+	case StateUndelivered, StateCarrierRejected, StateExpired:
+		// A carrier rejection is a failure, not a refusal. We accepted the
+		// message and dispatched it; the operator is who said no.
 		return "failed"
 	default:
 		return "queued"

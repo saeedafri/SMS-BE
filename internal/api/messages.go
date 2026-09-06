@@ -276,6 +276,23 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	return gen.SendMessage202JSONResponse(out), nil
 }
 
+// searchTerm normalises the free-text q every searchable list takes.
+//
+// Absent and empty mean the same thing — no filter — because a search box that
+// has been typed into and cleared sends `q=`, and treating that as "match the
+// empty string" would be a filter that silently matches everything while
+// looking active. Whitespace only is the same case.
+func searchTerm(q *string) *string {
+	if q == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*q)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
 // pageNumber reads the 1-based page parameter every list takes.
 //
 // Absent is page 1. Zero or negative is a client error rather than a silent

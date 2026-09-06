@@ -228,7 +228,8 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 	if request.Params.Limit != nil {
 		limit = *request.Params.Limit
 	}
-	tenants, total, err := store.ListTenants(ctx, s.operatorPool(), status, country, page, limit)
+	tenants, total, err := store.ListTenants(ctx, s.operatorPool(), status, country,
+		searchTerm(request.Params.Q), page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1569,22 +1570,43 @@ func operatorRegistrationResponse(reg store.PendingRegistration) gen.Registratio
 	}
 }
 
-func (s *Server) GetAbuseQueue(ctx context.Context, _ gen.GetAbuseQueueRequestObject) (
+func (s *Server) GetAbuseQueue(ctx context.Context, request gen.GetAbuseQueueRequestObject) (
 	gen.GetAbuseQueueResponseObject, error) {
 
 	if _, err := s.requireOperator(ctx); err != nil {
 		return gen.GetAbuseQueue401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
+	page, ok := pageNumber(request.Params.Page)
+	if !ok {
+		return gen.GetAbuseQueue422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
+	limit := 20
+	if request.Params.Limit != nil && *request.Params.Limit > 0 {
+		limit = *request.Params.Limit
+	}
 	tenants, err := store.ListFlaggedTenants(ctx, s.operatorPool())
 	if err != nil {
 		return nil, err
 	}
-	items := make([]gen.TenantDetail, 0, len(tenants))
-	for _, tenant := range tenants {
+	// The total is the whole queue, not the page. A required field that
+	// defaults to zero compiles and then renders a pager promising exactly one
+	// page, which is the failure this ask exists to prevent.
+	total := len(tenants)
+	offset := (page - 1) * limit
+	if offset > total {
+		offset = total
+	}
+	window := tenants[offset:]
+	if len(window) > limit {
+		window = window[:limit]
+	}
+	items := make([]gen.TenantDetail, 0, len(window))
+	for _, tenant := range window {
 		items = append(items, toTenantDetail(tenant))
 	}
-	return gen.GetAbuseQueue200JSONResponse{Items: items}, nil
+	return gen.GetAbuseQueue200JSONResponse{Items: items, Total: total}, nil
 }
 
 // decideSender is the shared body of approve and reject: they differ only in
@@ -1817,7 +1839,10 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 		return gen.GetOperatorSupportTickets401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
-	filter := store.SupportTicketFilter{TenantID: request.Params.TenantId}
+	filter := store.SupportTicketFilter{
+		TenantID: request.Params.TenantId,
+		Search:   searchTerm(request.Params.Q),
+	}
 	if request.Params.Status != nil {
 		value := string(*request.Params.Status)
 		filter.Status = &value

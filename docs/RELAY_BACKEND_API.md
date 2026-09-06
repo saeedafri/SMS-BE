@@ -2,7 +2,7 @@
 
 **Base URL:** `https://sms-api.saqibsaeed.cloud`
 **Operations:** 177 across 142 paths
-**Schemas:** 227
+**Schemas:** 228
 **Date:** 5 September 2026
 
 Regenerate with `make api-reference`. **Do not hand-edit:** the reference half is
@@ -1057,12 +1057,20 @@ One message's current state, including a submit-time refusal and its errorCode �
 
 **Auth:** session **or** API key (`read:logs`)
 
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
 **Responses**
 
 | Status | Body |
 | --- | --- |
-| `200` | [`Campaign`](#campaign)[] — Campaigns |
+| `200` | [`CampaignPage`](#campaignpage) — Campaigns |
 | `401` | [`Error`](#error) — Unauthenticated |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1campaigns"></a>`POST /v1/campaigns`
@@ -3100,12 +3108,20 @@ Calling without a code against a carrier that has no template API returns 409 wi
 
 **Auth:** operator session
 
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
 **Responses**
 
 | Status | Body |
 | --- | --- |
 | `200` | [`AbuseQueuePage`](#abusequeuepage) — Every currently-flagged tenant across all tenants (open flags only) |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="get-v1operatorapprovals"></a>`GET /v1/operator/approvals`
@@ -3839,6 +3855,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | `tenantId` | query | `string(uuid)` | no |
 | `status` | query | [`TicketStatus`](#ticketstatus) | no |
 | `category` | query | [`TicketCategory`](#ticketcategory) | no |
+| `q` | query | `string` | no |
 | `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
@@ -3989,6 +4006,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 | --- | --- | --- | --- |
 | `status` | query | [`TenantStatus`](#tenantstatus) | no |
 | `country` | query | [`CountryCode`](#countrycode) | no |
+| `q` | query | `string` | no |
 | `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
@@ -3996,7 +4014,7 @@ Removes the route and closes the gap it leaves, so the remaining priorities in t
 
 | Status | Body |
 | --- | --- |
-| `200` | [`TenantPage`](#tenantpage) — Every tenant on the platform, optionally filtered. If limit is omitted, returns every matching tenant unbounded with nextCursor null. |
+| `200` | [`TenantPage`](#tenantpage) — Every tenant on the platform, optionally filtered. Paged: one page of results plus the total across every page. |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
 | `422` | [`Error`](#error) — Page number below 1 |
 
@@ -4219,6 +4237,7 @@ Caps the tenant's send rate at ratePerSecond messages per second across every ch
 | Field | Type | Required |
 | --- | --- | --- |
 | `items` | [`TenantDetail`](#tenantdetail)[] | **yes** |
+| `total` | `integer` | **yes** |
 
 ### <a id="alertrules"></a>`AlertRules`
 
@@ -4525,6 +4544,13 @@ One of: `transmitter`, `receiver`, `transceiver`
 | `channel` | [`ChannelId`](#channelid) | **yes** |
 | `senderId` | `string` | **yes** |
 | `templateId` | `string` | **yes** |
+
+### <a id="campaignpage"></a>`CampaignPage`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `campaigns` | [`Campaign`](#campaign)[] | **yes** |
+| `total` | `integer` | **yes** |
 
 ### <a id="campaignstatus"></a>`CampaignStatus`
 

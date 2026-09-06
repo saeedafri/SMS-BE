@@ -232,10 +232,18 @@ func TestEveryCampaignCarriesTheHaltFieldsEvenWhenUnset(t *testing.T) {
 	if list.Code != http.StatusOK {
 		t.Fatalf("list = %d\n%s", list.Code, list.Body)
 	}
-	var campaigns []map[string]any
-	list.decode(t, &campaigns)
+	// The list is an envelope now, not a bare array: {campaigns, total}.
+	var page struct {
+		Campaigns []map[string]any `json:"campaigns"`
+		Total     int              `json:"total"`
+	}
+	list.decode(t, &page)
+	campaigns := page.Campaigns
 	if len(campaigns) == 0 {
 		t.Fatal("no campaigns came back")
+	}
+	if page.Total < len(campaigns) {
+		t.Fatalf("total = %d with %d campaigns on the page", page.Total, len(campaigns))
 	}
 	for _, campaign := range campaigns {
 		for _, key := range []string{"pausedAt", "cancelledAt"} {

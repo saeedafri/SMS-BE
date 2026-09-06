@@ -115,14 +115,21 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	// rollup gets one row per TRANSITION, so a message that went queued ->
 	// accepted -> delivered contributes three rows and summing them all reports
 	// three messages where there was one. Every message produces at most one
-	// accepted row and at most one rejected row, and never both, so this counts
-	// each attempted message exactly once — the denominator a delivery rate is
-	// meaningful against.
+	// accepted row and at most one carrier_rejected row, and never both, so this
+	// counts each attempted message exactly once — the denominator a delivery
+	// rate is meaningful against.
+	//
+	// `rejected` is deliberately absent from BOTH buckets. It now means only a
+	// submit refusal: a message we never handed to a carrier, so it was neither
+	// attempted nor a delivery failure. Counting refusals against the delivery
+	// rate made a tenant's own misconfiguration look like our carriers failing,
+	// and it disagreed with the campaign funnel, which reports refusals
+	// separately.
 	summaryQuery := `
 		SELECT
-			sumIf(message_count, status IN ('accepted','submitted','rejected')) AS total,
+			sumIf(message_count, status IN ('accepted','submitted','carrier_rejected')) AS total,
 			sumIf(message_count, status = 'delivered')   AS delivered,
-			sumIf(message_count, status IN ('undelivered','rejected','expired')) AS failed,
+			sumIf(message_count, status IN ('undelivered','carrier_rejected','expired')) AS failed,
 			sumIf(cost_minor,    status = 'delivered')   AS cost,
 			uniq(currency) AS currency_count,
 			any(currency)  AS first_currency
@@ -233,7 +240,7 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		SELECT toStartOfDay(hour) AS bucket,
 		       sum(message_count),
 		       sumIf(message_count, status = 'delivered'),
-		       sumIf(message_count, status IN ('undelivered','rejected','expired')),
+		       sumIf(message_count, status IN ('undelivered','carrier_rejected','expired')),
 		       sumIf(cost_minor,    status = 'delivered')
 		FROM message_rollup_hourly WHERE `+where+`
 		GROUP BY bucket ORDER BY bucket`, args...)
@@ -271,7 +278,7 @@ func QueryAnalytics(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	// than a row that is absent. The summary above still counts them.
 	deliverRows, err := conn.Query(ctx, `
 		SELECT country, channel, carrier,
-		       countIf(status IN ('accepted','delivered','undelivered','rejected')) AS sent,
+		       countIf(status IN ('accepted','delivered','undelivered','carrier_rejected')) AS sent,
 		       countIf(status = 'delivered') AS delivered
 		FROM messages WHERE `+messageWhere+` AND carrier != ''
 		GROUP BY country, channel, carrier ORDER BY sent DESC`, messageArgs...)
