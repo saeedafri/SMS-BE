@@ -13,6 +13,11 @@ import (
 // what the transition matrix needs to look at.
 func (h *harness) seedCampaign(tenant account, status string) string {
 	h.t.Helper()
+	return h.seedNamedCampaign(tenant, "Halt fixture", status)
+}
+
+func (h *harness) seedNamedCampaign(tenant account, name, status string) string {
+	h.t.Helper()
 	ctx := context.Background()
 	var senderID, templateID, campaignID string
 	// A distinct header per call: sender ids are unique per tenant, channel and
@@ -41,9 +46,9 @@ func (h *harness) seedCampaign(tenant account, status string) string {
 		INSERT INTO campaigns (tenant_id, name, channel, country, sender_id, template_id,
 		    status, recipients, segments_per_message, cost_minor_min, cost_minor_max,
 		    currency, paused_at, cancelled_at)
-		VALUES ($1, 'Halt fixture', 'SMS', 'IN', $2, $3, $4, 100, 1, 1200, 1200,
+		VALUES ($1, $5, 'SMS', 'IN', $2, $3, $4, 100, 1, 1200, 1200,
 		        'INR', %s, %s) RETURNING id`, pausedAt, cancelledAt),
-		tenant.TenantID, senderID, templateID, status).Scan(&campaignID); err != nil {
+		tenant.TenantID, senderID, templateID, status, name).Scan(&campaignID); err != nil {
 		h.t.Fatalf("seed campaign: %v", err)
 	}
 	return campaignID

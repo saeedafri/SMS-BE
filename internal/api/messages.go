@@ -40,7 +40,7 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 			return nil, fmt.Errorf("%w: %q is not a valid message status",
 				errInvalidFilter, string(*request.Params.Status))
 		}
-		filter.Status = contractStatusToState(string(*request.Params.Status))
+		filter.Statuses = contractStatusToStates(string(*request.Params.Status))
 	}
 	if request.Params.Channel != nil {
 		if !request.Params.Channel.Valid() {
@@ -99,21 +99,46 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 	return result, nil
 }
 
-// contractStatusToState maps the contract's coarse filter value back to the
-// internal states it covers. "sent" spans submitted and accepted, so a filter
-// on it must not silently match only one.
-func contractStatusToState(status string) string {
+// contractStatusToStates maps a contract filter value back to every internal
+// state it covers.
+//
+// The mapping is one-to-MANY, because ContractStatus collapses many-to-one on
+// the way out. Returning a single state made four filters under-inclusive and
+// three of them useless: an unmapped value returned "", the store read that as
+// no filter at all, and ?status=rejected answered with the entire log under a
+// pager that confidently reported its size. It hid well, because the log is
+// newest-first and the newest rows happened to be refusals, so page one looked
+// filtered.
+//
+// The rule this now keeps: a filter either narrows or matches nothing. It never
+// widens to everything. A nil result means "no filter"; an empty non-nil result
+// means "this value covers no internal state", which is an empty page rather
+// than the collection.
+func contractStatusToStates(status string) []string {
 	switch status {
 	case "queued":
-		return string(messaging.StateQueued)
+		return []string{string(messaging.StateQueued), string(messaging.StateSubmitting)}
 	case "sent":
-		return string(messaging.StateAccepted)
+		return []string{string(messaging.StateSubmitted), string(messaging.StateAccepted)}
 	case "delivered":
-		return string(messaging.StateDelivered)
+		return []string{string(messaging.StateDelivered)}
 	case "failed":
-		return string(messaging.StateUndelivered)
+		return []string{
+			string(messaging.StateUndelivered),
+			string(messaging.StateCarrierRejected),
+			string(messaging.StateExpired),
+		}
+	case "rejected":
+		return []string{string(messaging.StateRejected)}
+	// read and cancelled are declared in MessageStatus and carried by no row.
+	// Read receipts are not implemented — a DeliveryReport has no read concept
+	// — and a cancelled campaign deliberately writes no row for a recipient it
+	// never dispatched. Both therefore match nothing, which is an empty page
+	// with an honest total rather than a filter that silently does not apply.
+	case "read", "cancelled":
+		return []string{}
 	default:
-		return ""
+		return []string{}
 	}
 }
 
