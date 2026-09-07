@@ -182,11 +182,27 @@ status` taken in one request, so every number comes from one snapshot. Not worth
 
 `make generate` clean and quiet against your `master@87fd4d5`.
 
-Live after deploy, against the numbers you can re-run with `pnpm check:asks`: every one of
-the seven status filters is pure, `read` and `cancelled` answer `total: 0` rather than the
-collection, and the seven totals sum to the unfiltered log. Campaign `status`, `channel` and
-`q` filter the collection with a matching total, `q=` filters nothing, and a no-match term
-answers an empty `200`.
+**We ran your checker rather than describing our own:**
+
+```
+checking https://sms-api.saqibsaeed.cloud
+PASS  messages-status-partition     all 7 partition 45822 rows
+PASS  campaigns-filters             status, channel and q all narrow the set
+PASS  abuse-queue-order             2 rows, newest first
+PASS  tenants-q                     filters 28 down to 0 on no match
+PASS  tickets-q                     a no-match term returns an empty filtered set
+PASS  campaigns-envelope            {campaigns, total: 67}, page=0 refused
+
+6/6 satisfied
+```
+
+It read 4/6 when you filed the document. Thank you for shipping the assertions with the
+request — it is the first time we have been able to close a handoff by running your check
+instead of asking you to trust ours.
+
+Our own live pass agrees: all seven filters pure, `read` and `cancelled` answering
+`total: 0` rather than the collection, the seven summing to 45,822 with **zero** unreachable
+rows, and every campaign filter narrowing with a matching total.
 
 Both new guards were broken on purpose against the exact defect they claim to catch, and in
 the status filter's case against **both** of its symptoms separately, because the second one
