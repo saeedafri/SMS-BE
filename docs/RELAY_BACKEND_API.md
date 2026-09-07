@@ -2,7 +2,7 @@
 
 **Base URL:** `https://sms-api.saqibsaeed.cloud`
 **Operations:** 177 across 142 paths
-**Schemas:** 228
+**Schemas:** 229
 **Date:** 5 September 2026
 
 Regenerate with `make api-reference`. **Do not hand-edit:** the reference half is
@@ -495,7 +495,7 @@ restricted by IP allowlist.
 
 | Method | Path | Auth | Summary |
 | --- | --- | --- | --- |
-| `GET` | [`/v1/operator/abuse-queue`](#get-v1operatorabuse-queue) | operator session |  |
+| `GET` | [`/v1/operator/abuse-queue`](#get-v1operatorabuse-queue) | operator session | Tenants flagged for abuse review, NEWEST FLAG FIRST (flaggedAt descending). The ordering is part of the contra |
 | `GET` | [`/v1/operator/approvals`](#get-v1operatorapprovals) | operator session |  |
 | `GET` | [`/v1/operator/audit-log`](#get-v1operatoraudit-log) | operator session |  |
 | `GET` | [`/v1/operator/connections`](#get-v1operatorconnections) | operator session | List operator SMPP connections |
@@ -1061,6 +1061,9 @@ One message's current state, including a submit-time refusal and its errorCode â
 
 | Name | In | Type | Required |
 | --- | --- | --- | --- |
+| `status` | query | [`CampaignStatus`](#campaignstatus) | no |
+| `channel` | query | [`ChannelId`](#channelid) | no |
+| `q` | query | `string` | no |
 | `page` | query | `integer` | no |
 | `limit` | query | `integer` | no |
 
@@ -3106,6 +3109,8 @@ Calling without a code against a carrier that has no template API returns 409 wi
 
 #### <a id="get-v1operatorabuse-queue"></a>`GET /v1/operator/abuse-queue`
 
+Tenants flagged for abuse review, NEWEST FLAG FIRST (flaggedAt descending). The ordering is part of the contract rather than an accident of storage order: the screen pages this queue, and a page can only be ordered correctly if the whole collection was ordered before it was sliced. Every row carries a non-null flaggedAt -- that is what puts it in the queue.
+
 **Auth:** operator session
 
 **Parameters**
@@ -5144,6 +5149,16 @@ One of: `none`, `velocity`, `geo_anomaly`, `blocked`
 | --- | --- | --- |
 | `messages` | [`Message`](#message)[] | **yes** |
 | `total` | `integer` | **yes** |
+
+### <a id="messagerefusalcode"></a>`MessageRefusalCode`
+
+The closed vocabulary of submit-time refusals -- the reasons we decline a message before it is dispatched, so it is never sent and never charged. A refusal carries one of these in MessageLogEntry.errorCode alongside status `rejected` and a null errorClass.
+
+Deliberately referenced by no field. `errorCode` carries TWO families that cannot be one type: these lowercase codes, which are ours and closed, and the carrier's UPPERCASE codes (DND_BLOCKED, ABSENT_SUBSCRIBER), which are open-ended because they come from whatever an operator returns. Typing `errorCode` as this enum would be a lie about the second family, so the field stays a string and this schema exists to give the refusal side a total union to render against.
+
+`rejected` is the catch-all arm -- a gate refusal we shipped without naming. It is declared so the union stays total, but a sighting is a backend bug report, not a category to explain to a customer.
+
+One of: `recipient_suppressed`, `registered_template_required`, `template_body_mismatch`, `template_not_approved`, `carrier_template_not_approved`, `sender_template_mismatch`, `sender_not_approved`, `sender_not_found`, `template_not_found`, `content_not_allowed`, `invalid_recipient`, `insufficient_balance`, `tenant_suspended`, `no_rate`, `rejected`
 
 ### <a id="messagestatus"></a>`MessageStatus`
 

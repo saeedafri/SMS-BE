@@ -117,7 +117,10 @@ func InsertMessageEvents(ctx context.Context, conn driver.Conn, events []Message
 
 // MessageFilter is the logs explorer's query.
 type MessageFilter struct {
-	Status     string
+	// Statuses is every INTERNAL state the requested wire status covers. See
+	// contractStatusToStates: the wire vocabulary is coarser than the state
+	// machine, so this is a set rather than a value.
+	Statuses   []string
 	Channel    string
 	ErrorClass string
 	CampaignID *uuid.UUID
@@ -142,9 +145,15 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 
 	where := "tenant_id = ?"
 	args := []any{tenantID}
-	if filter.Status != "" {
-		where += " AND status = ?"
-		args = append(args, filter.Status)
+	// nil means no status filter. Non-nil and empty means the wire value covers
+	// no internal state, and the honest answer is an empty page — never the
+	// whole collection, which is what a dropped clause used to give.
+	if filter.Statuses != nil {
+		if len(filter.Statuses) == 0 {
+			return nil, 0, nil
+		}
+		where += " AND status IN (?)"
+		args = append(args, filter.Statuses)
 	}
 	if filter.Channel != "" {
 		where += " AND channel = ?"

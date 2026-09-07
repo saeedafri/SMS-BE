@@ -74,24 +74,49 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 // ListCampaigns returns one page of campaigns, newest first, with the total
 // across every page. Ordering is by created_at so the list is stable while
 // someone pages it — the same order every other list in the product uses.
-func ListCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	page, limit int) ([]Campaign, int, error) {
+// CampaignFilter narrows the campaign list before it is paged.
+//
+// Before, never after: all three of these ran in the browser over the whole
+// collection, and paging the list without moving them would have turned a
+// working search into a search-within-this-page — the same trap the operator
+// search test breaks on purpose to prevent.
+type CampaignFilter struct {
+	Status  *string
+	Channel *string
+	// Search is a case-insensitive substring over the campaign name.
+	Search *string
+	Page   int
+	Limit  int
+}
 
+func ListCampaigns(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	filter CampaignFilter) ([]Campaign, int, error) {
+
+	limit := filter.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 20
 	}
-	offset := pageOffset(page, limit)
+	offset := pageOffset(filter.Page, limit)
+
+	// One clause list, used by the count and the page query, so the total can
+	// never describe a different set from the rows.
+	const where = `
+		WHERE ($1::text IS NULL OR c.status  = $1)
+		  AND ($2::text IS NULL OR c.channel = $2)
+		  AND ($3::text IS NULL OR c.name ILIKE '%' || $3 || '%')`
 
 	var out []Campaign
 	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM campaigns`).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM campaigns c`+where,
+			filter.Status, filter.Channel, filter.Search).Scan(&total); err != nil {
 			return err
 		}
 		rows, err := tx.Query(ctx,
-			`SELECT `+campaignColumns+` FROM campaigns c
+			`SELECT `+campaignColumns+` FROM campaigns c`+where+`
 			 ORDER BY c.created_at DESC, c.id DESC
-			 LIMIT $1 OFFSET $2`, limit, offset)
+			 LIMIT $4 OFFSET $5`,
+			filter.Status, filter.Channel, filter.Search, limit, offset)
 		if err != nil {
 			return err
 		}

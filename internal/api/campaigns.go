@@ -121,11 +121,19 @@ func (s *Server) ListCampaigns(ctx context.Context, request gen.ListCampaignsReq
 		return gen.ListCampaigns422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 0
+	filter := store.CampaignFilter{Page: page, Search: searchTerm(request.Params.Q)}
 	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+		filter.Limit = *request.Params.Limit
 	}
-	campaigns, total, err := store.ListCampaigns(ctx, s.DB, identity, page, limit)
+	if request.Params.Status != nil {
+		value := string(*request.Params.Status)
+		filter.Status = &value
+	}
+	if request.Params.Channel != nil {
+		value := string(*request.Params.Channel)
+		filter.Channel = &value
+	}
+	campaigns, total, err := store.ListCampaigns(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +400,7 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 		filter.Limit = *request.Params.Limit
 	}
 	if request.Params.Status != nil {
-		filter.Status = contractStatusToState(string(*request.Params.Status))
+		filter.Statuses = contractStatusToStates(string(*request.Params.Status))
 	}
 
 	records, total, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
