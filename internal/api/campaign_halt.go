@@ -99,7 +99,7 @@ func (s *Server) PauseCampaign(ctx context.Context, request gen.PauseCampaignReq
 	}
 	identity, _ := identityFrom(ctx)
 	return gen.PauseCampaign200JSONResponse(
-		s.toCampaign(ctx, identity, outcome.campaign)), nil
+		s.campaignResponse(ctx, identity, outcome.campaign)), nil
 }
 
 // ResumeCampaign puts the campaign back to sending and restarts fan-out from
@@ -130,7 +130,7 @@ func (s *Server) ResumeCampaign(ctx context.Context, request gen.ResumeCampaignR
 	s.resumeDispatch(ctx, identity, outcome.campaign)
 
 	return gen.ResumeCampaign200JSONResponse(
-		s.toCampaign(ctx, identity, outcome.campaign)), nil
+		s.campaignResponse(ctx, identity, outcome.campaign)), nil
 }
 
 // resumeDispatch restarts fan-out for a resumed campaign.
@@ -182,5 +182,5 @@ func (s *Server) CancelCampaign(ctx context.Context, request gen.CancelCampaignR
 	}
 	identity, _ := identityFrom(ctx)
 	return gen.CancelCampaign200JSONResponse(
-		s.toCampaign(ctx, identity, outcome.campaign)), nil
+		s.campaignResponse(ctx, identity, outcome.campaign)), nil
 }

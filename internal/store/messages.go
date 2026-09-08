@@ -392,26 +392,72 @@ func CountCampaignMessages(ctx context.Context, conn driver.Conn, tenantID,
 		if err := rows.Scan(&status, &total); err != nil {
 			return CampaignCounts{}, fmt.Errorf("store: scan campaign count: %w", err)
 		}
-		// Mapped through the same collapse the logs use, so the campaign page
-		// and the message list can never disagree about one message.
-		switch status {
-		case "queued", "submitting":
-			counts.Queued += int(total)
-		case "submitted", "accepted":
-			counts.Sent += int(total)
-		case "delivered":
-			counts.Delivered += int(total)
-		case "undelivered", "carrier_rejected", "expired":
-			counts.Failed += int(total)
-		// Refusals are their own bucket. Folded into failed, a campaign
-		// stopped by one unregistered template read as a delivery problem
-		// — which sends someone to look at carrier health for something
-		// they could fix in their own template settings.
-		case "rejected":
-			counts.Rejected += int(total)
-		}
+		counts.addTo(status, int(total))
 	}
 	return counts, rows.Err()
+}
+
+// addTo folds one internal state into its contract bucket.
+//
+// The same collapse the message log uses, in one place, so the campaign page
+// and the message list can never disagree about one message.
+func (c *CampaignCounts) addTo(status string, total int) {
+	switch status {
+	case "queued", "submitting":
+		c.Queued += total
+	case "submitted", "accepted":
+		c.Sent += total
+	case "delivered":
+		c.Delivered += total
+	case "undelivered", "carrier_rejected", "expired":
+		c.Failed += total
+	// Refusals are their own bucket. Folded into failed, a campaign stopped by
+	// one unregistered template read as a delivery problem — which sends
+	// someone to look at carrier health for something they could fix in their
+	// own template settings.
+	case "rejected":
+		c.Rejected += total
+	}
+}
+
+// CountCampaignMessagesForPage groups the messages of SEVERAL campaigns by
+// contract status, in one query.
+//
+// One query rather than one per campaign, and the difference is not marginal.
+// The campaigns list rendered a page of twenty by asking ClickHouse twenty
+// separate times; with a pool of sixteen connections, 128 concurrent readers
+// put 2,560 queries in flight and the endpoint fell from 565 requests a second
+// to 2.2. The N+1 was invisible at one reader and total at a hundred.
+//
+// Same status collapse as the single-campaign form, sharing addTo, so the list
+// and the detail page can never disagree about one message.
+func CountCampaignMessagesForPage(ctx context.Context, conn driver.Conn,
+	tenantID uuid.UUID, campaignIDs []uuid.UUID) (map[uuid.UUID]CampaignCounts, error) {
+
+	out := map[uuid.UUID]CampaignCounts{}
+	if len(campaignIDs) == 0 {
+		return out, nil
+	}
+	rows, err := conn.Query(ctx, `
+		SELECT campaign_id, status, count() FROM messages FINAL
+		WHERE tenant_id = ? AND campaign_id IN (?)
+		GROUP BY campaign_id, status`, tenantID, campaignIDs)
+	if err != nil {
+		return nil, fmt.Errorf("store: count campaign messages for page: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var campaignID uuid.UUID
+		var status string
+		var total uint64
+		if err := rows.Scan(&campaignID, &status, &total); err != nil {
+			return nil, fmt.Errorf("store: scan campaign page count: %w", err)
+		}
+		counts := out[campaignID]
+		counts.addTo(status, int(total))
+		out[campaignID] = counts
+	}
+	return out, rows.Err()
 }
 
 // FindMessageTenant resolves which tenant owns a message.

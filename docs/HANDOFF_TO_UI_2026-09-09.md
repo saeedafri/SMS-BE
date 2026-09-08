@@ -146,7 +146,21 @@ arrive with the rows), and it removed both of the limits we documented in `08`
 only to the `cancelled` half. We will still cost it, but it is a smaller thing
 than when you scheduled it third.
 
-### 2.2 The consequence you named, confirmed
+### 2.2 One narrower gap, stated because it is reachable
+
+Fan-out writes a page's message rows and **then** saves the cursor, so a process
+that dies between the two leaves rows written and no cursor. If that campaign is
+later cancelled, the derivation reads "no cursor" as "nothing was reached" and
+counts the whole audience as cancelled — while the log correctly reports those
+same contacts as dispatched. **They appear in both halves.**
+
+Separating them needs "has a message row" as a SQL predicate, and the rows are
+in ClickHouse while the audience is in Postgres, so it cannot be one query. Left
+as a known limit rather than papered over, and it is the third one documented on
+that function. The dispatched half stays true either way, which is the half a
+compliance question asks about.
+
+### 2.3 The consequence you named, confirmed
 
 A campaign that ran before `15e1917` now reports its real dispatched set,
 including contacts it should never have sent to. We agree that is right, for the
@@ -154,7 +168,7 @@ reason you gave, and we would add one: those are exactly the rows a regulator
 would ask about, and an endpoint that hides them because today's rule would have
 prevented them is the wrong tool for that question.
 
-### 2.3 Paging across two blocks
+### 2.4 Paging across two blocks
 
 The unfiltered page is the two halves back to back — dispatched first — so
 `cancelled + dispatched == total` holds by construction rather than by
@@ -280,8 +294,11 @@ claims to catch, and three of the mutations were themselves wrong first:
 | import accepts an unknown consent key | **red**, `created: 1` | — |
 | `total` counted before the environment filter | *500, wrong reason* | a true no-op filter, not an untyped parameter |
 | `total` reports the page length | **red**, `total = 1, want 7` | — |
-| export drops its filters | **red**, 235 against 9 | — |
+| export drops its filters | **red**, 235 rows against a screen reporting 9 | — |
+| an unknown campaign answers an empty page | **red**, `200, want 404` | — |
 | the block arithmetic deleted | *green, twice* | both halves populated, then a page-size assertion |
+| the campaigns list back to one read per campaign | **red**, `7 queries, want 1` | — |
+| a dropped ClickHouse handle sits out the backoff | **red**, naming the unearned window | — |
 
 The first `total` mutation produced a `500` from a parameter the planner could
 not type — a red for the wrong reason, which is a green in disguise, and the
@@ -327,11 +344,77 @@ page past the end -> rows 0, total 77 (no wrap)   page=0 -> 422 on all three
 
 ---
 
+## 6a. Two things the load test found, neither of them in your document
+
+We benchmarked the endpoints on the box after deploying, because the endpoint we
+changed reads a store the others do not. It found two defects that predate this
+batch, and both are on screens you ship.
+
+### 6a.1 One failed ClickHouse query took out every log screen for five seconds
+
+Under 128 concurrent readers of `GET /v1/messages`, **908 of 1,024 requests
+returned `500`.**
+
+Not load shedding — the rate limiter answers `429` and did not fire. The
+sequence:
+
+1. One query fails under contention.
+2. The handler drops the shared ClickHouse handle, which is right: a dropped
+   handle is how a restarted ClickHouse gets noticed.
+3. The pool then applies its **dial backoff** to the drop. That backoff exists
+   to stop a connection storm against a server that is *down*; the server was
+   up the whole time.
+4. Worse, the error it reported inside that window was **"clickhouse is not
+   configured"** — because the successful dial before it had cleared the last
+   error, so the branch fell through to the not-configured case.
+
+So a transient error became a five-second total outage of every
+ClickHouse-backed screen, reported to customers as a deployment fault.
+
+**Fixed:** a drop now clears the backoff, and the backoff only applies after a
+dial that actually failed. Guarded both ways — a dropped handle must redial at
+once, and a genuinely failed dial must still back off, or the fix trades an
+outage for a connection storm.
+
+**Worth your knowing** because it changes what a `500` from those endpoints
+means. It was previously possible to see one on a healthy system.
+
+### 6a.2 `GET /v1/campaigns` cost one ClickHouse read per campaign
+
+The counts were correct and the endpoint was still wrong: rendering a page of
+twenty asked the message log twenty separate times.
+
+```
+concurrent readers      16        64       128
+/v1/campaigns        564.7 req/s  6.6     2.2
+/v1/developer/api-keys  631.3     618.7   637.7     <- Postgres only, for scale
+```
+
+A 250× collapse, invisible at one reader. With a pool of sixteen connections,
+128 concurrent readers put 2,560 queries in flight.
+
+**Fixed:** one `GROUP BY campaign_id, status` for the page. The guard counts
+ClickHouse's own `SelectQuery` counter rather than timing anything, so it fails
+on a laptop for the same reason it failed in production — and it asserts the
+counts are still right, because "one query" is otherwise trivially satisfied by
+not querying at all. Under a mutation back to the old shape: *rendering 6
+campaigns issued 7 message-log queries, want 1.*
+
+**No contract change, no shape change.** Same response, same numbers.
+
+---
+
 ## 7. Open
 
 - **§3.1** — declare `createdAt` on `WebhookEndpoint` if you want newest-first
   stated rather than merely true. One field, and we have the value.
 - **§2** — membership timestamps: still ours to cost, now a smaller thing.
+- **§6a.2** — we then looked for the same shape rather than leaving it at "may
+  exist elsewhere". Five other store calls sit inside loops, and none is the
+  same defect: four validate the steps of one journey on a **write**, and one
+  reads a verify service's channels, capped at the five members of `ChannelId`.
+  All Postgres, none per-row on a paged read, none against the log. The
+  campaigns list was the only instance.
 - **WP2** — unchanged, still the thing that decides whether anything leaves the
   building.
 - **The IP allowlist** — still owed, still its own document.

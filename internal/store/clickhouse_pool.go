@@ -59,14 +59,12 @@ func (p *ClickHousePool) Conn(ctx context.Context) (driver.Conn, error) {
 	if p.conn != nil {
 		return p.conn, nil
 	}
-	if time.Since(p.lastTry) < p.retryGap {
+	// The window is only meaningful after a dial that actually failed. Drop
+	// clears lastTry precisely so a stale handle is not mistaken for an outage.
+	if p.lastErr != nil && time.Since(p.lastTry) < p.retryGap {
 		// Still inside the backoff window — report the last real reason rather
-		// than dialling again. A nil lastErr here would return (nil, nil) and
-		// hand the caller a nil connection it would then use.
-		if p.lastErr != nil {
-			return nil, p.lastErr
-		}
-		return nil, errClickHouseNotConfigured
+		// than dialling again.
+		return nil, p.lastErr
 	}
 
 	p.lastTry = time.Now()
@@ -102,6 +100,18 @@ func (p *ClickHousePool) Drop() {
 	if p.conn != nil {
 		_ = p.conn.Close()
 		p.conn = nil
+		// Conn's backoff exists to stop a connection storm against a server
+		// that is DOWN. A drop says the handle is stale, not that the server
+		// is gone, so the next caller must be allowed to redial at once.
+		//
+		// Without this, one failed query took out every ClickHouse-backed
+		// screen for a full retry gap: measured under 128 concurrent readers
+		// of the message log, 908 of 1,024 requests were refused — and refused
+		// as "clickhouse is not configured", because the successful dial
+		// before them had cleared lastErr. A transient error read to customers
+		// as a deployment fault, across the whole product.
+		p.lastTry = time.Time{}
+		p.lastErr = nil
 		if p.logger != nil {
 			p.logger.Warn("clickhouse connection dropped; will redial on next use")
 		}

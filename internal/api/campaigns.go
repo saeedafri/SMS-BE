@@ -20,8 +20,8 @@ import (
 // a counter incremented at send time drifts the moment a delivery report
 // changes a message's state, and then the campaign page and the logs disagree
 // about the same message. Deriving them means they cannot.
-func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
-	campaign store.Campaign) gen.Campaign {
+func (s *Server) toCampaign(campaign store.Campaign,
+	counts store.CampaignCounts) gen.Campaign {
 
 	out := gen.Campaign{
 		Id:                 campaign.ID,
@@ -68,23 +68,57 @@ func (s *Server) toCampaign(ctx context.Context, identity store.Identity,
 	out.PausedAt = campaign.PausedAt
 	out.CancelledAt = campaign.CancelledAt
 
-	// Counts are best-effort: if ClickHouse is unreachable the campaign row
-	// still renders, just without its delivery breakdown. A 500 here would
-	// hide the campaign entirely over a missing number.
-	if clickhouse, err := s.clickhouse(ctx); err == nil {
-		if counts, err := store.CountCampaignMessages(ctx, clickhouse,
-			identity.TenantID, campaign.ID); err == nil {
-			out.Counts = gen.CampaignCounts{
-				Queued: counts.Queued, Sent: counts.Sent,
-				Delivered: counts.Delivered, Failed: counts.Failed,
-				Rejected: counts.Rejected, Read: counts.Read,
-				Cancelled: cancelledCount(campaign, counts),
-			}
-			out.Delivered = counts.Delivered
-			out.Failed = counts.Failed
-		}
+	out.Counts = gen.CampaignCounts{
+		Queued: counts.Queued, Sent: counts.Sent,
+		Delivered: counts.Delivered, Failed: counts.Failed,
+		Rejected: counts.Rejected, Read: counts.Read,
+		Cancelled: cancelledCount(campaign, counts),
 	}
+	out.Delivered = counts.Delivered
+	out.Failed = counts.Failed
 	return out
+}
+
+// campaignResponse renders one campaign, reading its own counts. The list has
+// its own path because a page of twenty must not cost twenty reads.
+func (s *Server) campaignResponse(ctx context.Context, identity store.Identity,
+	campaign store.Campaign) gen.Campaign {
+
+	counts := s.campaignCounts(ctx, identity, []store.Campaign{campaign})
+	return s.toCampaign(campaign, counts[campaign.ID])
+}
+
+// campaignCounts reads the delivery breakdown for a whole page of campaigns.
+//
+// One query for the page rather than one per campaign. Rendering a page of
+// twenty used to cost twenty ClickHouse round trips, which is invisible with
+// one reader and fatal with a hundred: measured on production, /v1/campaigns
+// fell from 565 requests a second at 16 concurrent readers to 2.2 at 128, while
+// the same page over Postgres alone held 630.
+//
+// Best-effort, as before: if ClickHouse is unreachable the campaigns still
+// render, just without their breakdowns. A 500 here would hide every campaign
+// over a missing number.
+func (s *Server) campaignCounts(ctx context.Context, identity store.Identity,
+	campaigns []store.Campaign) map[uuid.UUID]store.CampaignCounts {
+
+	conn, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(campaigns))
+	for _, campaign := range campaigns {
+		ids = append(ids, campaign.ID)
+	}
+	counts, err := store.CountCampaignMessagesForPage(ctx, conn, identity.TenantID, ids)
+	if err != nil {
+		// Dropped so the NEXT request redials rather than reusing a handle to a
+		// server that has gone. Swallowing the error without this is how a
+		// restarted ClickHouse used to need a restart of the API to notice.
+		_ = s.clickhouseFailed(err)
+		return nil
+	}
+	return counts
 }
 
 // cancelledCount is how many of a campaign's recipients never went anywhere.
@@ -137,9 +171,10 @@ func (s *Server) ListCampaigns(ctx context.Context, request gen.ListCampaignsReq
 	if err != nil {
 		return nil, err
 	}
+	counts := s.campaignCounts(ctx, identity, campaigns)
 	out := make([]gen.Campaign, 0, len(campaigns))
 	for _, campaign := range campaigns {
-		out = append(out, s.toCampaign(ctx, identity, campaign))
+		out = append(out, s.toCampaign(campaign, counts[campaign.ID]))
 	}
 	return gen.ListCampaigns200JSONResponse(gen.CampaignPage{
 		Campaigns: out, Total: total,
@@ -158,7 +193,7 @@ func (s *Server) GetCampaign(ctx context.Context, request gen.GetCampaignRequest
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetCampaign200JSONResponse(s.toCampaign(ctx, identity, campaign)), nil
+	return gen.GetCampaign200JSONResponse(s.campaignResponse(ctx, identity, campaign)), nil
 }
 
 // CreateCampaign creates the campaign and launches it.
@@ -315,7 +350,7 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		}
 	}
 
-	return gen.CreateCampaign201JSONResponse(s.toCampaign(ctx, identity, created)), nil
+	return gen.CreateCampaign201JSONResponse(s.campaignResponse(ctx, identity, created)), nil
 }
 
 func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampaignRequestObject) (gen.EstimateCampaignResponseObject, error) {

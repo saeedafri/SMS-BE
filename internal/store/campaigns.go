@@ -425,6 +425,17 @@ type CampaignRecipient struct {
 // the LIST afterwards: contact_list_members records no timestamp, so there is
 // nothing to compare. Recording membership time would close it, and that is a
 // migration rather than a query.
+//
+// One narrower gap, stated because it is reachable rather than theoretical.
+// Fan-out writes a page's message rows and THEN saves the cursor, so a process
+// that dies between the two leaves rows written and no cursor. If that campaign
+// is then cancelled, this reads "no cursor" as "nothing was reached" and counts
+// the whole audience as cancelled — while the message log correctly reports
+// those same contacts as dispatched. They appear in both halves. Separating
+// them needs "has a message row" as a predicate, and the rows are in ClickHouse
+// while the audience is in Postgres, so it cannot be one query. Left as a known
+// limit rather than papered over: the dispatched half stays true either way,
+// which is the half a compliance question asks about.
 // Takes an offset rather than a page number because its caller pages across
 // two blocks and this is the second one. A limit of 0 asks for the total
 // alone — the caller needs it for the envelope even on a page the dispatched

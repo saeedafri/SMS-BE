@@ -4,6 +4,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import requests
 
 
 SCRIPT = Path(__file__).with_name("flipkart_laptop_scraper_exact.py")
@@ -20,6 +23,27 @@ class ScraperImportContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "imported")
+
+    def test_recent_row_cache_avoids_repeating_completed_product_work(self):
+        program = """
+import tempfile
+from pathlib import Path
+from flipkart_scraper.cache import RowCache
+
+with tempfile.TemporaryDirectory() as directory:
+    cache = RowCache(Path(directory) / "rows.json", max_age_hours=1, now=lambda: 1000)
+    cache.put("product-1", {"Product name": "HP Pavilion"})
+    cache.save()
+    restored = RowCache(Path(directory) / "rows.json", max_age_hours=1, now=lambda: 1100)
+    assert restored.get("product-1") == {"Product name": "HP Pavilion"}
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            cwd=SCRIPT.parent,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class ScraperParsingTests(unittest.TestCase):
@@ -200,6 +224,84 @@ class ScraperParsingTests(unittest.TestCase):
             from openpyxl import load_workbook
             sheet = load_workbook(output, read_only=True).active
             self.assertEqual(sheet.max_row, 2)
+
+    def test_403_honours_retry_after_instead_of_retrying_immediately(self):
+        class Response:
+            def __init__(self, status, retry_after=None):
+                self.status_code = status
+                self.headers = {"Retry-After": retry_after} if retry_after else {}
+                self.text = "x" * 10_001
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    error = requests.HTTPError(f"{self.status_code} response")
+                    error.response = self
+                    raise error
+
+        class Session:
+            def __init__(self):
+                self.responses = iter([Response(403, "12"), Response(200)])
+
+            def get(self, *_args, **_kwargs):
+                return next(self.responses)
+
+        waits = []
+        with patch("flipkart_scraper.core._session", return_value=Session()), patch(
+            "flipkart_scraper.core.time.sleep", side_effect=waits.append
+        ):
+            result = self.scraper.fetch("https://example.test", retries=2)
+
+        self.assertEqual(result, "x" * 10_001)
+        self.assertEqual(waits, [12.0])
+
+    def test_scrape_products_reuses_cached_row_without_network_request(self):
+        from flipkart_scraper import core
+        from flipkart_scraper.cache import RowCache
+
+        card = {"url": "https://example.test/product-1", "status": "In Stock"}
+        row = {column: "cached value" for column in core.COLUMNS}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RowCache(Path(directory) / "rows.json", max_age_hours=1)
+            cache.put(card["url"], row)
+            with patch.object(core, "fetch", side_effect=AssertionError("network should not run")):
+                try:
+                    rows = core.scrape_products([card], workers=1, cache=cache)
+                except TypeError as error:
+                    self.fail(f"scrape_products does not support the row cache: {error}")
+
+        self.assertEqual(rows, [row])
+
+    def test_discovery_stops_after_persistent_rate_limit(self):
+        from flipkart_scraper import core
+
+        rate_limit_error = getattr(core, "RateLimitError", RuntimeError)
+        calls = []
+
+        def blocked(url):
+            calls.append(url)
+            raise rate_limit_error("Flipkart is still returning HTTP 403")
+
+        with patch.object(core, "fetch", side_effect=blocked):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                core.discover_products(pages=50, query="laptop", delay=0)
+
+        self.assertEqual(len(calls), 1)
+
+    def test_discovery_reuses_recent_cached_search_page(self):
+        from flipkart_scraper import core
+        from flipkart_scraper.cache import RowCache
+
+        card = {"id": "ABC", "url": "https://example.test/p", "title": "HP", "status": "In Stock", "text": "HP"}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RowCache(Path(directory) / "rows.json", max_age_hours=1)
+            cache.put("search:laptop:1", {"cards": [card]})
+            with patch.object(core, "fetch", side_effect=AssertionError("network should not run")):
+                try:
+                    products = core.discover_products(1, "laptop", 0, cache=cache)
+                except TypeError as error:
+                    self.fail(f"discover_products does not support the search cache: {error}")
+
+        self.assertEqual(products, [card])
 
     @staticmethod
     def spec(label, value):
