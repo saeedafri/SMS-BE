@@ -300,6 +300,11 @@ claims to catch, and three of the mutations were themselves wrong first:
 | the campaigns list back to one read per campaign | **red**, `7 queries, want 1` | — |
 | a dropped ClickHouse handle sits out the backoff | **red**, naming the unearned window | — |
 
+And one fix that passed its own guard and was still wrong: §6a.1's first
+version. A unit test cannot see a cascade that only exists between concurrent
+goroutines sharing a handle. **The benchmark was the check on that check**, and
+the only reason we know is that we re-ran it instead of trusting the green.
+
 The first `total` mutation produced a `500` from a parameter the planner could
 not type — a red for the wrong reason, which is a green in disguise, and the
 second time we have shipped that particular mistake. And one mutation did not
@@ -350,34 +355,51 @@ We benchmarked the endpoints on the box after deploying, because the endpoint we
 changed reads a store the others do not. It found two defects that predate this
 batch, and both are on screens you ship.
 
-### 6a.1 One failed ClickHouse query took out every log screen for five seconds
+### 6a.1 One failed ClickHouse query took out every log screen — and our first fix made it worse
 
 Under 128 concurrent readers of `GET /v1/messages`, **908 of 1,024 requests
-returned `500`.**
+returned `500`.** Not load shedding: the rate limiter answers `429` and never
+fired.
 
-Not load shedding — the rate limiter answers `429` and did not fire. The
-sequence:
+**The first diagnosis was half right, and shipping it is the interesting part.**
 
-1. One query fails under contention.
-2. The handler drops the shared ClickHouse handle, which is right: a dropped
-   handle is how a restarted ClickHouse gets noticed.
-3. The pool then applies its **dial backoff** to the drop. That backoff exists
-   to stop a connection storm against a server that is *down*; the server was
-   up the whole time.
-4. Worse, the error it reported inside that window was **"clickhouse is not
-   configured"** — because the successful dial before it had cleared the last
-   error, so the branch fell through to the not-configured case.
+We found that a failed query dropped the shared ClickHouse handle, and that the
+pool then applied its *dial* backoff to that drop — a backoff that exists to
+stop a connection storm against a server that is *down*, on a server that was up
+throughout. Worse, the error reported inside the window was **"clickhouse is not
+configured"**, because the successful dial before it had cleared the last error.
+So a transient failure read to customers as a deployment fault for five seconds.
 
-So a transient error became a five-second total outage of every
-ClickHouse-backed screen, reported to customers as a deployment fault.
+We fixed that, guarded it both ways, and re-ran the benchmark rather than
+declaring victory. **It was still 926 of 1,024.** The fix was real and the
+diagnosis was incomplete.
 
-**Fixed:** a drop now clears the backoff, and the backoff only applies after a
-dial that actually failed. Guarded both ways — a dropped handle must redial at
-once, and a genuinely failed dial must still back off, or the fix trades an
-outage for a connection storm.
+**The actual cause is that the handle is SHARED.** Dropping it calls `Close()`
+on a connection other goroutines are mid-query on. Those queries fail with
+`connection is closed`, each failure drops the handle again, and the cascade
+sustains itself. The aggregated errors say it plainly:
 
-**Worth your knowing** because it changes what a `500` from those endpoints
-means. It was previously possible to see one on a healthy system.
+```
+477  store: query messages: clickhouse: connection is closed
+441  store: count messages: clickhouse: connection is closed
+149  clickhouse connection dropped; will redial on next use
+149  clickhouse connected
+  8  clickhouse: acquire conn timeout
+```
+
+**149 drops and redials in three minutes, from one initial error.** Removing the
+five-second stall had converted a stall into a loop.
+
+**The real fix is a deletion: a failed query no longer closes the handle at
+all.** Recovery after a ClickHouse restart never needed it — the driver discards
+a connection that errors, and `ConnMaxLifetime` retires every pooled connection
+on a 30-second timer, which is what actually fixed the stuck-after-restart bug
+the drop was written for. The drop was belt-and-braces that turned out to be the
+belt strangling the wearer. The health check no longer drops either: a ping can
+fail from contention on a database that is perfectly alive.
+
+That leaves the **8** genuine `acquire conn timeout` errors, which are a real
+capacity limit rather than a cascade — see §6a.3.
 
 ### 6a.2 `GET /v1/campaigns` cost one ClickHouse read per campaign
 
@@ -400,7 +422,41 @@ counts are still right, because "one query" is otherwise trivially satisfied by
 not querying at all. Under a mutation back to the old shape: *rendering 6
 campaigns issued 7 message-log queries, want 1.*
 
+Measured again after deploying:
+
+```
+concurrent readers      16      64     128
+before               564.7*    6.6     2.2   req/s
+after                 40.7    38.5    39.7
+```
+
+**18× at 128 readers, and flat instead of collapsing** — which is the property
+that matters, because it is the difference between a slow screen and one that
+falls over as more people open it.
+
+`*` The 564.7 is not a figure we get to claim we regressed from, and it is worth
+saying why: that run happened while the ClickHouse handle was dropped, so the
+counts were being skipped entirely and the endpoint was answering from Postgres
+alone. It measured the degraded path. The honest before-and-after is 2.2 → 39.7.
+
 **No contract change, no shape change.** Same response, same numbers.
+
+### 6a.3 What is left, and it is capacity rather than code
+
+`GET /v1/messages` still does about 14 requests a second, and 8 requests in
+1,024 hit a genuine `acquire conn timeout` at 128 concurrent readers.
+
+**The box has two vCPUs.** Every message-log read runs two `FINAL` queries over
+60,000 rows, and `FINAL` merges on read. Timed directly, with the network
+subtracted: 15ms for the count, 21ms for the page. A hundred and twenty-eight of
+those on two cores is a CPU queue, not a bug — and no amount of connection-pool
+tuning moves it, because raising the pool only queues more work at the same two
+cores.
+
+Stating it rather than fixing it, because the fixes are real work and worth
+choosing deliberately: a `campaign_id` skip index or projection, dropping
+`FINAL` in favour of an explicit de-duplication, or more cores. **None of it
+affects the contract**, and none of it is in this batch.
 
 ---
 

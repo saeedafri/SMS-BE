@@ -130,7 +130,10 @@ func (p *ClickHousePool) Healthy(ctx context.Context) bool {
 		return false
 	}
 	if err := conn.Ping(ctx); err != nil {
-		p.Drop()
+		// Reported, not repaired. A ping can fail from contention on a database
+		// that is perfectly alive, and closing the shared handle over it takes
+		// down every query in flight — see clickhouseFailed. ConnMaxLifetime
+		// retires stale connections on its own.
 		return false
 	}
 	return true

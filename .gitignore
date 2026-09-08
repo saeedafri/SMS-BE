@@ -4,4 +4,3 @@
 !.env.example
 /tmp/
 coverage.out
-.flipkart_laptop_cache.json

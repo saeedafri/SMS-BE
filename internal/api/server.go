@@ -141,14 +141,24 @@ func (s *Server) clickhouse(ctx context.Context) (driver.Conn, error) {
 	return conn, nil
 }
 
-// clickhouseFailed is called when a query errors. The driver pools connections
-// internally, so a handle that already believes it is connected will keep
-// handing out dead ones after the server restarts — dropping it here is what
-// makes the NEXT request redial instead of failing forever.
+// clickhouseFailed reports a failed query. It deliberately does NOT close the
+// shared handle any more, and that is the whole point of the function existing
+// as a named place to say so.
+//
+// It used to. The reasoning was that a handle believing itself connected would
+// keep serving dead connections after a ClickHouse restart. Measured under 128
+// concurrent readers of the message log, closing it was far worse than the
+// problem: the handle is shared, so closing it killed every query already in
+// flight on it, each of those reported "connection is closed", each of those
+// closed the handle again. 918 failures and 149 redials in three minutes, from
+// one initial error. The endpoint returned 500 to 90% of its callers on a
+// healthy database.
+//
+// Recovery after a restart needs no help from us. The driver discards a
+// connection that errors, and ConnMaxLifetime (30s, in OpenClickHouse) retires
+// every pooled connection on a timer — which is what actually fixed the
+// stuck-after-restart bug this was written for.
 func (s *Server) clickhouseFailed(err error) error {
-	if err != nil {
-		s.ClickHouse.Drop()
-	}
 	return err
 }
 
