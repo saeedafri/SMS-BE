@@ -167,6 +167,48 @@ func ListUserActivity(ctx context.Context, pool *pgxpool.Pool,
 	return out, total, nil
 }
 
+// StreamUserActivity walks every row matching the filter, in the same order
+// the paged endpoint uses, handing each to fn.
+//
+// No page cap and no slice, for the same reason StreamAuditLog has neither: an
+// export should not hold its own output in memory twice. Identical WHERE and
+// ORDER BY to ListUserActivity, so the file and the screen cannot disagree
+// about what a filter means.
+func StreamUserActivity(ctx context.Context, pool *pgxpool.Pool,
+	filter UserActivityFilter, fn func(UserActivityEntry) error) error {
+
+	var since *time.Time
+	if !filter.Since.IsZero() {
+		since = &filter.Since
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT a.id, a.tenant_id, t.name, a.user_name, a.user_email,
+		       a.event_type, a.detail, a.occurred_at
+		FROM user_activity a
+		JOIN tenants t ON t.id = a.tenant_id
+		WHERE ($1::uuid IS NULL OR a.tenant_id = $1)
+		  AND ($2::text IS NULL OR a.event_type = $2)
+		  AND ($3::timestamptz IS NULL OR a.occurred_at >= $3)
+		ORDER BY a.occurred_at DESC, a.id DESC`,
+		filter.TenantID, filter.EventType, since)
+	if err != nil {
+		return fmt.Errorf("store: stream user activity: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry UserActivityEntry
+		if err := rows.Scan(&entry.ID, &entry.TenantID, &entry.TenantName,
+			&entry.UserName, &entry.UserEmail, &entry.EventType,
+			&entry.Detail, &entry.OccurredAt); err != nil {
+			return fmt.Errorf("store: scan user activity export row: %w", err)
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 // RecordLogin appends a login event, resolving the user's name and email from
 // their row rather than making every caller carry them.
 //

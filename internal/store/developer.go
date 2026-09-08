@@ -58,12 +58,29 @@ func generateSecret(environment string) (secret, prefix string, hash []byte, err
 // is explicitly one or the other. Listing both together — which is what this
 // did before, because the parameter was never read — puts live keys on the
 // test-mode page.
-func ListAPIKeys(ctx context.Context, pool *pgxpool.Pool, id Identity, environment string) ([]APIKey, error) {
+// ListAPIKeys answers one page of a tenant's keys in an environment, with the
+// total for that environment.
+//
+// The environment filter runs in the WHERE of both the count and the page
+// query. A total counted before the filter describes a different set from the
+// rows beside it, which is the whole reason the pager needs the number.
+func ListAPIKeys(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	environment string, page, limit int) ([]APIKey, int, error) {
+
+	limit, offset := pageWindow(page, limit)
 	var out []APIKey
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM api_keys WHERE environment = $1`,
+			environment).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx, `
 			SELECT id, name, environment, scopes, key_prefix, status, last_used_at, created_at
-			FROM api_keys WHERE environment = $1 ORDER BY created_at DESC`, environment)
+			FROM api_keys WHERE environment = $1
+			ORDER BY created_at DESC, id DESC
+			LIMIT $2 OFFSET $3`, environment, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -79,9 +96,9 @@ func ListAPIKeys(ctx context.Context, pool *pgxpool.Pool, id Identity, environme
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list api keys: %w", err)
+		return nil, 0, fmt.Errorf("store: list api keys: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func CreateAPIKey(ctx context.Context, pool *pgxpool.Pool, id Identity,
@@ -208,34 +225,83 @@ type WebhookEndpoint struct {
 // A nil environment means "every environment", which is what the by-id lookups
 // need: an endpoint is addressed by its id alone, and the caller does not know
 // which environment it lives in until it has been read.
-func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, id Identity, environment *string) ([]WebhookEndpoint, error) {
+const webhookColumns = `
+	SELECT id, environment, url, subscribed_events, signing_secret_prefix,
+	       status, created_at
+	FROM webhook_endpoints
+	WHERE ($1::text IS NULL OR environment = $1)`
+
+// ListWebhooks reads every endpoint for a tenant, optionally in one
+// environment.
+//
+// Unpaged, and it stays that way: its caller is the delivery fan-out, which has
+// to reach all of them. A page of subscribers is a subscription list that lies.
+func ListWebhooks(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	environment *string) ([]WebhookEndpoint, error) {
+
 	var out []WebhookEndpoint
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `
-			SELECT id, environment, url, subscribed_events, signing_secret_prefix,
-			       status, created_at
-			FROM webhook_endpoints
-			WHERE ($1::text IS NULL OR environment = $1)
-			ORDER BY created_at DESC`, environment)
+		rows, err := tx.Query(ctx, webhookColumns+`
+			ORDER BY created_at DESC, id DESC`, environment)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var hook WebhookEndpoint
-			if err := rows.Scan(&hook.ID, &hook.Environment, &hook.URL,
-				&hook.SubscribedEvents, &hook.SigningSecretPrefix, &hook.Status,
-				&hook.CreatedAt); err != nil {
-				return err
-			}
-			out = append(out, hook)
-		}
-		return rows.Err()
+		out, err = scanWebhooks(rows)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: list webhooks: %w", err)
 	}
 	return out, nil
+}
+
+// ListWebhookPage answers one page of a tenant's endpoints, with the total for
+// the environment asked for — counted in the same WHERE the rows come from.
+//
+// Ordered created_at DESC rather than by insertion, which was the alternative
+// offered. The column exists on this table and is stable; a bare SELECT has no
+// defined order at all in Postgres and re-orders itself after an update, so
+// "insertion order" would have been the one option that could not be relied on.
+func ListWebhookPage(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	environment *string, page, limit int) ([]WebhookEndpoint, int, error) {
+
+	limit, offset := pageWindow(page, limit)
+	var out []WebhookEndpoint
+	var total int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM webhook_endpoints
+			WHERE ($1::text IS NULL OR environment = $1)`, environment).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, webhookColumns+`
+			ORDER BY created_at DESC, id DESC
+			LIMIT $2 OFFSET $3`, environment, limit, offset)
+		if err != nil {
+			return err
+		}
+		out, err = scanWebhooks(rows)
+		return err
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: list webhook page: %w", err)
+	}
+	return out, total, nil
+}
+
+func scanWebhooks(rows pgx.Rows) ([]WebhookEndpoint, error) {
+	defer rows.Close()
+	var out []WebhookEndpoint
+	for rows.Next() {
+		var hook WebhookEndpoint
+		if err := rows.Scan(&hook.ID, &hook.Environment, &hook.URL,
+			&hook.SubscribedEvents, &hook.SigningSecretPrefix, &hook.Status,
+			&hook.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, hook)
+	}
+	return out, rows.Err()
 }
 
 func CreateWebhook(ctx context.Context, pool *pgxpool.Pool, id Identity,

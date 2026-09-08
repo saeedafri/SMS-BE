@@ -425,3 +425,13 @@ func (s *Server) GetMessage(ctx context.Context, request gen.GetMessageRequestOb
 	}
 	return gen.GetMessage200JSONResponse(messageLogEntry(record)), nil
 }
+
+// limitOr is the requested page size, or 0 for the store's default. Every paged
+// list takes the same optional parameter and none of them wants its own opinion
+// about what a missing one means.
+func limitOr(limit *int) int {
+	if limit == nil {
+		return 0
+	}
+	return *limit
+}

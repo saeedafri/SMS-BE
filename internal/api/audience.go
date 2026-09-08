@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,13 +37,18 @@ func contactListResponse(l store.ContactList) gen.ContactList {
 	}
 }
 
-func (s *Server) ListContactLists(ctx context.Context, _ gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {
+func (s *Server) ListContactLists(ctx context.Context, request gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return gen.ListContactLists401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
-	lists, err := store.ListContactLists(ctx, s.DB, identity)
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListContactLists422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
+	lists, total, err := store.ListContactLists(ctx, s.DB, identity, page, limitOr(request.Params.Limit))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +56,9 @@ func (s *Server) ListContactLists(ctx context.Context, _ gen.ListContactListsReq
 	for _, list := range lists {
 		out = append(out, contactListResponse(list))
 	}
-	return gen.ListContactLists200JSONResponse(out), nil
+	return gen.ListContactLists200JSONResponse(gen.ContactListPage{
+		Lists: out, Total: total,
+	}), nil
 }
 
 func (s *Server) CreateContactList(ctx context.Context, request gen.CreateContactListRequestObject) (gen.CreateContactListResponseObject, error) {
@@ -320,9 +329,11 @@ func (s *Server) ImportContacts(ctx context.Context, request gen.ImportContactsR
 			"Choose an existing list or name a new one.")), nil
 	}
 
-	consent := map[string]string{}
-	for channel, state := range request.Body.ConsentBasis {
-		consent[channel] = string(state)
+	consent, badKey := consentByChannel(request.Body.ConsentBasis)
+	if badKey != "" {
+		return gen.ImportContacts422JSONResponse(errorBody(codeValidation,
+			fmt.Sprintf("%q is not a channel. Consent keys must be one of %s.",
+				badKey, strings.Join(channelIDs(), ", ")))), nil
 	}
 
 	rows := make([]store.ImportRow, 0, len(request.Body.Rows))
@@ -563,4 +574,53 @@ func (s *Server) RemoveSuppression(ctx context.Context, request gen.RemoveSuppre
 	// Removing something already absent is a success: the desired end state
 	// holds either way, and the contract offers no 404 here.
 	return gen.RemoveSuppression204Response{}, nil
+}
+
+// consentByChannel converts the import's consent map to the store's, refusing
+// any key that is not a channel. The offending key is returned rather than an
+// error so the caller can name it; "" means every key was a channel.
+//
+// REFUSED RATHER THAN STORED, and this is the whole point of the function.
+// The audience rule asks for consent by exact channel name — `consent ->> 'SMS'`
+// — so a key of any other spelling can never match it. Stored verbatim it makes
+// a contact who explicitly opted in unreachable for the life of the record,
+// and nothing anywhere says so: the campaign quotes 0 recipients, sends 0, and
+// reports itself sent. Measured on the demo tenant before this was written:
+// 2,560 of 2,564 contacts held an opt-in under the key "sms" and not one of
+// them could be reached.
+//
+// Refused rather than NORMALISED, which was the other option offered. Folding
+// "sms" to "SMS" would repair the one spelling a client happened to use and
+// stay silent on the next, and the client would still believe it had recorded
+// something we had actually rewritten. A key outside the enum is a caller's
+// bug, and the boundary is the only place it is cheap to find.
+//
+// Valid() is generated from the contract, so the day a sixth channel is
+// declared this check accepts it without being edited.
+func consentByChannel(basis map[string]gen.ConsentState) (map[string]string, string) {
+	consent := make(map[string]string, len(basis))
+	// Sorted so a body with two bad keys names the same one every time. Map
+	// order in Go is randomised per iteration, and an error message that moves
+	// between identical requests is one nobody can write a test against.
+	keys := make([]string, 0, len(basis))
+	for channel := range basis {
+		keys = append(keys, channel)
+	}
+	sort.Strings(keys)
+	for _, channel := range keys {
+		if !gen.ChannelId(channel).Valid() {
+			return nil, channel
+		}
+		consent[channel] = string(basis[channel])
+	}
+	return consent, ""
+}
+
+// channelIDs is the enum in a stable order, for the refusal message above.
+func channelIDs() []string {
+	out := []string{string(gen.ChannelIdEMAIL), string(gen.ChannelIdRCS),
+		string(gen.ChannelIdSMS), string(gen.ChannelIdVOICE),
+		string(gen.ChannelIdWHATSAPP)}
+	sort.Strings(out)
+	return out
 }

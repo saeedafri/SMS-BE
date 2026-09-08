@@ -106,3 +106,59 @@ func textOrEmpty(value *string) string {
 	}
 	return *value
 }
+
+type userActivityCSV struct{ csvDownload }
+
+func (r userActivityCSV) VisitExportUserActivityResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
+// ExportUserActivity streams the whole filtered user-activity log as CSV.
+//
+// The audit export's twin, deliberately: same streaming, same disposition, same
+// charset, same ordering as the paged endpoint it mirrors. The columns are
+// every field of UserActivityEntry except the id, in schema order, which is the
+// convention the audit export set and the one the frontend declared against.
+func (s *Server) ExportUserActivity(ctx context.Context, request gen.ExportUserActivityRequestObject) (
+	gen.ExportUserActivityResponseObject, error) {
+
+	if _, err := s.requireOperator(ctx); err != nil {
+		return nil, errUnauthenticated
+	}
+	filter := store.UserActivityFilter{
+		TenantID: request.Params.TenantId,
+		Since:    rangeStart(request.Params.Range),
+	}
+	if request.Params.EventType != nil {
+		value := string(*request.Params.EventType)
+		filter.EventType = &value
+	}
+
+	reader, writer := io.Pipe()
+	go func() {
+		out := csv.NewWriter(writer)
+		err := out.Write([]string{"occurredAt", "tenantId", "tenantName",
+			"userName", "userEmail", "eventType", "detail"})
+		if err == nil {
+			err = store.StreamUserActivity(context.WithoutCancel(ctx), s.operatorPool(), filter,
+				func(entry store.UserActivityEntry) error {
+					return out.Write([]string{
+						entry.OccurredAt.UTC().Format(time.RFC3339),
+						entry.TenantID.String(), entry.TenantName,
+						entry.UserName, entry.UserEmail, entry.EventType, entry.Detail,
+					})
+				})
+		}
+		out.Flush()
+		if err == nil {
+			err = out.Error()
+		}
+		// A half-written file must not look complete.
+		_ = writer.CloseWithError(err)
+	}()
+
+	return userActivityCSV{csvDownload{
+		filename: "user-activity-" + time.Now().UTC().Format("2006-01-02") + ".csv",
+		body:     reader,
+	}}, nil
+}

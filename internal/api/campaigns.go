@@ -480,12 +480,27 @@ func (s *Server) StopSendCoalescer() {
 	}
 }
 
-// ListCampaignRecipients answers which recipients a cancelled campaign never
-// reached — the question counts.cancelled counts but cannot name.
+// ListCampaignRecipients names a campaign's recipients: the ones it reached,
+// the ones a cancellation caught, or both.
 //
-// The message log deliberately holds no rows for them, so this is derived from
-// the audience list and the dispatch cursor. See store.ListCampaignRecipients
-// for what that derivation can and cannot see.
+// THE TWO HALVES COME FROM DIFFERENT PLACES ON PURPOSE, and the reason is the
+// difference between a record and a projection.
+//
+// A dispatched recipient is READ from the message log — the row it became is
+// the evidence it was reached, and nothing that happens afterwards revises it.
+// A cancelled recipient has no row by design, so it is DERIVED from the
+// audience list and the dispatch cursor, and it carries the full audience rule
+// because it answers a counterfactual: who this run would have reached.
+//
+// Deriving both halves the same way was wrong in a way worth recording. The
+// audience rule includes consent, consent is mutable, and the derivation reads
+// it as it stands now — so a contact who opted out after being messaged
+// vanished from the campaign's own account of what it sent, and a campaign that
+// ran before the consent rule existed reported 0 recipients against 2,500
+// message rows. A compliance question is answered by what was sent.
+//
+// The two blocks are contiguous — dispatched first, then cancelled — so
+// `total` is the sum and a walk of every page sees each recipient once.
 func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCampaignRecipientsRequestObject) (
 	gen.ListCampaignRecipientsResponseObject, error) {
 
@@ -498,18 +513,15 @@ func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCam
 		return gen.ListCampaignRecipients422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 0
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
-	}
+	limit := recipientPageSize(request.Params.Limit)
+	offset := (page - 1) * limit
+
 	campaign, err := store.GetCampaign(ctx, s.DB, identity, request.Id)
-	// The contract declares no 404 here, so a campaign that is not this
-	// tenant's answers as an empty page rather than inventing a status code.
-	// Worth declaring one — flagged in the handoff.
+	// A 404 rather than an empty page: "no such campaign" and "a campaign whose
+	// filter matched nobody" are different answers and used to be the same one.
 	if errors.Is(err, store.ErrNotFound) {
-		return gen.ListCampaignRecipients200JSONResponse(gen.CampaignRecipientPage{
-			Recipients: []gen.CampaignRecipient{}, Total: 0,
-		}), nil
+		return gen.ListCampaignRecipients404JSONResponse(errorBody(codeNotFound,
+			"No campaign with that id.")), nil
 	}
 	if err != nil {
 		return nil, err
@@ -518,56 +530,94 @@ func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCam
 	if request.Params.State != nil {
 		state = string(*request.Params.State)
 	}
-	recipients, total, err := store.ListCampaignRecipients(ctx, s.DB, identity,
-		campaign, state, page, limit)
-	if err != nil {
-		return nil, err
+
+	out := []gen.CampaignRecipient{}
+	total := 0
+
+	if state != "cancelled" {
+		rows, dispatchedTotal, err := s.dispatchedRecipients(ctx, identity, campaign, offset, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+		total += dispatchedTotal
+		// The cancelled block starts where the dispatched one ends, so its own
+		// offset is whatever is left of the request after that block, and it is
+		// asked only for the rows this page still has room for. A limit of 0
+		// asks for the total alone, which the envelope needs even on a page the
+		// dispatched half filled completely.
+		offset -= dispatchedTotal
+		limit -= len(rows)
 	}
 
-	// The message id is looked up for THIS PAGE only, so the cost is bounded by
-	// the page size rather than by the campaign. A dispatched recipient points
-	// at the row it became; a cancelled one carries null because there is
-	// nothing to point at.
-	dispatched := map[string]uuid.UUID{}
-	if state != "cancelled" && len(recipients) > 0 {
-		identities := make([]string, 0, len(recipients))
-		for _, recipient := range recipients {
-			identities = append(identities, recipient.Identity)
+	if state != "dispatched" {
+		cancelled, cancelledTotal, err := store.ListCancelledRecipients(ctx, s.DB, identity,
+			campaign, offset, limit)
+		if err != nil {
+			return nil, err
 		}
-		if clickhouse, chErr := s.clickhouse(ctx); chErr == nil {
-			dispatched, _ = store.MessageIDsForRecipients(ctx, clickhouse,
-				identity.TenantID, campaign.ID, identities)
+		for _, recipient := range cancelled {
+			out = append(out, gen.CampaignRecipient{
+				ContactId: recipient.ContactID,
+				Identity:  recipient.Identity,
+				State:     gen.CampaignRecipientStateCancelled,
+			})
 		}
+		total += cancelledTotal
 	}
 
-	out := make([]gen.CampaignRecipient, 0, len(recipients))
-	for _, recipient := range recipients {
-		row := gen.CampaignRecipient{
-			ContactId: recipient.ContactID,
-			Identity:  recipient.Identity,
-			State:     gen.CampaignRecipientStateCancelled,
-		}
-		if messageID, sent := dispatched[recipient.Identity]; sent {
-			row.State = gen.CampaignRecipientStateDispatched
-			id := messageID
-			row.MessageId = &id
-		}
-		out = append(out, row)
-	}
-	// A state filter must return only that state, so anything the message log
-	// disagrees with is dropped rather than mislabelled. That is the residual
-	// of a derivation over a mutable list, and it fails closed.
-	if state != "" {
-		want := gen.CampaignRecipientState(state)
-		kept := out[:0]
-		for _, row := range out {
-			if row.State == want {
-				kept = append(kept, row)
-			}
-		}
-		out = kept
-	}
 	return gen.ListCampaignRecipients200JSONResponse(gen.CampaignRecipientPage{
 		Recipients: out, Total: total,
 	}), nil
+}
+
+// recipientPageSize applies the same bounds the store does, because the caller
+// splits a page across two of them and has to know how wide it is.
+func recipientPageSize(limit *int) int {
+	if limit == nil || *limit <= 0 || *limit > 200 {
+		return 20
+	}
+	return *limit
+}
+
+// dispatchedRecipients reads one page of the message log and puts the contact
+// each address belongs to back on it.
+//
+// A message whose contact has since gone carries a nil contact id rather than
+// being dropped: the send happened, and losing the row would understate what
+// the campaign did on the screen whose job is to say so.
+func (s *Server) dispatchedRecipients(ctx context.Context, identity store.Identity,
+	campaign store.Campaign, offset, limit int) ([]gen.CampaignRecipient, int, error) {
+
+	// No fallback when the log is unreachable. What a campaign dispatched is a
+	// question only the log can answer, and answering it with an empty set
+	// would be a lie the caller cannot detect.
+	conn, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, total, err := store.DispatchedRecipients(ctx, conn, identity.TenantID,
+		campaign.ID, offset, limit)
+	if err != nil {
+		return nil, 0, s.clickhouseFailed(err)
+	}
+	identities := make([]string, 0, len(rows))
+	for _, row := range rows {
+		identities = append(identities, row.Identity)
+	}
+	contactIDs, err := store.ContactIDsForIdentities(ctx, s.DB, identity, identities)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]gen.CampaignRecipient, 0, len(rows))
+	for _, row := range rows {
+		messageID := row.MessageID
+		out = append(out, gen.CampaignRecipient{
+			ContactId: contactIDs[row.Identity],
+			Identity:  row.Identity,
+			State:     gen.CampaignRecipientStateDispatched,
+			MessageId: &messageID,
+		})
+	}
+	return out, total, nil
 }
