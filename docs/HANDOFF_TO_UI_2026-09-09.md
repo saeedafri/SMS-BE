@@ -290,8 +290,40 @@ apply at all, silently, because a shell heredoc ate the backticks in the Go
 source it was editing. **Every mutation in this batch now asserts its own anchor
 matched exactly once before it runs.**
 
-Our own live pass agrees: the two consent-verification campaigns now report
-their real dispatched sets — 4 and 2,500 — where they reported 2 and 0.
+Live, after deploy — the two campaigns you measured, and the endpoints your
+checker does not reach:
+
+```
+                                          message rows   dispatched  cancelled  unfiltered
+Consent verification NEGATIVE 2026-09-08          2500         2500          0        2500
+Consent verification 2026-09-08                      4            4          0           4
+```
+
+**Those are your two numbers, inverted.** You measured 4 rows listing 2
+recipients and 2,500 rows listing 0. Both halves now sum to the whole, and every
+dispatched row carries a real `messageId`.
+
+The consent boundary, against the deployed API:
+
+```
+{"sms": "opted_in"}                  422  "sms" is not a channel. Consent keys must be one of ...
+{"SMS": ..., "sms": ...}             422  refused whole, not partially accepted
+{"TELEGRAM": "opted_in"}             422  named, not silently dropped
+{"SMS": ..., "WHATSAPP": ...}        200  created 1
+```
+
+The user-activity export: `text/csv; charset=utf-8`, `attachment;
+filename="user-activity-2026-09-08.csv"`, your seven columns in your order, and
+**782 data rows against a paged `total` of 782**. An unknown campaign is a `404`
+with `not_found`. And the envelopes, where the environment totals differ and so
+prove the filter ran before the slice:
+
+```
+/v1/developer/api-keys?environment=live&limit=1   total 77  rows 1   (267 bytes, was all 77)
+/v1/developer/api-keys?environment=test&limit=1   total 67  rows 1
+/v1/contact-lists?limit=1                         total  8  rows 1
+page past the end -> rows 0, total 77 (no wrap)   page=0 -> 422 on all three
+```
 
 ---
 
