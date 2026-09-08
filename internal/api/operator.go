@@ -224,9 +224,10 @@ func (s *Server) GetTenants(ctx context.Context, request gen.GetTenantsRequestOb
 	if !ok {
 		return gen.GetTenants422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 0
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetTenants422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 	tenants, total, err := store.ListTenants(ctx, s.operatorPool(), status, country,
 		searchTerm(request.Params.Q), page, limit)
@@ -742,9 +743,12 @@ func (s *Server) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequest
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter.Page = page
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetAuditLog422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	entries, total, err := store.ListAuditLog(ctx, s.DB, filter)
 	if err != nil {
 		return nil, err
@@ -1444,9 +1448,13 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		return gen.GetApprovalQueue422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 100
-	if request.Params.Limit != nil && *request.Params.Limit > 0 {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetApprovalQueue422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 100
 	}
 	offset := (page - 1) * limit
 	if offset > total {
@@ -1582,9 +1590,13 @@ func (s *Server) GetAbuseQueue(ctx context.Context, request gen.GetAbuseQueueReq
 		return gen.GetAbuseQueue422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 20
-	if request.Params.Limit != nil && *request.Params.Limit > 0 {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetAbuseQueue422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 20
 	}
 	tenants, err := store.ListFlaggedTenants(ctx, s.operatorPool())
 	if err != nil {
@@ -1857,9 +1869,12 @@ func (s *Server) GetOperatorSupportTickets(ctx context.Context,
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter.Page = page
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetOperatorSupportTickets422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	tickets, total, err := store.ListAllSupportTickets(ctx, s.operatorPool(), filter)
 	if err != nil {
 		return nil, err
@@ -2221,9 +2236,12 @@ func (s *Server) GetUserActivity(ctx context.Context,
 		eventType := string(*request.Params.EventType)
 		filter.EventType = &eventType
 	}
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetUserActivity422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	page, ok := pageNumber(request.Params.Page)
 	if !ok {
 		return gen.GetUserActivity422JSONResponse(

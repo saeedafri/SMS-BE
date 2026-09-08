@@ -23,11 +23,6 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	// Message logs need ClickHouse. Saying so plainly beats returning an empty
-	// page that reads as "you have never sent anything".
-	if _, err := s.clickhouse(ctx); err != nil {
-		return nil, err
-	}
 
 	// Enum query parameters are validated explicitly. The generated binder
 	// checks TYPES but not enum membership on query params, so an unknown
@@ -65,8 +60,22 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter.Page = page
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListMessages422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	filter.Limit = limit
+
+	// Message logs need ClickHouse. Saying so plainly beats returning an empty
+	// page that reads as "you have never sent anything".
+	//
+	// Checked AFTER the request is validated: a caller that asked for
+	// limit=201 made a mistake it can fix, and telling it the log store is
+	// unreachable instead sends it to look at our infrastructure for its own
+	// typo. Validate the request, then do the work.
+	if _, err := s.clickhouse(ctx); err != nil {
+		return nil, err
 	}
 
 	result, err := s.messagePage(ctx, identity, filter)
@@ -426,12 +435,42 @@ func (s *Server) GetMessage(ctx context.Context, request gen.GetMessageRequestOb
 	return gen.GetMessage200JSONResponse(messageLogEntry(record)), nil
 }
 
-// limitOr is the requested page size, or 0 for the store's default. Every paged
-// list takes the same optional parameter and none of them wants its own opinion
-// about what a missing one means.
-func limitOr(limit *int) int {
+// pageSize reads the optional limit every list takes. Absent means the route's
+// own default, which the store applies; anything outside 1..200 is refused.
+//
+// REFUSED, not clamped and not ignored, and the three behaviours it replaces
+// are the argument for it. This API answered limit=201 three different ways:
+// most routes discarded the value and fell back to their default, /v1/contacts
+// clamped to 200, and /v1/operator/user-activity honoured it outright. A caller
+// could write a correct paging walk against one endpoint and have the identical
+// code silently truncate against another.
+//
+// The fallback is the worst of the three because it returns the FEWEST rows —
+// twenty when five hundred were asked for — which maximises the gap between
+// what a caller believes it holds and what it has. It broke two of the
+// frontend's screens: a whole-collection reader asked for 500, got 20 beside a
+// total of 75, and threw. Clamping is the same mistake more quietly. It is a
+// normalisation, and it leaves a caller paging at 2.5x the stride it thinks it
+// has while reporting success — the argument we made to them about consent
+// keys, pointed back at us.
+//
+// Same shape as pageNumber deliberately: one rule for both halves of a page
+// request is one rule a caller has to learn.
+func pageSize(limit *int) (int, bool) {
 	if limit == nil {
-		return 0
+		return 0, true
 	}
-	return *limit
+	if *limit < 1 || *limit > maxPageSize {
+		return 0, false
+	}
+	return *limit, true
 }
+
+// maxPageSize is the largest page any list will serve, and the number the
+// contract declares. The stores keep their own ceilings as a second line of
+// defence for callers that are not HTTP requests; this is the one a client sees.
+const maxPageSize = 200
+
+// limitOutOfRange is the one message every list gives for a bad page size, so
+// the console can render it without knowing which list it came from.
+const limitOutOfRange = "Limit must be between 1 and 200."

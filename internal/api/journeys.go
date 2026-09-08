@@ -116,9 +116,12 @@ func (s *Server) ListJourneys(ctx context.Context, request gen.ListJourneysReque
 		return gen.ListJourneys422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter := store.JourneyFilter{Page: page, Search: searchTerm(request.Params.Q)}
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListJourneys422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	filter.Status = optionalEnum(request.Params.Status)
 	items, total, err := store.ListJourneys(ctx, s.DB, identity, filter)
 	if err != nil {

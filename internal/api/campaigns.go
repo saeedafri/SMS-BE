@@ -156,9 +156,12 @@ func (s *Server) ListCampaigns(ctx context.Context, request gen.ListCampaignsReq
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter := store.CampaignFilter{Page: page, Search: searchTerm(request.Params.Q)}
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListCampaigns422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	if request.Params.Status != nil {
 		value := string(*request.Params.Status)
 		filter.Status = &value
@@ -418,11 +421,6 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	clickhouse, err := s.clickhouse(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	campaignID := request.Id
 	filter := store.MessageFilter{CampaignID: &campaignID, Limit: 50}
 	page, ok := pageNumber(request.Params.Page)
@@ -431,11 +429,23 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter.Page = page
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListCampaignMessages422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	if request.Params.Status != nil {
 		filter.Statuses = contractStatusToStates(string(*request.Params.Status))
+	}
+
+	// After the request is validated, for the reason ListMessages gives: a
+	// caller that asked for limit=201 made a mistake it can fix, and reporting
+	// an unreachable log store instead sends it to look at our infrastructure
+	// for its own typo.
+	clickhouse, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	records, total, err := store.QueryMessages(ctx, clickhouse, identity.TenantID, filter)
@@ -536,6 +546,9 @@ func (s *Server) StopSendCoalescer() {
 //
 // The two blocks are contiguous — dispatched first, then cancelled — so
 // `total` is the sum and a walk of every page sees each recipient once.
+// defaultRecipientPage is this route's page size when the caller names none.
+const defaultRecipientPage = 20
+
 func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCampaignRecipientsRequestObject) (
 	gen.ListCampaignRecipientsResponseObject, error) {
 
@@ -548,7 +561,16 @@ func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCam
 		return gen.ListCampaignRecipients422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := recipientPageSize(request.Params.Limit)
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListCampaignRecipients422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = defaultRecipientPage
+	}
+	// This handler splits one page across two stores, so it has to know how
+	// wide the page is rather than leaving the default to either of them.
 	offset := (page - 1) * limit
 
 	campaign, err := store.GetCampaign(ctx, s.DB, identity, request.Id)
@@ -604,15 +626,6 @@ func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCam
 	return gen.ListCampaignRecipients200JSONResponse(gen.CampaignRecipientPage{
 		Recipients: out, Total: total,
 	}), nil
-}
-
-// recipientPageSize applies the same bounds the store does, because the caller
-// splits a page across two of them and has to know how wide it is.
-func recipientPageSize(limit *int) int {
-	if limit == nil || *limit <= 0 || *limit > 200 {
-		return 20
-	}
-	return *limit
 }
 
 // dispatchedRecipients reads one page of the message log and puts the contact

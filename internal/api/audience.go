@@ -48,7 +48,12 @@ func (s *Server) ListContactLists(ctx context.Context, request gen.ListContactLi
 		return gen.ListContactLists422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	lists, total, err := store.ListContactLists(ctx, s.DB, identity, page, limitOr(request.Params.Limit))
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListContactLists422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	lists, total, err := store.ListContactLists(ctx, s.DB, identity, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -237,15 +242,18 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 	if !ok {
 		return gen.ListContacts422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 50
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
-		// Bound user input here rather than trusting the store's ceiling: the
-		// store allows larger pages so internal fan-out can batch properly, and
-		// that headroom must not be reachable from a query string.
-		if limit > 200 {
-			limit = 200
-		}
+	// Refused rather than clamped, which is what this used to do. The store
+	// allows larger pages so internal fan-out can batch properly, and that
+	// headroom must not be reachable from a query string — but silently
+	// shrinking the caller's number leaves it paging at a stride it does not
+	// have. See pageSize.
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListContacts422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 50
 	}
 
 	contacts, total, err := store.ListContacts(ctx, s.DB, identity, listID, page, limit)
@@ -459,15 +467,18 @@ func (s *Server) ListSuppressions(ctx context.Context, request gen.ListSuppressi
 	if !ok {
 		return gen.ListSuppressions422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 50
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
-		// Bound user input here rather than trusting the store's ceiling: the
-		// store allows larger pages so internal fan-out can batch properly, and
-		// that headroom must not be reachable from a query string.
-		if limit > 200 {
-			limit = 200
-		}
+	// Refused rather than clamped, which is what this used to do. The store
+	// allows larger pages so internal fan-out can batch properly, and that
+	// headroom must not be reachable from a query string — but silently
+	// shrinking the caller's number leaves it paging at a stride it does not
+	// have. See pageSize.
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListSuppressions422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 50
 	}
 
 	suppressions, total, err := store.ListSuppressions(ctx, s.DB, identity, page, limit)
