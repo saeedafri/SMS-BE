@@ -93,9 +93,12 @@ func (s *Server) ListTemplates(ctx context.Context, request gen.ListTemplatesReq
 		return gen.ListTemplates422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter := store.CatalogueFilter{Page: page, Search: searchTerm(request.Params.Q)}
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListTemplates422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	filter.Status = optionalEnum(request.Params.Status)
 	filter.Channel = optionalEnum(request.Params.Channel)
 	filter.Country = optionalEnum(request.Params.Country)

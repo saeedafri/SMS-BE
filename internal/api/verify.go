@@ -288,9 +288,13 @@ func (s *Server) ListVerificationAttempts(ctx context.Context, request gen.ListV
 		return gen.ListVerificationAttempts422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 50
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListVerificationAttempts422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 50
 	}
 	verifications, total, err := store.ListVerifications(ctx, s.DB, identity, serviceID, page, limit)
 	if err != nil {

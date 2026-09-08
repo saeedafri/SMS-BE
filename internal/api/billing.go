@@ -59,9 +59,13 @@ func (s *Server) ListInvoices(ctx context.Context, request gen.ListInvoicesReque
 	if !ok {
 		return gen.ListInvoices422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 50
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListInvoices422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 50
 	}
 
 	invoices, total, err := store.ListInvoices(ctx, s.DB, identity, page, limit)

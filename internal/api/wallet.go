@@ -82,8 +82,10 @@ func (s *Server) ListLedger(ctx context.Context, request gen.ListLedgerRequestOb
 	if !ok {
 		return gen.ListLedger422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListLedger422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 
 	entries, total, err := store.LedgerPage(ctx, s.DB, identity, currency, page, limit)

@@ -47,6 +47,12 @@ type harness struct {
 	// writes to ClickHouse can clean up there — the warehouse has no foreign
 	// keys and would otherwise keep rows for tenants Postgres has dropped.
 	tenants []uuid.UUID
+	// sampleCampaign, sampleWebhook and sampleVerifyService are ids seeded on
+	// demand for tests that walk templated paths, cached so a walk of every
+	// route seeds one of each rather than one per route.
+	sampleCampaign      string
+	sampleWebhook       string
+	sampleVerifyService string
 	// server is the same value the router dispatches to. Handlers are methods
 	// on the pointer, so a test can swap a dependency in place — a carrier
 	// stub, say — without rebuilding the router or copying this literal again.

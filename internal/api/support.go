@@ -52,9 +52,10 @@ func (s *Server) GetSupportTickets(ctx context.Context, request gen.GetSupportTi
 	if !ok {
 		return gen.GetSupportTickets422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 0
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.GetSupportTickets422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 	tickets, total, err := store.ListSupportTickets(ctx, s.DB, identity,
 		status, category, page, limit)
@@ -204,9 +205,12 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	filter.Page = page
-	if request.Params.Limit != nil {
-		filter.Limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListConversations422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
 	}
+	filter.Limit = limit
 	conversations, total, err := store.ListConversations(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err

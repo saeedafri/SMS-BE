@@ -40,8 +40,13 @@ func (s *Server) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequest
 	if !ok2 {
 		return gen.ListApiKeys422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListApiKeys422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
 	keys, total, err := store.ListAPIKeys(ctx, s.DB, identity,
-		string(request.Params.Environment), page, limitOr(request.Params.Limit))
+		string(request.Params.Environment), page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +222,7 @@ func toWebhook(hook store.WebhookEndpoint) gen.WebhookEndpoint {
 		Url: hook.URL, SubscribedEvents: events,
 		SigningSecretPrefix: hook.SigningSecretPrefix,
 		Status:              gen.WebhookStatus(hook.Status),
+		CreatedAt:           hook.CreatedAt,
 	}
 }
 
@@ -230,8 +236,13 @@ func (s *Server) ListWebhookEndpoints(ctx context.Context, request gen.ListWebho
 		return gen.ListWebhookEndpoints422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
 	}
 	environment := string(request.Params.Environment)
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListWebhookEndpoints422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
 	hooks, total, err := store.ListWebhookPage(ctx, s.DB, identity, &environment,
-		page, limitOr(request.Params.Limit))
+		page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -411,9 +422,13 @@ func (s *Server) ListWebhookEvents(ctx context.Context, request gen.ListWebhookE
 		return gen.ListWebhookEvents422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
-	limit := 50
-	if request.Params.Limit != nil {
-		limit = *request.Params.Limit
+	limit, limitOK := pageSize(request.Params.Limit)
+	if !limitOK {
+		return gen.ListWebhookEvents422JSONResponse(
+			errorBody(codeValidation, limitOutOfRange)), nil
+	}
+	if limit == 0 {
+		limit = 50
 	}
 	hookID, ok3 := parsePathID(request.Id)
 	if !ok3 {
