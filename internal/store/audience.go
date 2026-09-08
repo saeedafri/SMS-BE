@@ -260,7 +260,7 @@ const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
 // Separate from ListContacts, which the API uses and which pages by number.
 // See encodeDispatchCursor for why the send path does not share it.
 func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	listID *uuid.UUID, cursor string, limit int) ([]Contact, string, error) {
+	listID *uuid.UUID, channel, cursor string, limit int) ([]Contact, string, error) {
 
 	if limit <= 0 || limit > maxContactPage {
 		limit = 50
@@ -277,9 +277,10 @@ func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			WHERE ($1::uuid IS NULL OR EXISTS (
 			        SELECT 1 FROM contact_list_members m
 			        WHERE m.contact_id = c.id AND m.list_id = $1))
-			  AND ($2::timestamptz IS NULL OR (c.created_at, c.id) < ($2, $3))
+			  AND ($4::timestamptz IS NULL OR (c.created_at, c.id) < ($4, $5))`+
+			reachableOnChannel+`
 			ORDER BY c.created_at DESC, c.id DESC
-			LIMIT $4`, listID, cursorTime, cursorID, limit+1)
+			LIMIT $6`, listID, channel == "EMAIL", channel, cursorTime, cursorID, limit+1)
 		if err != nil {
 			return err
 		}
@@ -639,6 +640,28 @@ func SuppressedSet(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // list of 1,000 contacts of whom 40 had an email address was priced, approved
 // and launched as 1,000 sends. The customer sees a number they did not agree
 // to and a delivery rate that looks catastrophic.
+// reachableOnChannel is the audience rule: addressable on this channel AND
+// explicitly opted in on it.
+//
+// One fragment rather than three copies because the estimate, the fan-out and
+// the recipients endpoint must agree on who a campaign's audience is. They did
+// not: the estimate counted only opted-in contacts and the fan-out paged the
+// list with no consent predicate at all, so a campaign could quote zero
+// recipients and then send to every one of them. Measured on production before
+// this was written — 2,500 contacts with no SMS consent, a campaign quoting 0,
+// and 2,500 messages dispatched.
+//
+// $1 is the list id, $2 the by-email flag, $3 the channel.
+const reachableOnChannel = `
+	  AND CASE WHEN $2::boolean
+	           THEN c.email IS NOT NULL AND c.email <> ''
+	           ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
+	      END
+	  -- Consent is per channel and stored as a jsonb map. A channel the contact
+	  -- has never answered on is 'unknown', which is not consent: only an
+	  -- explicit opt-in counts.
+	  AND coalesce(c.consent ->> $3, '') = 'opted_in'`
+
 func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	listID *uuid.UUID, channel string) (int, error) {
 
@@ -654,15 +677,7 @@ func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			WHERE ($1::uuid IS NULL OR EXISTS (
 			        SELECT 1 FROM contact_list_members m
 			        WHERE m.contact_id = c.id AND m.list_id = $1))
-			  AND CASE WHEN $2::boolean
-			           THEN c.email IS NOT NULL AND c.email <> ''
-			           ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
-			      END
-			  -- Consent is per channel and stored as a jsonb map. A channel the
-			  -- contact has never answered on is 'unknown', which is not
-			  -- consent: only an explicit opt-in counts.
-			  AND coalesce(c.consent ->> $3, '') = 'opted_in'`,
-			listID, byEmail, channel).Scan(&total)
+			  `+reachableOnChannel, listID, byEmail, channel).Scan(&total)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("store: count reachable contacts: %w", err)

@@ -207,7 +207,7 @@ func (f *fixture) contactCursorAfter(listID uuid.UUID, n int) string {
 	f.t.Helper()
 	listRef := listID
 	_, cursor, err := store.ListContactsAfter(context.Background(), f.service.DB,
-		f.identity, &listRef, "", n)
+		f.identity, &listRef, "SMS", "", n)
 	if err != nil {
 		f.t.Fatalf("list contacts: %v", err)
 	}
