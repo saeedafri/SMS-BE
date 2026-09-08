@@ -160,6 +160,19 @@ exactly once, which is the assertion that would have caught the message-log shor
 
 `make generate` clean against `master@ea7db18` after the three envelope handlers.
 
+**Your checker reads 7/7 against the deployed API**, `list-envelopes` red to green:
+
+```
+PASS  messages-status-partition     all 6 partition 45822 rows
+PASS  campaigns-filters             PASS  abuse-queue-order    PASS  tenants-q
+PASS  tickets-q                     PASS  list-envelopes       PASS  campaigns-envelope
+7/7 satisfied
+```
+
+Plus 18 live assertions on the two endpoints your checker does not cover — the recipients
+join in both directions, and the export's columns, charset, disposition, row count against
+the list's total, and header-only response on a filter matching nothing.
+
 Every decisive assertion mutation-verified: the export dropping its filters (red — 1,392
 rows against a list total of 120), the template list filtering after its slice (red — the
 needle unreachable), and the catalogue pager reaching every row it counts.
@@ -172,7 +185,60 @@ being the most reusable thing in this exchange.
 
 ---
 
-## 7. Open
+## 7. Two things live verification found, one of which is not ours to sit on
+
+Neither is in your document. Both came out of proving §2 against real data rather than
+against a fixture, which is the only reason we know.
+
+### 7.1 `counts.cancelled` and the recipients endpoint CAN disagree, and your assertion will catch it
+
+You called `state=cancelled` total `== counts.cancelled` the decisive assertion. It is, and it
+already fails on one campaign on the demo tenant:
+
+```
+Halt verification 2026-09-05    recipients 500   counts.cancelled 500   recipients endpoint 0
+```
+
+**Both endpoints are correct.** That campaign has no `list_id` and no `send_started_at` — it
+was written straight into SQL as a fixture with `recipients = 500`. `counts.cancelled` is
+`recipients − recorded`, so it reports 500 from a number nothing backs. The recipients
+endpoint derives from the actual list, and there is no list.
+
+The general form matters more than the fixture: **the two numbers come from different
+sources.** `counts.cancelled` reads a stored integer frozen at creation; the recipients
+endpoint reads the list as it is now. They agree when the campaign has a real list that has
+not changed, and they diverge when it does not. Your assertion is the right one to write —
+just expect it to find data like this, and treat a disagreement as "one of these is
+describing something that no longer exists" rather than as a backend bug.
+
+On a real campaign the two agree and the shape holds: we launched a 2,500-recipient campaign
+on production, and `cancelled + dispatched == total` with every dispatched row carrying a real
+`messageId` and every cancelled row carrying `null`.
+
+### 7.2 Campaign fan-out does not check per-channel consent
+
+**This one is ours, it is live, and we are not fixing it without saying so first.**
+
+`EstimateCampaign` counts only contacts who opted in on the channel — `consent ->> 'SMS' =
+'opted_in'`. The fan-out that actually sends does not: `ListContactsAfter` filters on list
+membership and the dispatch cursor, and the gate checks suppression, sender, template,
+balance and addressability. **Consent is not among them.**
+
+Measured, not read: we seeded 2,500 contacts with no `SMS` consent key, created a campaign
+that quoted **0 recipients**, launched it, and it dispatched to all 2,500.
+
+So a campaign can quote zero and send to everyone. The suppression list still stops anyone
+who sent STOP, so this is not "we ignore opt-outs" — it is "we never check opt-in", and for
+an A2P product in India that is the wrong side of the line to be on.
+
+We have not changed it in this batch because it would stop campaigns that send today, and
+that is a decision with a compliance answer rather than an engineering one. Flagging it here
+because you asked us to push back before building and this is the same obligation pointing
+the other way: telling you about something you did not ask about, before it matters.
+
+---
+
+## 8. Open
 
 - **§3** — declare `user-activity/export` and it lands the same day.
 - **§2** — declare the `404`; tell us if you want membership timestamps costed.
