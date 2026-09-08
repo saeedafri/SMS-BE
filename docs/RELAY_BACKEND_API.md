@@ -1,8 +1,8 @@
 # Relay backend — everything the UI team needs
 
 **Base URL:** `https://sms-api.saqibsaeed.cloud`
-**Operations:** 177 across 142 paths
-**Schemas:** 229
+**Operations:** 179 across 144 paths
+**Schemas:** 235
 **Date:** 5 September 2026
 
 Regenerate with `make api-reference`. **Do not hand-edit:** the reference half is
@@ -362,6 +362,7 @@ restricted by IP allowlist.
 | `POST` | [`/v1/campaigns/{id}/cancel`](#post-v1campaignsidcancel) | session | Stop a campaign for good. Recipients not yet dispatched are cancelled and never charged. |
 | `GET` | [`/v1/campaigns/{id}/messages`](#get-v1campaignsidmessages) | session **or** API key (`read:logs`) |  |
 | `POST` | [`/v1/campaigns/{id}/pause`](#post-v1campaignsidpause) | session | Hold a sending campaign. No further recipients are dispatched until it is resumed. |
+| `GET` | [`/v1/campaigns/{id}/recipients`](#get-v1campaignsidrecipients) | session | The recipients of one campaign, and what became of each |
 | `POST` | [`/v1/campaigns/{id}/resume`](#post-v1campaignsidresume) | session | Resume a paused campaign from exactly where it stopped. |
 
 #### Automation & journeys
@@ -498,6 +499,7 @@ restricted by IP allowlist.
 | `GET` | [`/v1/operator/abuse-queue`](#get-v1operatorabuse-queue) | operator session | Tenants flagged for abuse review, NEWEST FLAG FIRST (flaggedAt descending). The ordering is part of the contra |
 | `GET` | [`/v1/operator/approvals`](#get-v1operatorapprovals) | operator session |  |
 | `GET` | [`/v1/operator/audit-log`](#get-v1operatoraudit-log) | operator session |  |
+| `GET` | [`/v1/operator/audit-log/export`](#get-v1operatoraudit-logexport) | operator session | The whole filtered audit log as CSV |
 | `GET` | [`/v1/operator/connections`](#get-v1operatorconnections) | operator session | List operator SMPP connections |
 | `POST` | [`/v1/operator/connections`](#post-v1operatorconnections) | operator session | Add an operator SMPP connection |
 | `GET` | [`/v1/operator/connections/{id}`](#get-v1operatorconnectionsid) | operator session |  |
@@ -1217,6 +1219,29 @@ Hold a sending campaign. No further recipients are dispatched until it is resume
 | `409` | [`Error`](#error) — The campaign is not sending, so there is nothing to hold. |
 
 
+#### <a id="get-v1campaignsidrecipients"></a>`GET /v1/campaigns/{id}/recipients`
+
+Answers which recipients were cancelled, which `counts.cancelled` cannot -- it reports how many and never which. Derivable from the audience list and `dispatch_cursor`; needs no new storage.
+
+**Auth:** session
+
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `id` | path | `string(uuid)` | **yes** |
+| `state` | query | [`CampaignRecipientState`](#campaignrecipientstate) | no |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
+**Responses**
+
+| Status | Body |
+| --- | --- |
+| `200` | [`CampaignRecipientPage`](#campaignrecipientpage) — One page of recipients, with the total matching the filter |
+| `422` | [`Error`](#error) — Page number below 1 |
+
+
 #### <a id="post-v1campaignsidresume"></a>`POST /v1/campaigns/{id}/resume`
 
 Resume a paused campaign from exactly where it stopped.
@@ -1245,12 +1270,22 @@ Resume a paused campaign from exactly where it stopped.
 
 **Auth:** session **or** API key (`read:logs`)
 
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `status` | query | [`JourneyStatus`](#journeystatus) | no |
+| `q` | query | `string` | no |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
 **Responses**
 
 | Status | Body |
 | --- | --- |
-| `200` | [`Journey`](#journey)[] — Journeys |
+| `200` | [`JourneyPage`](#journeypage) — Journeys |
 | `401` | [`Error`](#error) — Unauthenticated |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1automationjourneys"></a>`POST /v1/automation/journeys`
@@ -1709,11 +1744,23 @@ Feature names are the Google RBM vocabulary and are passed through from the carr
 
 **Auth:** session **or** API key (`read:messages`)
 
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `channel` | query | [`ChannelId`](#channelid) | no |
+| `status` | query | [`ApprovalStatus`](#approvalstatus) | no |
+| `country` | query | [`CountryCode`](#countrycode) | no |
+| `q` | query | `string` | no |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
 **Responses**
 
 | Status | Body |
 | --- | --- |
-| `200` | [`SenderId`](#senderid)[] — Registered sender identities for the tenant |
+| `200` | [`SenderIdPage`](#senderidpage) — Registered sender identities for the tenant |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1sender-ids"></a>`POST /v1/sender-ids`
@@ -1863,11 +1910,23 @@ Removes a sender permanently. Refused while any template, campaign (either as th
 
 **Auth:** session **or** API key (`read:messages`)
 
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `channel` | query | [`ChannelId`](#channelid) | no |
+| `status` | query | [`ApprovalStatus`](#approvalstatus) | no |
+| `country` | query | [`CountryCode`](#countrycode) | no |
+| `q` | query | `string` | no |
+| `page` | query | `integer` | no |
+| `limit` | query | `integer` | no |
+
 **Responses**
 
 | Status | Body |
 | --- | --- |
-| `200` | [`Template`](#template)[] — Templates for the tenant |
+| `200` | [`TemplatePage`](#templatepage) — Templates for the tenant |
+| `422` | [`Error`](#error) — Page number below 1 |
 
 
 #### <a id="post-v1templates"></a>`POST /v1/templates`
@@ -3173,6 +3232,27 @@ Tenants flagged for abuse review, NEWEST FLAG FIRST (flaggedAt descending). The 
 | `200` | [`AuditLogPage`](#auditlogpage) — Operator-performed mutating actions, newest first |
 | `401` | [`Error`](#error) — Missing or invalid operator bearer token |
 | `422` | [`Error`](#error) — Page number below 1 |
+
+
+#### <a id="get-v1operatoraudit-logexport"></a>`GET /v1/operator/audit-log/export`
+
+The same three filters as the paged endpoint, meaning the same things, with no page cap -- so an export cannot silently disagree with the screen that launched it. Ordered by occurredAt DESC then id DESC, matching the paged endpoint. Columns, in order: occurredAt, actor, action, tenantId, tenantName, targetLabel, detail.
+
+**Auth:** operator session
+
+**Parameters**
+
+| Name | In | Type | Required |
+| --- | --- | --- | --- |
+| `tenantId` | query | `string(uuid)` | no |
+| `action` | query | [`AuditAction`](#auditaction) | no |
+| `range` | query | [`AnalyticsRange`](#analyticsrange) | no |
+
+**Responses**
+
+| Status | Body |
+| --- | --- |
+| `200` | _no body_ — The filtered log as CSV. A filter matching nothing is a header row and no data rows. |
 
 
 #### <a id="get-v1operatorconnections"></a>`GET /v1/operator/connections`
@@ -4557,6 +4637,28 @@ One of: `transmitter`, `receiver`, `transceiver`
 | `campaigns` | [`Campaign`](#campaign)[] | **yes** |
 | `total` | `integer` | **yes** |
 
+### <a id="campaignrecipient"></a>`CampaignRecipient`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `contactId` | `string(uuid)` | **yes** |
+| `identity` | `string` | **yes** |
+| `state` | [`CampaignRecipientState`](#campaignrecipientstate) | **yes** |
+| `messageId` | `string(uuid)` \| `null` | no |
+
+### <a id="campaignrecipientpage"></a>`CampaignRecipientPage`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `recipients` | [`CampaignRecipient`](#campaignrecipient)[] | **yes** |
+| `total` | `integer` | **yes** |
+
+### <a id="campaignrecipientstate"></a>`CampaignRecipientState`
+
+`dispatched` became a message row; `cancelled` sat at or past the dispatch cursor when the campaign was cancelled and was never sent. A cancelled recipient deliberately has NO message row -- MessageStatus carries no `cancelled` member for exactly this reason.
+
+One of: `dispatched`, `cancelled`
+
 ### <a id="campaignstatus"></a>`CampaignStatus`
 
 One of: `scheduled`, `queued`, `sending`, `paused`, `sent`, `failed`, `cancelled`
@@ -4936,6 +5038,13 @@ Type: [`Journey`](#journey) & `object`
 | `exitedSuppressed` | `integer` | **yes** |
 | `totalEnrolled` | `integer` | **yes** |
 
+### <a id="journeypage"></a>`JourneyPage`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `journeys` | [`Journey`](#journey)[] | **yes** |
+| `total` | `integer` | **yes** |
+
 ### <a id="journeystatus"></a>`JourneyStatus`
 
 One of: `draft`, `active`, `paused`, `archived`
@@ -5162,7 +5271,7 @@ One of: `recipient_suppressed`, `registered_template_required`, `template_body_m
 
 ### <a id="messagestatus"></a>`MessageStatus`
 
-One of: `queued`, `sent`, `delivered`, `failed`, `read`, `cancelled`, `rejected`
+One of: `queued`, `sent`, `delivered`, `failed`, `read`, `rejected`
 
 ### <a id="mfachallenge"></a>`MfaChallenge`
 
@@ -5600,6 +5709,13 @@ One of: `active`, `disabled`
 | `voiceVerification` | [`VoiceVerification`](#voiceverification) \| `null` | no |
 | `createdAt` | `string(date-time)` | **yes** |
 
+### <a id="senderidpage"></a>`SenderIdPage`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `senderIds` | [`SenderId`](#senderid)[] | **yes** |
+| `total` | `integer` | **yes** |
+
 ### <a id="session"></a>`Session`
 
 | Field | Type | Required |
@@ -5748,6 +5864,13 @@ One of: `owner`, `admin`, `member`
 ### <a id="templatecategory"></a>`TemplateCategory`
 
 One of: `MARKETING`, `UTILITY`, `AUTHENTICATION`, `TRANSACTIONAL`
+
+### <a id="templatepage"></a>`TemplatePage`
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `templates` | [`Template`](#template)[] | **yes** |
+| `total` | `integer` | **yes** |
 
 ### <a id="tenant"></a>`Tenant`
 

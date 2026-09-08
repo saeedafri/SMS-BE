@@ -91,20 +91,31 @@ func senderResponse(s store.SenderID) gen.SenderId {
 	return sender
 }
 
-func (s *Server) ListSenderIds(ctx context.Context, _ gen.ListSenderIdsRequestObject) (gen.ListSenderIdsResponseObject, error) {
+func (s *Server) ListSenderIds(ctx context.Context, request gen.ListSenderIdsRequestObject) (gen.ListSenderIdsResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	senders, err := store.ListSenderIDs(ctx, s.DB, identity)
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListSenderIds422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
+	}
+	filter := store.CatalogueFilter{Page: page, Search: searchTerm(request.Params.Q)}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	filter.Status = optionalEnum(request.Params.Status)
+	filter.Channel = optionalEnum(request.Params.Channel)
+	filter.Country = optionalEnum(request.Params.Country)
+	items, total, err := store.ListSenderIDs(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]gen.SenderId, 0, len(senders))
-	for _, sender := range senders {
-		out = append(out, senderResponse(sender))
+	out := make([]gen.SenderId, 0, len(items))
+	for _, item := range items {
+		out = append(out, senderResponse(item))
 	}
-	return gen.ListSenderIds200JSONResponse(out), nil
+	return gen.ListSenderIds200JSONResponse(gen.SenderIdPage{SenderIds: out, Total: total}), nil
 }
 
 func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdRequestObject) (gen.CreateSenderIdResponseObject, error) {

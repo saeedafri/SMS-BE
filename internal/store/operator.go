@@ -1342,3 +1342,38 @@ func SelectRouteForCarrier(ctx context.Context, pool *pgxpool.Pool,
 	}
 	return route, nil
 }
+
+// StreamAuditLog walks every row matching the filter, in the same order the
+// paged endpoint uses, handing each to fn.
+//
+// No page cap, and no slice: an export of 45,000 rows should not exist in
+// memory twice — once here and once in the CSV buffer — and the caller writes
+// each row out as it arrives. Identical WHERE and ORDER BY to ListAuditLog, so
+// the file and the screen cannot disagree about what the filter means.
+func StreamAuditLog(ctx context.Context, pool *pgxpool.Pool, filter AuditLogFilter,
+	fn func(AuditEntry) error) error {
+
+	rows, err := pool.Query(ctx, `
+		SELECT id, occurred_at, actor, action, tenant_id, tenant_name, target_label, detail
+		FROM operator_audit_log
+		WHERE ($1::uuid IS NULL OR tenant_id = $1)
+		  AND ($2::text IS NULL OR action    = $2)
+		  AND occurred_at >= $3
+		ORDER BY occurred_at DESC, id DESC`,
+		filter.TenantID, filter.Action, filter.Since)
+	if err != nil {
+		return fmt.Errorf("store: stream audit log: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry AuditEntry
+		if err := rows.Scan(&entry.ID, &entry.OccurredAt, &entry.Actor, &entry.Action,
+			&entry.TenantID, &entry.TenantName, &entry.TargetLabel, &entry.Detail); err != nil {
+			return fmt.Errorf("store: scan audit export row: %w", err)
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}

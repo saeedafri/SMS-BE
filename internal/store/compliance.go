@@ -115,11 +115,35 @@ func scanSender(row pgx.Row) (SenderID, error) {
 	return s, err
 }
 
-func ListSenderIDs(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]SenderID, error) {
+func ListSenderIDs(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	filter CatalogueFilter) ([]SenderID, int, error) {
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	offset := pageOffset(filter.Page, limit)
+	// Searched across header and display name, because an operator looking for
+	// "Acme" may be thinking of either.
+	const where = `
+		WHERE ($1::text IS NULL OR channel = $1)
+		  AND ($2::text IS NULL OR status  = $2)
+		  AND ($3::text IS NULL OR country = $3)
+		  AND ($4::text IS NULL OR header ILIKE '%' || $4 || '%'
+		                        OR coalesce(display_name,'') ILIKE '%' || $4 || '%')`
+
 	var out []SenderID
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM sender_ids`+where,
+			filter.Channel, filter.Status, filter.Country, filter.Search).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
-			`SELECT `+senderColumns+` FROM sender_ids ORDER BY created_at DESC`)
+			`SELECT `+senderColumns+` FROM sender_ids`+where+`
+			 ORDER BY created_at DESC, id DESC
+			 LIMIT $5 OFFSET $6`,
+			filter.Channel, filter.Status, filter.Country, filter.Search, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -141,9 +165,9 @@ func ListSenderIDs(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Send
 		return LoadSenderDNSRecords(ctx, tx, out)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list sender ids: %w", err)
+		return nil, 0, fmt.Errorf("store: list sender ids: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func GetSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, senderID uuid.UUID) (SenderID, error) {
@@ -342,11 +366,46 @@ func scanTemplate(row pgx.Row) (Template, error) {
 	return t, err
 }
 
-func ListTemplates(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Template, error) {
+// CatalogueFilter narrows a template or sender-id list before it is paged.
+//
+// Shared by both because they filter on the same four things. Filtering in the
+// WHERE rather than over the returned page is the whole point: a search that
+// only sees the current page is worse than none, because it looks like it works.
+type CatalogueFilter struct {
+	Channel *string
+	Status  *string
+	Country *string
+	Search  *string
+	Page    int
+	Limit   int
+}
+
+func ListTemplates(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	filter CatalogueFilter) ([]Template, int, error) {
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	offset := pageOffset(filter.Page, limit)
+	const where = `
+		WHERE ($1::text IS NULL OR channel = $1)
+		  AND ($2::text IS NULL OR status  = $2)
+		  AND ($3::text IS NULL OR country = $3)
+		  AND ($4::text IS NULL OR name ILIKE '%' || $4 || '%')`
+
 	var out []Template
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM templates`+where,
+			filter.Channel, filter.Status, filter.Country, filter.Search).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
-			`SELECT `+templateColumns+` FROM templates ORDER BY created_at DESC`)
+			`SELECT `+templateColumns+` FROM templates`+where+`
+			 ORDER BY created_at DESC, id DESC
+			 LIMIT $5 OFFSET $6`,
+			filter.Channel, filter.Status, filter.Country, filter.Search, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -361,9 +420,9 @@ func ListTemplates(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Temp
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list templates: %w", err)
+		return nil, 0, fmt.Errorf("store: list templates: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func GetTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templateID uuid.UUID) (Template, error) {

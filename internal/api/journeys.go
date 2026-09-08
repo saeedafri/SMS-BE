@@ -106,20 +106,29 @@ func (s *Server) journeyCounts(ctx context.Context, identity store.Identity,
 	return completed, exitedSuppressed
 }
 
-func (s *Server) ListJourneys(ctx context.Context, _ gen.ListJourneysRequestObject) (gen.ListJourneysResponseObject, error) {
+func (s *Server) ListJourneys(ctx context.Context, request gen.ListJourneysRequestObject) (gen.ListJourneysResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	journeys, err := store.ListJourneys(ctx, s.DB, identity)
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListJourneys422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
+	}
+	filter := store.JourneyFilter{Page: page, Search: searchTerm(request.Params.Q)}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	filter.Status = optionalEnum(request.Params.Status)
+	items, total, err := store.ListJourneys(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]gen.Journey, 0, len(journeys))
-	for _, journey := range journeys {
-		out = append(out, s.toJourney(ctx, identity, journey))
+	out := make([]gen.Journey, 0, len(items))
+	for _, item := range items {
+		out = append(out, s.toJourney(ctx, identity, item))
 	}
-	return gen.ListJourneys200JSONResponse(out), nil
+	return gen.ListJourneys200JSONResponse(gen.JourneyPage{Journeys: out, Total: total}), nil
 }
 
 func (s *Server) GetJourney(ctx context.Context, request gen.GetJourneyRequestObject) (gen.GetJourneyResponseObject, error) {

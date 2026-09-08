@@ -466,3 +466,42 @@ func FindMessageByCarrierRef(ctx context.Context, conn driver.Conn,
 	}
 	return tenantID, messageID, nil
 }
+
+// MessageIDsForRecipients maps each identity to the message it became on this
+// campaign, for the identities on one page.
+//
+// Bounded by the page rather than by the campaign on purpose: the alternative
+// is loading every message id a 100,000-recipient campaign produced in order to
+// annotate twenty rows.
+func MessageIDsForRecipients(ctx context.Context, conn driver.Conn,
+	tenantID, campaignID uuid.UUID, identities []string) (map[string]uuid.UUID, error) {
+
+	out := map[string]uuid.UUID{}
+	if len(identities) == 0 {
+		return out, nil
+	}
+	rows, err := conn.Query(ctx, `
+		SELECT id, msisdn, coalesce(email, '')
+		FROM messages FINAL
+		WHERE tenant_id = ? AND campaign_id = ?
+		  AND (msisdn IN (?) OR email IN (?))`,
+		tenantID, campaignID, identities, identities)
+	if err != nil {
+		return nil, fmt.Errorf("store: message ids for recipients: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var msisdn, email string
+		if err := rows.Scan(&id, &msisdn, &email); err != nil {
+			return nil, fmt.Errorf("store: scan recipient message: %w", err)
+		}
+		if msisdn != "" {
+			out[msisdn] = id
+		}
+		if email != "" {
+			out[email] = id
+		}
+	}
+	return out, rows.Err()
+}

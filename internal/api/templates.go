@@ -83,20 +83,31 @@ func templateResponse(t store.Template) gen.Template {
 	return template
 }
 
-func (s *Server) ListTemplates(ctx context.Context, _ gen.ListTemplatesRequestObject) (gen.ListTemplatesResponseObject, error) {
+func (s *Server) ListTemplates(ctx context.Context, request gen.ListTemplatesRequestObject) (gen.ListTemplatesResponseObject, error) {
 	identity, ok := identityFrom(ctx)
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	templates, err := store.ListTemplates(ctx, s.DB, identity)
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListTemplates422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
+	}
+	filter := store.CatalogueFilter{Page: page, Search: searchTerm(request.Params.Q)}
+	if request.Params.Limit != nil {
+		filter.Limit = *request.Params.Limit
+	}
+	filter.Status = optionalEnum(request.Params.Status)
+	filter.Channel = optionalEnum(request.Params.Channel)
+	filter.Country = optionalEnum(request.Params.Country)
+	items, total, err := store.ListTemplates(ctx, s.DB, identity, filter)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]gen.Template, 0, len(templates))
-	for _, template := range templates {
-		out = append(out, templateResponse(template))
+	out := make([]gen.Template, 0, len(items))
+	for _, item := range items {
+		out = append(out, templateResponse(item))
 	}
-	return gen.ListTemplates200JSONResponse(out), nil
+	return gen.ListTemplates200JSONResponse(gen.TemplatePage{Templates: out, Total: total}), nil
 }
 
 func (s *Server) GetTemplate(ctx context.Context, request gen.GetTemplateRequestObject) (gen.GetTemplateResponseObject, error) {
