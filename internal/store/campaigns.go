@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -386,3 +387,125 @@ func CampaignStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	}
 	return status, nil
 }
+
+// CampaignRecipient is one member of a campaign's audience and what became of
+// it.
+type CampaignRecipient struct {
+	ContactID  uuid.UUID
+	Identity   string
+	Dispatched bool
+}
+
+// ListCampaignRecipients answers which recipients a campaign reached and which
+// a cancellation caught, by position in the audience list relative to
+// dispatch_cursor.
+//
+// Derived rather than stored, deliberately: fan-out writes a message row when
+// it reaches a recipient, so a campaign cancelled at 30,000 of 100,000 has
+// 30,000 rows and the other 70,000 have none. Writing rows to say "this did not
+// happen" would make cancelling a large campaign an expensive write at exactly
+// the moment someone is trying to stop it.
+//
+// TWO LIMITS, because this is a derivation and not a record.
+//
+// The list is mutable and the cursor is a position in it, so a list edited
+// after the run changes the answer retroactively. Contacts created after the
+// campaign started are excluded here — the walk is newest-first, so without
+// that guard a contact added last week would sort into the already-dispatched
+// region and be reported as reached, with no message row to show for it.
+//
+// What cannot be excluded is a contact that existed before the run and joined
+// the LIST afterwards: contact_list_members records no timestamp, so there is
+// nothing to compare. Such a recipient is classified by its creation date,
+// which is arbitrary relative to this campaign. Recording membership time is
+// what would close it, and that is a migration rather than a query.
+func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaign Campaign, state string, page, limit int) ([]CampaignRecipient, int, error) {
+
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	offset := pageOffset(page, limit)
+	if campaign.ListID == nil {
+		return nil, 0, nil
+	}
+
+	cursorTime, cursorID, err := decodeDispatchCursor(campaign.DispatchCursor)
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: campaign recipients: %w", err)
+	}
+	// Only a cancelled campaign has recipients it never reached. Anything else
+	// dispatched its whole list, whatever the cursor happens to say.
+	cancelledRun := campaign.Status == "cancelled"
+
+	// The audience as it stood for this run. send_started_at is null for a
+	// campaign cancelled before it began, in which case nothing was dispatched
+	// and every member is cancelled.
+	ranAt := campaign.SendStartedAt
+	where := `
+		FROM contacts c
+		WHERE EXISTS (SELECT 1 FROM contact_list_members m
+		              WHERE m.contact_id = c.id AND m.list_id = $1)
+		  AND ($2::timestamptz IS NULL OR c.created_at <= $2)`
+	args := []any{*campaign.ListID, ranAt}
+
+	// Fan-out walks created_at DESC, id DESC and saves the cursor after each
+	// page, so everything strictly older than the cursor is what it never
+	// reached. The same comparison the pager itself uses, so the two cannot
+	// disagree about where the halt fell.
+	const olderThanCursor = ` AND ($3::timestamptz IS NOT NULL
+		AND (c.created_at, c.id) < ($3, $4))`
+	const cursorOrNewer = ` AND ($3::timestamptz IS NULL
+		OR (c.created_at, c.id) >= ($3, $4))`
+
+	switch {
+	case state == "cancelled" && !cancelledRun:
+		return []CampaignRecipient{}, 0, nil
+	case state == "cancelled" && cursorTime == nil:
+		// Cancelled before the first page: the whole list is untouched.
+	case state == "cancelled":
+		where += olderThanCursor
+		args = append(args, cursorTime, cursorID)
+	case state == "dispatched" && cancelledRun && cursorTime == nil:
+		return []CampaignRecipient{}, 0, nil
+	case state == "dispatched" && cancelledRun:
+		where += cursorOrNewer
+		args = append(args, cursorTime, cursorID)
+	}
+
+	var out []CampaignRecipient
+	var total int
+	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) `+where, args...).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx,
+			`SELECT c.id, c.msisdn, coalesce(c.email, '') `+where+`
+			 ORDER BY c.created_at DESC, c.id DESC
+			 LIMIT $`+itoa(len(args)+1)+` OFFSET $`+itoa(len(args)+2),
+			append(args, limit, offset)...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var recipient CampaignRecipient
+			var email string
+			if err := rows.Scan(&recipient.ContactID, &recipient.Identity, &email); err != nil {
+				return err
+			}
+			// Email campaigns address the mailbox; everything else the number.
+			if campaign.Channel == "EMAIL" && email != "" {
+				recipient.Identity = email
+			}
+			out = append(out, recipient)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: campaign recipients: %w", err)
+	}
+	return out, total, nil
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }

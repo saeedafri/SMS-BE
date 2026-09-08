@@ -479,3 +479,95 @@ func (s *Server) StopSendCoalescer() {
 		s.Sends.Stop()
 	}
 }
+
+// ListCampaignRecipients answers which recipients a cancelled campaign never
+// reached — the question counts.cancelled counts but cannot name.
+//
+// The message log deliberately holds no rows for them, so this is derived from
+// the audience list and the dispatch cursor. See store.ListCampaignRecipients
+// for what that derivation can and cannot see.
+func (s *Server) ListCampaignRecipients(ctx context.Context, request gen.ListCampaignRecipientsRequestObject) (
+	gen.ListCampaignRecipientsResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListCampaignRecipients422JSONResponse(
+			errorBody(codeValidation, pageTooLow)), nil
+	}
+	limit := 0
+	if request.Params.Limit != nil {
+		limit = *request.Params.Limit
+	}
+	campaign, err := store.GetCampaign(ctx, s.DB, identity, request.Id)
+	// The contract declares no 404 here, so a campaign that is not this
+	// tenant's answers as an empty page rather than inventing a status code.
+	// Worth declaring one — flagged in the handoff.
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.ListCampaignRecipients200JSONResponse(gen.CampaignRecipientPage{
+			Recipients: []gen.CampaignRecipient{}, Total: 0,
+		}), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	state := ""
+	if request.Params.State != nil {
+		state = string(*request.Params.State)
+	}
+	recipients, total, err := store.ListCampaignRecipients(ctx, s.DB, identity,
+		campaign, state, page, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// The message id is looked up for THIS PAGE only, so the cost is bounded by
+	// the page size rather than by the campaign. A dispatched recipient points
+	// at the row it became; a cancelled one carries null because there is
+	// nothing to point at.
+	dispatched := map[string]uuid.UUID{}
+	if state != "cancelled" && len(recipients) > 0 {
+		identities := make([]string, 0, len(recipients))
+		for _, recipient := range recipients {
+			identities = append(identities, recipient.Identity)
+		}
+		if clickhouse, chErr := s.clickhouse(ctx); chErr == nil {
+			dispatched, _ = store.MessageIDsForRecipients(ctx, clickhouse,
+				identity.TenantID, campaign.ID, identities)
+		}
+	}
+
+	out := make([]gen.CampaignRecipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		row := gen.CampaignRecipient{
+			ContactId: recipient.ContactID,
+			Identity:  recipient.Identity,
+			State:     gen.CampaignRecipientStateCancelled,
+		}
+		if messageID, sent := dispatched[recipient.Identity]; sent {
+			row.State = gen.CampaignRecipientStateDispatched
+			id := messageID
+			row.MessageId = &id
+		}
+		out = append(out, row)
+	}
+	// A state filter must return only that state, so anything the message log
+	// disagrees with is dropped rather than mislabelled. That is the residual
+	// of a derivation over a mutable list, and it fails closed.
+	if state != "" {
+		want := gen.CampaignRecipientState(state)
+		kept := out[:0]
+		for _, row := range out {
+			if row.State == want {
+				kept = append(kept, row)
+			}
+		}
+		out = kept
+	}
+	return gen.ListCampaignRecipients200JSONResponse(gen.CampaignRecipientPage{
+		Recipients: out, Total: total,
+	}), nil
+}

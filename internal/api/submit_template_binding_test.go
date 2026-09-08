@@ -258,13 +258,16 @@ func TestATemplatesDltIdentifiersRoundTripThroughTheApi(t *testing.T) {
 	if list.Code != http.StatusOK {
 		t.Fatalf("list templates = %d\n%s", list.Code, list.Body)
 	}
-	var templates []struct {
-		ID             string  `json:"id"`
-		RegistrationID *string `json:"registrationId"`
-		DltCategory    *string `json:"dltCategory"`
+	var page struct {
+		Templates []struct {
+			ID             string  `json:"id"`
+			RegistrationID *string `json:"registrationId"`
+			DltCategory    *string `json:"dltCategory"`
+		} `json:"templates"`
+		Total int `json:"total"`
 	}
-	list.decode(t, &templates)
-	for _, row := range templates {
+	list.decode(t, &page)
+	for _, row := range page.Templates {
 		if row.ID != template.ID {
 			continue
 		}

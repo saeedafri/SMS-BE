@@ -38,11 +38,39 @@ func scanJourney(row pgx.Row) (Journey, error) {
 	return journey, err
 }
 
-func ListJourneys(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Journey, error) {
+// JourneyFilter has no channel or country on purpose: a journey has neither.
+// Its steps carry channels, and filtering a journey by one of its steps' would
+// mean something nobody has defined.
+type JourneyFilter struct {
+	Status *string
+	Search *string
+	Page   int
+	Limit  int
+}
+
+func ListJourneys(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	filter JourneyFilter) ([]Journey, int, error) {
+
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	offset := pageOffset(filter.Page, limit)
+	const where = `
+		WHERE ($1::text IS NULL OR status = $1)
+		  AND ($2::text IS NULL OR name ILIKE '%' || $2 || '%')`
+
 	var out []Journey
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM journeys`+where,
+			filter.Status, filter.Search).Scan(&total); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
-			`SELECT `+journeyColumns+` FROM journeys ORDER BY created_at DESC, id DESC`)
+			`SELECT `+journeyColumns+` FROM journeys`+where+`
+			 ORDER BY created_at DESC, id DESC
+			 LIMIT $3 OFFSET $4`, filter.Status, filter.Search, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -57,9 +85,9 @@ func ListJourneys(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]Journ
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list journeys: %w", err)
+		return nil, 0, fmt.Errorf("store: list journeys: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func GetJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,

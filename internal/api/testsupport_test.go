@@ -225,8 +225,9 @@ func (h *harness) trackTenant(email string) {
 }
 
 type response struct {
-	Code int
-	Body []byte
+	Code   int
+	Body   []byte
+	Header http.Header
 }
 
 func (r response) decode(t *testing.T, into any) {
@@ -276,7 +277,7 @@ func (h *harness) do(method, path, token string, body any) response {
 
 	rec := httptest.NewRecorder()
 	h.router.ServeHTTP(rec, req)
-	return response{Code: rec.Code, Body: rec.Body.Bytes()}
+	return response{Code: rec.Code, Body: rec.Body.Bytes(), Header: rec.Header()}
 }
 
 func mustParseTime(t *testing.T, value string) time.Time {
@@ -403,7 +404,7 @@ func (h *harness) doWithHeaders(method, path, token string, body any,
 	}
 	rec := httptest.NewRecorder()
 	h.router.ServeHTTP(rec, req)
-	return response{Code: rec.Code, Body: rec.Body.Bytes()}
+	return response{Code: rec.Code, Body: rec.Body.Bytes(), Header: rec.Header()}
 }
 
 // operatorToken signs in as platform staff.

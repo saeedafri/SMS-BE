@@ -168,6 +168,10 @@ func (Unimplemented) PauseCampaign(ctx context.Context, request gen.PauseCampaig
 	return nil, errNotImplemented("PauseCampaign")
 }
 
+func (Unimplemented) ListCampaignRecipients(ctx context.Context, request gen.ListCampaignRecipientsRequestObject) (gen.ListCampaignRecipientsResponseObject, error) {
+	return nil, errNotImplemented("ListCampaignRecipients")
+}
+
 func (Unimplemented) ResumeCampaign(ctx context.Context, request gen.ResumeCampaignRequestObject) (gen.ResumeCampaignResponseObject, error) {
 	return nil, errNotImplemented("ResumeCampaign")
 }
@@ -334,6 +338,10 @@ func (Unimplemented) GetApprovalQueue(ctx context.Context, request gen.GetApprov
 
 func (Unimplemented) GetAuditLog(ctx context.Context, request gen.GetAuditLogRequestObject) (gen.GetAuditLogResponseObject, error) {
 	return nil, errNotImplemented("GetAuditLog")
+}
+
+func (Unimplemented) ExportAuditLog(ctx context.Context, request gen.ExportAuditLogRequestObject) (gen.ExportAuditLogResponseObject, error) {
+	return nil, errNotImplemented("ExportAuditLog")
 }
 
 func (Unimplemented) GetConnections(ctx context.Context, request gen.GetConnectionsRequestObject) (gen.GetConnectionsResponseObject, error) {

@@ -130,12 +130,11 @@ func contractStatusToStates(status string) []string {
 		}
 	case "rejected":
 		return []string{string(messaging.StateRejected)}
-	// read and cancelled are declared in MessageStatus and carried by no row.
-	// Read receipts are not implemented — a DeliveryReport has no read concept
-	// — and a cancelled campaign deliberately writes no row for a recipient it
-	// never dispatched. Both therefore match nothing, which is an empty page
-	// with an honest total rather than a filter that silently does not apply.
-	case "read", "cancelled":
+	// read is declared and carried by no row: read receipts are not built, so a
+	// DeliveryReport has nowhere to put one. It matches nothing, which is an
+	// empty page rather than a filter that silently does not apply. (cancelled
+	// was the other one, and is no longer a MessageStatus member at all.)
+	case "read":
 		return []string{}
 	default:
 		return []string{}
@@ -299,6 +298,16 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 		}
 	}
 	return gen.SendMessage202JSONResponse(out), nil
+}
+
+// optionalEnum copies an optional generated enum parameter into a *string the
+// store can bind. Nil stays nil, which every filter reads as "no filter".
+func optionalEnum[T ~string](value *T) *string {
+	if value == nil {
+		return nil
+	}
+	copied := string(*value)
+	return &copied
 }
 
 // searchTerm normalises the free-text q every searchable list takes.

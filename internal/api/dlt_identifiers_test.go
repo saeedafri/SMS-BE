@@ -46,13 +46,15 @@ func TestASuppliedDltIdSurvivesApprovalByteForByte(t *testing.T) {
 	}
 
 	after := h.do(http.MethodGet, "/v1/sender-ids", acct.Token, nil)
-	var list []struct {
-		ID             string  `json:"id"`
-		Status         string  `json:"status"`
-		RegistrationID *string `json:"registrationId"`
+	var page struct {
+		SenderIds []struct {
+			ID             string  `json:"id"`
+			Status         string  `json:"status"`
+			RegistrationID *string `json:"registrationId"`
+		} `json:"senderIds"`
 	}
-	after.decode(t, &list)
-	for _, row := range list {
+	after.decode(t, &page)
+	for _, row := range page.SenderIds {
 		if row.ID != sender.ID {
 			continue
 		}
@@ -94,12 +96,14 @@ func TestApprovalNeverInventsADltId(t *testing.T) {
 	}
 
 	after := h.do(http.MethodGet, "/v1/sender-ids", acct.Token, nil)
-	var list []struct {
-		ID             string  `json:"id"`
-		RegistrationID *string `json:"registrationId"`
+	var page struct {
+		SenderIds []struct {
+			ID             string  `json:"id"`
+			RegistrationID *string `json:"registrationId"`
+		} `json:"senderIds"`
 	}
-	after.decode(t, &list)
-	for _, row := range list {
+	after.decode(t, &page)
+	for _, row := range page.SenderIds {
 		if row.ID != sender.ID {
 			continue
 		}

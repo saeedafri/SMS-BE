@@ -109,9 +109,9 @@ func TestSenderEndpointsRespectRoleAndTenant(t *testing.T) {
 
 	t.Run("another tenant's list does not contain it", func(t *testing.T) {
 		res := h.do(http.MethodGet, "/v1/sender-ids", other.Token, nil)
-		var senders []gen.SenderId
-		res.decode(t, &senders)
-		for _, s := range senders {
+		var page gen.SenderIdPage
+		res.decode(t, &page)
+		for _, s := range page.SenderIds {
 			if s.Id == sender.Id {
 				t.Fatal("another tenant's sender appeared in the list")
 			}
@@ -120,10 +120,10 @@ func TestSenderEndpointsRespectRoleAndTenant(t *testing.T) {
 
 	t.Run("owner sees it in their own list", func(t *testing.T) {
 		res := h.do(http.MethodGet, "/v1/sender-ids", owner.Token, nil)
-		var senders []gen.SenderId
-		res.decode(t, &senders)
+		var page gen.SenderIdPage
+		res.decode(t, &page)
 		found := false
-		for _, s := range senders {
+		for _, s := range page.SenderIds {
 			if s.Id == sender.Id {
 				found = true
 			}

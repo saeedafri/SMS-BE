@@ -149,9 +149,9 @@ func TestTemplateListAndGetAreTenantScoped(t *testing.T) {
 	}
 
 	res := h.do(http.MethodGet, "/v1/templates", other.Token, nil)
-	var templates []gen.Template
-	res.decode(t, &templates)
-	for _, item := range templates {
+	var page gen.TemplatePage
+	res.decode(t, &page)
+	for _, item := range page.Templates {
 		if item.Id == template.Id {
 			t.Fatal("another tenant's template appeared in the list")
 		}

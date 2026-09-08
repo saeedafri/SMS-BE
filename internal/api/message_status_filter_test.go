@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Every declared status filters, and the seven together account for the whole
+// Every declared status filters, and the six together account for the whole
 // log exactly once.
 //
 // Two assertions, because either alone passes while the filter is broken.
@@ -93,8 +93,10 @@ func TestEveryMessageStatusFilterPartitionsTheLog(t *testing.T) {
 		"delivered": seeded["delivered"],
 		"failed":    seeded["undelivered"] + seeded["carrier_rejected"] + seeded["expired"],
 		"rejected":  seeded["rejected"],
-		"read":      0,
-		"cancelled": 0,
+		// read is declared and carried by no row: read receipts are not
+		// implemented, so a DeliveryReport has nowhere to put one. It must
+		// answer an empty page rather than the collection.
+		"read": 0,
 	}
 
 	sum := 0
@@ -120,9 +122,9 @@ func TestEveryMessageStatusFilterPartitionsTheLog(t *testing.T) {
 		sum += p.Total
 	}
 
-	// Partition: the seven cover the log exactly once between them.
+	// Partition: the six cover the log exactly once between them.
 	if sum != unfiltered {
-		t.Errorf("the seven status filters sum to %d, the unfiltered log is %d — "+
+		t.Errorf("the six status filters sum to %d, the unfiltered log is %d — "+
 			"%d rows are reachable by no filter at all", sum, unfiltered, unfiltered-sum)
 	}
 }
