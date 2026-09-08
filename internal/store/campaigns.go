@@ -449,17 +449,20 @@ func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity
 		FROM contacts c
 		WHERE EXISTS (SELECT 1 FROM contact_list_members m
 		              WHERE m.contact_id = c.id AND m.list_id = $1)
-		  AND ($6::timestamptz IS NULL OR c.created_at <= $6)` + reachableOnChannel
-	args := []any{*campaign.ListID, campaign.Channel == "EMAIL", campaign.Channel, nil, nil, ranAt}
+		  AND ($4::timestamptz IS NULL OR c.created_at <= $4)` + reachableOnChannel
+	args := []any{*campaign.ListID, campaign.Channel == "EMAIL", campaign.Channel, ranAt}
 
 	// Fan-out walks created_at DESC, id DESC and saves the cursor after each
 	// page, so everything strictly older than the cursor is what it never
 	// reached. The same comparison the pager itself uses, so the two cannot
 	// disagree about where the halt fell.
-	const olderThanCursor = ` AND ($4::timestamptz IS NOT NULL
-		AND (c.created_at, c.id) < ($4, $5))`
-	const cursorOrNewer = ` AND ($4::timestamptz IS NULL
-		OR (c.created_at, c.id) >= ($4, $5))`
+	// Appended only when a cursor branch applies, so every placeholder the
+	// query names is one the args slice supplies. An unreferenced parameter has
+	// no type for the planner to infer and fails at execution, not at compile.
+	const olderThanCursor = ` AND ($5::timestamptz IS NOT NULL
+		AND (c.created_at, c.id) < ($5, $6))`
+	const cursorOrNewer = ` AND ($5::timestamptz IS NULL
+		OR (c.created_at, c.id) >= ($5, $6))`
 
 	switch {
 	case state == "cancelled" && !cancelledRun:
@@ -468,12 +471,12 @@ func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity
 		// Cancelled before the first page: the whole list is untouched.
 	case state == "cancelled":
 		where += olderThanCursor
-		args[3], args[4] = cursorTime, cursorID
+		args = append(args, cursorTime, cursorID)
 	case state == "dispatched" && cancelledRun && cursorTime == nil:
 		return []CampaignRecipient{}, 0, nil
 	case state == "dispatched" && cancelledRun:
 		where += cursorOrNewer
-		args[3], args[4] = cursorTime, cursorID
+		args = append(args, cursorTime, cursorID)
 	}
 
 	var out []CampaignRecipient
