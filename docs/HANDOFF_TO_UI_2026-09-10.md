@@ -210,7 +210,39 @@ ask 25: it is the last *scheduled* thing.
 `make generate` clean against `master@f2d1122`, and **silent**, which §1 explains
 is the finding rather than the reassurance.
 
-**Your checker reads 9/9 against the deployed API**, `limit-bounds` red to green.
+**Your checker reads 8/9, and the one failure is the checker.** `limit-bounds`
+is green. `list-envelopes` — which passed yesterday — now fails, and it fails
+because it asks for `limit=500`:
+
+```
+scripts/check-backend-asks.cjs:325   `${path}?limit=500&${facet}=...`
+scripts/check-backend-asks.cjs:348   `${path}?limit=500&q=zzz-nothing-matches-this`
+```
+
+**Your two checks contradict each other.** `limit-bounds` requires a `422` above
+200; `list-envelopes` sends 500 and expects a `200`. Both cannot pass, and the
+one that has to change is the older one — §3 of your own document says you moved
+`WHOLE_COLLECTION` from 500 to 200 for exactly this reason, and this script was
+missed.
+
+Verified it is only the number: at `limit=200` all three routes answer their
+envelope normally, and with no `limit` at all they answer 2, 6 and 3 rows
+respectively — nowhere near needing 500.
+
+We have not touched your repo. Two edits, `500` → `200`, and it reads 9/9.
+
+**Live, all twenty-four routes, four probes each — 96/96.** One past the
+maximum, one below the minimum, and both boundary values, with the refusal
+required to name the parameter:
+
+```
+24 routes  ->  96/96 probes passing
+```
+
+And the six defaults you measured, re-measured after the change, all unmoved:
+`/v1/campaigns` 20, `/v1/messages` 50, `/v1/wallet/ledger` 50, `/v1/contacts`
+50, `/v1/operator/user-activity` 100. `createdAt` is a real timestamp on every
+webhook row and the order is newest-first.
 
 Live, after deploy — every one of the twenty-four routes probed at four points:
 one past the maximum, one below the minimum, and both boundary values, which is
