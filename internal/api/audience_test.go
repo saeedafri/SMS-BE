@@ -307,10 +307,13 @@ func TestAudienceIsTenantScoped(t *testing.T) {
 	}
 
 	lists := h.do(http.MethodGet, "/v1/contact-lists", other.Token, nil)
-	var visible []gen.ContactList
+	var visible gen.ContactListPage
 	lists.decode(t, &visible)
-	if len(visible) != 0 {
-		t.Fatalf("another tenant sees %d lists, want 0", len(visible))
+	// Both halves of the envelope, because the count and the page query are
+	// separate SQL and only one of them was ever the tenant boundary.
+	if len(visible.Lists) != 0 || visible.Total != 0 {
+		t.Fatalf("another tenant sees %d lists and a total of %d, want 0 and 0",
+			len(visible.Lists), visible.Total)
 	}
 
 	contacts := h.do(http.MethodGet, "/v1/contacts", other.Token, nil)

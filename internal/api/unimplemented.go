@@ -532,6 +532,10 @@ func (Unimplemented) GetUserActivity(ctx context.Context, request gen.GetUserAct
 	return nil, errNotImplemented("GetUserActivity")
 }
 
+func (Unimplemented) ExportUserActivity(ctx context.Context, request gen.ExportUserActivityRequestObject) (gen.ExportUserActivityResponseObject, error) {
+	return nil, errNotImplemented("ExportUserActivity")
+}
+
 func (Unimplemented) ListPricing(ctx context.Context, request gen.ListPricingRequestObject) (gen.ListPricingResponseObject, error) {
 	return nil, errNotImplemented("ListPricing")
 }

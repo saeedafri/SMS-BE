@@ -267,6 +267,16 @@ func decodeDispatchCursor(cursor string) (*time.Time, *uuid.UUID, error) {
 // deeper page.
 //
 // The caller has already clamped limit, because the cap differs per list.
+// pageWindow is the LIMIT and OFFSET for a 1-based page number, with the
+// default and cap every paged list in this package shares. Page numbers below 1
+// are refused at the API edge, so anything reaching here is already valid.
+func pageWindow(page, limit int) (int, int) {
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	return limit, pageOffset(page, limit)
+}
+
 func pageOffset(page, limit int) int {
 	if page < 2 {
 		return 0

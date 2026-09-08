@@ -215,28 +215,40 @@ On a real campaign the two agree and the shape holds: we launched a 2,500-recipi
 on production, and `cancelled + dispatched == total` with every dispatched row carrying a real
 `messageId` and every cancelled row carrying `null`.
 
-### 7.2 Campaign fan-out does not check per-channel consent
+### 7.2 Campaign fan-out did not check per-channel consent — FIXED, `15e1917`
 
-**This one is ours, it is live, and we are not fixing it without saying so first.**
+> **Amended 8 September, after this document was sent.** This section was
+> written as an open defect we were not going to fix without asking. We fixed it
+> twenty-five minutes later, in `15e1917`, and the section stayed as written —
+> so for a day it read as a live compliance hole on an India A2P product. The
+> frontend caught it. **The defect below is closed**; the account of it is kept
+> because the measurement is worth having and because a document that quietly
+> edits its own history is worse than one that shows the correction.
 
-`EstimateCampaign` counts only contacts who opted in on the channel — `consent ->> 'SMS' =
-'opted_in'`. The fan-out that actually sends does not: `ListContactsAfter` filters on list
-membership and the dispatch cursor, and the gate checks suppression, sender, template,
-balance and addressability. **Consent is not among them.**
+**What was wrong.** `EstimateCampaign` counted only contacts who opted in on the
+channel — `consent ->> 'SMS' = 'opted_in'`. The fan-out that actually sends did
+not: `ListContactsAfter` filtered on list membership and the dispatch cursor,
+and the gate checked suppression, sender, template, balance and addressability.
+**Consent was not among them.**
 
-Measured, not read: we seeded 2,500 contacts with no `SMS` consent key, created a campaign
-that quoted **0 recipients**, launched it, and it dispatched to all 2,500.
+Measured, not read: we seeded 2,500 contacts with no `SMS` consent key, created
+a campaign that quoted **0 recipients**, launched it, and it dispatched to all
+2,500. A campaign could quote zero and send to everyone.
 
-So a campaign can quote zero and send to everyone. The suppression list still stops anyone
-who sent STOP, so this is not "we ignore opt-outs" — it is "we never check opt-in", and for
-an A2P product in India that is the wrong side of the line to be on.
+**What fixed it.** One SQL fragment, `reachableOnChannel`, now shared by the
+estimate, the fan-out and the recipients endpoint — the three that have to agree
+about who a campaign's audience is, and which had three different answers.
+Verified on production afterwards: that same list quotes 0 and sends to 0, and a
+mixed list quotes 2 and sends exactly 2, where it had sent 4.
 
-We have not changed it in this batch because it would stop campaigns that send today, and
-that is a decision with a compliance answer rather than an engineering one. Flagging it here
-because you asked us to push back before building and this is the same obligation pointing
-the other way: telling you about something you did not ask about, before it matters.
-
----
+**Two things it cost, both worth recording.** It introduced a `500` on
+`/v1/campaigns/{id}/recipients` — the reshaped query named two placeholders it
+did not supply — which the full suite missed because every campaign in it had no
+list and returned before building any SQL. Fixed in `de2f306`. And putting the
+audience rule into that endpoint's `WHERE` put it upstream of where `state` is
+decided, so the endpoint began omitting recipients that demonstrably received a
+message. That is the frontend's ask 28, and it is fixed in the 9 September
+batch.
 
 ## 8. Open
 

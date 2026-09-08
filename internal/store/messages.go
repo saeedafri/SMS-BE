@@ -467,41 +467,71 @@ func FindMessageByCarrierRef(ctx context.Context, conn driver.Conn,
 	return tenantID, messageID, nil
 }
 
-// MessageIDsForRecipients maps each identity to the message it became on this
-// campaign, for the identities on one page.
+// DispatchedRecipients reads one page of the recipients a campaign actually
+// reached, newest first, with the message each became.
 //
-// Bounded by the page rather than by the campaign on purpose: the alternative
-// is loading every message id a 100,000-recipient campaign produced in order to
-// annotate twenty rows.
-func MessageIDsForRecipients(ctx context.Context, conn driver.Conn,
-	tenantID, campaignID uuid.UUID, identities []string) (map[string]uuid.UUID, error) {
+// READ, NOT DERIVED, and that is the whole difference between this and
+// ListCancelledRecipients. A message row for this campaign IS the record that
+// this address was reached; there is no better evidence and nothing to
+// reconstruct it from. The audience list is mutable, consent is mutable, and
+// the dispatch cursor is a position in a list that may since have changed —
+// none of which can revise what was sent. Deriving this half from the audience
+// meant a contact who opted out AFTER receiving a message disappeared from the
+// campaign's own account of what it did, permanently, and a campaign that ran
+// before the consent rule existed reported 0 recipients against 2,500 rows.
+//
+// total counts the whole campaign rather than the page, so a caller paging
+// through knows how many rows are behind the twenty it was given.
+func DispatchedRecipients(ctx context.Context, conn driver.Conn,
+	tenantID, campaignID uuid.UUID, offset, limit int) ([]DispatchedRecipient, int, error) {
 
-	out := map[string]uuid.UUID{}
-	if len(identities) == 0 {
-		return out, nil
+	if limit <= 0 || limit > 200 {
+		limit = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var total uint64
+	if err := conn.QueryRow(ctx, `
+		SELECT count() FROM messages FINAL
+		WHERE tenant_id = ? AND campaign_id = ?`,
+		tenantID, campaignID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("store: count dispatched recipients: %w", err)
+	}
+
 	rows, err := conn.Query(ctx, `
 		SELECT id, msisdn, coalesce(email, '')
 		FROM messages FINAL
 		WHERE tenant_id = ? AND campaign_id = ?
-		  AND (msisdn IN (?) OR email IN (?))`,
-		tenantID, campaignID, identities, identities)
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`, tenantID, campaignID, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("store: message ids for recipients: %w", err)
+		return nil, 0, fmt.Errorf("store: dispatched recipients: %w", err)
 	}
 	defer rows.Close()
+
+	out := []DispatchedRecipient{}
 	for rows.Next() {
-		var id uuid.UUID
+		var recipient DispatchedRecipient
 		var msisdn, email string
-		if err := rows.Scan(&id, &msisdn, &email); err != nil {
-			return nil, fmt.Errorf("store: scan recipient message: %w", err)
+		if err := rows.Scan(&recipient.MessageID, &msisdn, &email); err != nil {
+			return nil, 0, fmt.Errorf("store: scan dispatched recipient: %w", err)
 		}
-		if msisdn != "" {
-			out[msisdn] = id
-		}
+		// An email campaign addresses the mailbox; everything else the number.
+		recipient.Identity = msisdn
 		if email != "" {
-			out[email] = id
+			recipient.Identity = email
 		}
+		out = append(out, recipient)
 	}
-	return out, rows.Err()
+	return out, int(total), rows.Err()
+}
+
+// DispatchedRecipient is one address a campaign reached and the message it
+// became. The contact id is filled in separately, from Postgres, because the
+// message log stores the address rather than a foreign key.
+type DispatchedRecipient struct {
+	Identity  string
+	MessageID uuid.UUID
 }

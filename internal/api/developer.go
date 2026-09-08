@@ -36,7 +36,12 @@ func (s *Server) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequest
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	keys, err := store.ListAPIKeys(ctx, s.DB, identity, string(request.Params.Environment))
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListApiKeys422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
+	}
+	keys, total, err := store.ListAPIKeys(ctx, s.DB, identity,
+		string(request.Params.Environment), page, limitOr(request.Params.Limit))
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +49,7 @@ func (s *Server) ListApiKeys(ctx context.Context, request gen.ListApiKeysRequest
 	for _, key := range keys {
 		out = append(out, toAPIKey(key))
 	}
-	return gen.ListApiKeys200JSONResponse(out), nil
+	return gen.ListApiKeys200JSONResponse(gen.ApiKeyPage{Keys: out, Total: total}), nil
 }
 
 // CreateApiKey mints a key. The secret is in this response and nowhere else,
@@ -220,8 +225,13 @@ func (s *Server) ListWebhookEndpoints(ctx context.Context, request gen.ListWebho
 	if !ok {
 		return nil, errUnauthenticated
 	}
+	page, ok2 := pageNumber(request.Params.Page)
+	if !ok2 {
+		return gen.ListWebhookEndpoints422JSONResponse(errorBody(codeValidation, pageTooLow)), nil
+	}
 	environment := string(request.Params.Environment)
-	hooks, err := store.ListWebhooks(ctx, s.DB, identity, &environment)
+	hooks, total, err := store.ListWebhookPage(ctx, s.DB, identity, &environment,
+		page, limitOr(request.Params.Limit))
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +239,9 @@ func (s *Server) ListWebhookEndpoints(ctx context.Context, request gen.ListWebho
 	for _, hook := range hooks {
 		out = append(out, toWebhook(hook))
 	}
-	return gen.ListWebhookEndpoints200JSONResponse(out), nil
+	return gen.ListWebhookEndpoints200JSONResponse(gen.WebhookEndpointPage{
+		Webhooks: out, Total: total,
+	}), nil
 }
 
 func (s *Server) GetWebhookEndpoint(ctx context.Context, request gen.GetWebhookEndpointRequestObject) (gen.GetWebhookEndpointResponseObject, error) {

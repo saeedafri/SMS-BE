@@ -92,10 +92,21 @@ func scanList(row pgx.Row) (ContactList, error) {
 	return list, nil
 }
 
-func ListContactLists(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]ContactList, error) {
+// ListContactLists answers one page of a tenant's lists, with the total across
+// every page.
+func ListContactLists(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	page, limit int) ([]ContactList, int, error) {
+
+	limit, offset := pageWindow(page, limit)
 	var out []ContactList
+	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, listWithCounts+` ORDER BY l.created_at DESC`)
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM contact_lists`).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, listWithCounts+`
+			ORDER BY l.created_at DESC, l.id DESC
+			LIMIT $1 OFFSET $2`, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -110,9 +121,9 @@ func ListContactLists(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]C
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: list contact lists: %w", err)
+		return nil, 0, fmt.Errorf("store: list contact lists: %w", err)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func GetContactList(ctx context.Context, pool *pgxpool.Pool, id Identity, listID uuid.UUID) (ContactList, error) {
@@ -683,4 +694,48 @@ func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		return 0, fmt.Errorf("store: count reachable contacts: %w", err)
 	}
 	return total, nil
+}
+
+// ContactIDsForIdentities maps each address to the contact that holds it, for
+// the identities on one page.
+//
+// The message log stores the address a campaign sent to rather than a contact
+// id, so this is what turns a dispatched message back into the contact the
+// screen links to. Bounded by the page rather than by the campaign: the
+// alternative is loading every contact a 100,000-recipient campaign touched in
+// order to annotate twenty rows.
+func ContactIDsForIdentities(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	identities []string) (map[string]uuid.UUID, error) {
+
+	out := map[string]uuid.UUID{}
+	if len(identities) == 0 {
+		return out, nil
+	}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, msisdn, coalesce(email, '') FROM contacts
+			WHERE msisdn = ANY($1) OR email = ANY($1)`, identities)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var contactID uuid.UUID
+			var msisdn, email string
+			if err := rows.Scan(&contactID, &msisdn, &email); err != nil {
+				return err
+			}
+			if msisdn != "" {
+				out[msisdn] = contactID
+			}
+			if email != "" {
+				out[email] = contactID
+			}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: contact ids for identities: %w", err)
+	}
+	return out, nil
 }

@@ -396,9 +396,8 @@ type CampaignRecipient struct {
 	Dispatched bool
 }
 
-// ListCampaignRecipients answers which recipients a campaign reached and which
-// a cancellation caught, by position in the audience list relative to
-// dispatch_cursor.
+// ListCancelledRecipients names the recipients a cancelled campaign never
+// reached — the question counts.cancelled counts but cannot name.
 //
 // Derived rather than stored, deliberately: fan-out writes a message row when
 // it reaches a recipient, so a campaign cancelled at 30,000 of 100,000 has
@@ -406,27 +405,42 @@ type CampaignRecipient struct {
 // happen" would make cancelling a large campaign an expensive write at exactly
 // the moment someone is trying to stop it.
 //
-// TWO LIMITS, because this is a derivation and not a record.
+// ONLY the cancelled half is derived this way, and that split is the point.
+// A cancelled recipient is a COUNTERFACTUAL — who this run would have reached
+// had it continued — so it is necessarily read against the list and the consent
+// map as they stand now, and it carries the full audience rule. The dispatched
+// half is a RECORD, and a record is not re-derived: it is read from the message
+// log by DispatchedRecipients. Filtering that half by today's consent answered
+// a question about what a campaign did with a fact about what is true today,
+// and a contact who opted out after being messaged vanished from the campaign's
+// own account of itself.
 //
-// The list is mutable and the cursor is a position in it, so a list edited
-// after the run changes the answer retroactively. Contacts created after the
-// campaign started are excluded here — the walk is newest-first, so without
-// that guard a contact added last week would sort into the already-dispatched
-// region and be reported as reached, with no message row to show for it.
+// The limits below therefore apply to the cancelled half alone. The list is
+// mutable and the cursor is a position in it, so a list edited after the run
+// changes the answer retroactively. Contacts created after the campaign started
+// are excluded — the walk is newest-first, so without that guard a contact
+// added last week would sort into the region the run had already passed.
 //
 // What cannot be excluded is a contact that existed before the run and joined
 // the LIST afterwards: contact_list_members records no timestamp, so there is
-// nothing to compare. Such a recipient is classified by its creation date,
-// which is arbitrary relative to this campaign. Recording membership time is
-// what would close it, and that is a migration rather than a query.
-func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	campaign Campaign, state string, page, limit int) ([]CampaignRecipient, int, error) {
+// nothing to compare. Recording membership time would close it, and that is a
+// migration rather than a query.
+// Takes an offset rather than a page number because its caller pages across
+// two blocks and this is the second one. A limit of 0 asks for the total
+// alone — the caller needs it for the envelope even on a page the dispatched
+// half filled completely.
+func ListCancelledRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaign Campaign, offset, limit int) ([]CampaignRecipient, int, error) {
 
-	if limit <= 0 || limit > 200 {
+	if limit < 0 || limit > 200 {
 		limit = 20
 	}
-	offset := pageOffset(page, limit)
-	if campaign.ListID == nil {
+	if offset < 0 {
+		offset = 0
+	}
+	// Only a cancelled campaign has recipients it never reached. Anything else
+	// dispatched its whole list, whatever the cursor happens to say.
+	if campaign.Status != "cancelled" || campaign.ListID == nil {
 		return nil, 0, nil
 	}
 
@@ -434,48 +448,28 @@ func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: campaign recipients: %w", err)
 	}
-	// Only a cancelled campaign has recipients it never reached. Anything else
-	// dispatched its whole list, whatever the cursor happens to say.
-	cancelledRun := campaign.Status == "cancelled"
 
 	// The audience as it stood for this run. send_started_at is null for a
 	// campaign cancelled before it began, in which case nothing was dispatched
 	// and every member is cancelled.
-	ranAt := campaign.SendStartedAt
-	// Same audience rule the fan-out and the estimate use: a contact who never
-	// opted in on this channel was never part of the campaign, so it is neither
-	// dispatched nor cancelled.
 	where := `
 		FROM contacts c
 		WHERE EXISTS (SELECT 1 FROM contact_list_members m
 		              WHERE m.contact_id = c.id AND m.list_id = $1)
 		  AND ($4::timestamptz IS NULL OR c.created_at <= $4)` + reachableOnChannel
-	args := []any{*campaign.ListID, campaign.Channel == "EMAIL", campaign.Channel, ranAt}
+	args := []any{*campaign.ListID, campaign.Channel == "EMAIL", campaign.Channel,
+		campaign.SendStartedAt}
 
 	// Fan-out walks created_at DESC, id DESC and saves the cursor after each
 	// page, so everything strictly older than the cursor is what it never
-	// reached. The same comparison the pager itself uses, so the two cannot
-	// disagree about where the halt fell.
-	// Appended only when a cursor branch applies, so every placeholder the
-	// query names is one the args slice supplies. An unreferenced parameter has
-	// no type for the planner to infer and fails at execution, not at compile.
-	const olderThanCursor = ` AND ($5::timestamptz IS NOT NULL
-		AND (c.created_at, c.id) < ($5, $6))`
-	const cursorOrNewer = ` AND ($5::timestamptz IS NULL
-		OR (c.created_at, c.id) >= ($5, $6))`
-
-	switch {
-	case state == "cancelled" && !cancelledRun:
-		return []CampaignRecipient{}, 0, nil
-	case state == "cancelled" && cursorTime == nil:
-		// Cancelled before the first page: the whole list is untouched.
-	case state == "cancelled":
-		where += olderThanCursor
-		args = append(args, cursorTime, cursorID)
-	case state == "dispatched" && cancelledRun && cursorTime == nil:
-		return []CampaignRecipient{}, 0, nil
-	case state == "dispatched" && cancelledRun:
-		where += cursorOrNewer
+	// reached. No cursor at all means it was stopped before its first page and
+	// the whole list went unreached.
+	//
+	// Appended with its arguments in the same statement, so the query cannot
+	// name a placeholder the args slice does not supply — which is how this
+	// function last returned a 500 on every campaign that had a list.
+	if cursorTime != nil {
+		where += ` AND (c.created_at, c.id) < ($5::timestamptz, $6::uuid)`
 		args = append(args, cursorTime, cursorID)
 	}
 
@@ -485,10 +479,13 @@ func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity
 		if err := tx.QueryRow(ctx, `SELECT count(*) `+where, args...).Scan(&total); err != nil {
 			return err
 		}
+		if limit == 0 {
+			return nil
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT c.id, c.msisdn, coalesce(c.email, '') `+where+`
 			 ORDER BY c.created_at DESC, c.id DESC
-			 LIMIT $`+itoa(len(args)+1)+` OFFSET $`+itoa(len(args)+2),
+			 LIMIT $`+strconv.Itoa(len(args)+1)+` OFFSET $`+strconv.Itoa(len(args)+2),
 			append(args, limit, offset)...)
 		if err != nil {
 			return err
@@ -513,5 +510,3 @@ func ListCampaignRecipients(ctx context.Context, pool *pgxpool.Pool, id Identity
 	}
 	return out, total, nil
 }
-
-func itoa(n int) string { return strconv.Itoa(n) }
