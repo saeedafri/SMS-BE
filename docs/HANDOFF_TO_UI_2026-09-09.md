@@ -398,8 +398,23 @@ the drop was written for. The drop was belt-and-braces that turned out to be the
 belt strangling the wearer. The health check no longer drops either: a ping can
 fail from contention on a database that is perfectly alive.
 
-That leaves the **8** genuine `acquire conn timeout` errors, which are a real
-capacity limit rather than a cascade — see §6a.3.
+Measured again after deploying, same load:
+
+```
+                    500s / 1,024      accepted/s at 128 readers
+before                    908                    ~15
+first fix                 926                     4.3
+after the deletion        195                    11.9
+```
+
+And the remaining 195 are **one clean cause with nothing cascading behind it**:
+
+```
+143  store: query messages: clickhouse: acquire conn timeout
+ 52  store: count messages: clickhouse: acquire conn timeout
+```
+
+No `connection is closed`, no drops, no redials. That is capacity — §6a.3.
 
 ### 6a.2 `GET /v1/campaigns` cost one ClickHouse read per campaign
 
@@ -443,8 +458,8 @@ alone. It measured the degraded path. The honest before-and-after is 2.2 → 39.
 
 ### 6a.3 What is left, and it is capacity rather than code
 
-`GET /v1/messages` still does about 14 requests a second, and 8 requests in
-1,024 hit a genuine `acquire conn timeout` at 128 concurrent readers.
+`GET /v1/messages` still does about 14 requests a second, and at 128 concurrent
+readers 195 of 1,024 requests wait out the pool's acquire timeout.
 
 **The box has two vCPUs.** Every message-log read runs two `FINAL` queries over
 60,000 rows, and `FINAL` merges on read. Timed directly, with the network
@@ -454,9 +469,17 @@ tuning moves it, because raising the pool only queues more work at the same two
 cores.
 
 Stating it rather than fixing it, because the fixes are real work and worth
-choosing deliberately: a `campaign_id` skip index or projection, dropping
-`FINAL` in favour of an explicit de-duplication, or more cores. **None of it
-affects the contract**, and none of it is in this batch.
+choosing deliberately:
+
+- a skip index or projection so the log's filters do not scan the tenant;
+- dropping `FINAL` for an explicit de-duplication in the query;
+- answering an overloaded read with a `503` and `Retry-After` instead of a
+  `500` — it is queueing, not breaking, and the status code should say so;
+- more cores.
+
+**None of it affects the contract**, and none of it is in this batch. Say if the
+message log's behaviour under load matters to you before launch and we will pick
+one; otherwise it waits behind WP2.
 
 ---
 
