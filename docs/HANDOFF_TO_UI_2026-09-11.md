@@ -274,11 +274,39 @@ was found while reading a document about RCS agents, which is the avoidable part
 
 `make generate` clean against `master@9a829c3`. 189 operations, up from 180.
 
+**Your checker reads 10/10 against the deployed API**, `rcs-agents` red to
+green. We ran it rather than describing our own. Your own `limit=500` fix in
+`list-envelopes` is in and passing too — that one resolved itself between our
+pull and this reply.
+
+```
+PASS  rcs-agents      {agents, total: 0}, oversized limit refused
+10/10 satisfied
+```
+
 Mutation-verified: dimensions recorded but not enforced (**red**, three cases);
 a tenant-scoped read replaced by an unscoped one plus a comparison (**red** —
 "That agent belongs to another account" is distinguishable from "No such
 agent"); the segment range back to the written count plus one (**red**, five
 cases).
+
+**Two bugs of ours that only live verification found**, both after a green
+suite:
+
+- **A `not_submitted` carrier row carried `updatedAt: "0001-01-01T00:00:00Z"`.**
+  The zero time that looks like data — the exact failure we spent §1 of the
+  10 September handoff warning you about, committed in our own hand, the same
+  day, one required field over. It is null now.
+- **The operator could not see an agent it was asked to approve.** `rcs_agents`
+  shipped with a tenant-isolation policy and no operator policy, so the queue
+  read nothing and approve answered `404` on an agent that plainly existed.
+  Every customer-side test passed throughout, because they all run as the
+  tenant — the one role the missing policy did not affect. Row-level security
+  was doing exactly what it was told; what it was told was half the story.
+
+Both now have guards that fail without them: dropping the operator policy turns
+the queue test red with *"the agent is not in the operator queue — it cannot be
+approved, and the customer waits forever (0 rows)"*.
 
 **One mutation was neutralised and we nearly recorded a green as evidence.** The
 first attempt at the isolation mutation read through the operator pool, which

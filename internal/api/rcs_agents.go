@@ -96,14 +96,22 @@ func (s *Server) rcsAgentResponse(ctx context.Context, agent store.RcsAgent) gen
 		if !ok {
 			launch = store.RcsCarrierLaunch{Carrier: carrier, Status: "not_submitted"}
 		}
-		out.CarrierLaunches = append(out.CarrierLaunches, gen.RcsCarrierLaunch{
+		row := gen.RcsCarrierLaunch{
 			Carrier:         gen.CarrierId(launch.Carrier),
 			Status:          gen.RcsCarrierLaunchStatus(launch.Status),
 			CarrierAgentId:  launch.CarrierAgentID,
 			RejectionReason: launch.RejectionReason,
 			SubmittedAt:     launch.SubmittedAt,
-			UpdatedAt:       &launch.UpdatedAt,
-		})
+		}
+		// Null, not the zero time. A synthesised not_submitted row has never
+		// been updated, and 0001-01-01T00:00:00Z is a value that looks like
+		// data — the exact failure we warned the frontend about one required
+		// field earlier, committed here in our own hand on the same day.
+		if !launch.UpdatedAt.IsZero() {
+			updatedAt := launch.UpdatedAt
+			row.UpdatedAt = &updatedAt
+		}
+		out.CarrierLaunches = append(out.CarrierLaunches, row)
 	}
 	return out
 }

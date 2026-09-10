@@ -337,3 +337,94 @@ func TestTheCarrierSizeLimitsAreTheOnesEnforced(t *testing.T) {
 		t.Errorf("the refusal does not name the limit: %s", res.Body)
 	}
 }
+
+// The operator can see and decide an agent that is waiting for them.
+//
+// This is the guard for a bug the full suite did not catch: rcs_agents shipped
+// with a tenant-isolation policy and no operator policy, so the approval queue
+// read nothing and approve answered 404 on an agent that plainly existed. Every
+// customer-side test passed throughout — they all run as the tenant, which is
+// exactly the role the missing policy did not affect.
+//
+// Row-level security was doing what it was told. What it was told was half the
+// story, and only a test that crosses the boundary can say so.
+func TestAnAgentAwaitingReviewReachesTheOperatorAndCanBeDecided(t *testing.T) {
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	operator := h.operatorToken()
+	h.approveRegistration(acct, "IN")
+
+	agent := h.createAgent(acct, "Queue Probe "+uuid.NewString()[:6])
+	document := h.uploadAsset(acct, "verification_document", "loa.pdf",
+		"application/pdf", []byte("%PDF-1.4\nletter\n"))
+	h.submitVerification(acct, agent.Id, document)
+
+	queue := h.do(http.MethodGet, "/v1/operator/approvals?type=rcs_agent&limit=50", operator, nil)
+	if queue.Code != http.StatusOK {
+		t.Fatalf("queue = %d: %s", queue.Code, queue.Body)
+	}
+	var page struct {
+		Items []struct {
+			Id              string  `json:"id"`
+			ItemType        string  `json:"itemType"`
+			ContactEmail    *string `json:"contactEmail"`
+			DocumentAssetId *string `json:"documentAssetId"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(queue.Body, &page); err != nil {
+		t.Fatalf("decode queue: %v", err)
+	}
+	var row *struct {
+		Id              string  `json:"id"`
+		ItemType        string  `json:"itemType"`
+		ContactEmail    *string `json:"contactEmail"`
+		DocumentAssetId *string `json:"documentAssetId"`
+	}
+	for i := range page.Items {
+		if page.Items[i].Id == agent.Id {
+			row = &page.Items[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("the agent is not in the operator queue — it cannot be approved, "+
+			"and the customer waits forever (%d rows)", len(page.Items))
+	}
+	if row.ItemType != "rcs_agent" {
+		t.Errorf("itemType = %q, want rcs_agent", row.ItemType)
+	}
+	// The evidence the operator is being asked to judge. Without it the dialog
+	// says "approve this?" and shows nothing to approve against.
+	if row.ContactEmail == nil || row.DocumentAssetId == nil {
+		t.Errorf("the queue row carries no contact or document to judge")
+	}
+
+	// A rejection with no reason is refused: a rejection the customer cannot
+	// read is a dead end.
+	blank := h.do(http.MethodPost, "/v1/operator/rcs-agents/"+agent.Id+"/reject",
+		operator, map[string]any{"reason": "   "})
+	if blank.Code != http.StatusUnprocessableEntity {
+		t.Errorf("rejecting with a blank reason = %d, want 422", blank.Code)
+	}
+
+	approved := h.do(http.MethodPost, "/v1/operator/rcs-agents/"+agent.Id+"/approve", operator, nil)
+	if approved.Code != http.StatusOK {
+		t.Fatalf("approve = %d: %s", approved.Code, approved.Body)
+	}
+	// Approving the VERIFICATION does not make the agent live. It still reaches
+	// nobody until a carrier admits it, and collapsing the two would let both
+	// the operator and the customer believe otherwise.
+	var after agentBody
+	if err := json.Unmarshal(approved.Body, &after); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if after.Status != "verification_approved" {
+		t.Errorf("after approval the agent is %q, want verification_approved — "+
+			"a verified agent is not a live one", after.Status)
+	}
+	// And a second decision on a decided agent is refused rather than silently
+	// re-approving it.
+	if again := h.do(http.MethodPost, "/v1/operator/rcs-agents/"+agent.Id+"/approve",
+		operator, nil); again.Code != http.StatusConflict {
+		t.Errorf("approving twice = %d, want 409", again.Code)
+	}
+}
