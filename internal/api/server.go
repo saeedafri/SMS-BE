@@ -20,6 +20,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
+	"github.com/saeedafri/sms-be/internal/platform/mediastore"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 )
 
@@ -57,6 +58,12 @@ type Server struct {
 	// SignupInviteCode, when set, is required by POST /v1/auth/signup. Empty
 	// leaves self-registration open.
 	SignupInviteCode string
+
+	// Media holds uploaded files and signs the URLs they are read back
+	// through. Nil means uploads refuse rather than falling back to a path
+	// anyone could read: brand assets and identity documents are exactly the
+	// things a public bucket should not hold.
+	Media *mediastore.Store
 
 	// Secrets encrypts values that must be recoverable — today the SMPP bind
 	// passwords. Nil when no key is configured, in which case storing a bind
@@ -221,6 +228,14 @@ func NewRouter(s *Server) http.Handler {
 	// response that never ends. It sits after authenticate, so it resolves the
 	// caller's tenant exactly like every other route.
 	s.mountEventRoutes(r)
+
+	// Reading an uploaded asset back. Mounted directly because the contract
+	// declares the upload and documents the URL as opaque — the read is ours to
+	// shape, and a signature rather than a session is what authorises it, since
+	// a carrier fetching brand artwork has no Relay login.
+	if s.Media.Configured() {
+		s.mountMediaRoutes(r)
+	}
 
 	// Carrier callbacks, mounted only when a token is configured. Left off
 	// entirely otherwise, for the same reason the dev hooks are: an endpoint

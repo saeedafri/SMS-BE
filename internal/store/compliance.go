@@ -35,6 +35,11 @@ type SenderID struct {
 	VoiceCodeSentAt *time.Time
 	CreatedAt       time.Time
 
+	// RcsAgentID is the customer's own brand identity this header sends under.
+	// Null on an RCS sender registered before agents existed, which still
+	// sends under the deployment-wide identity during the migration.
+	RcsAgentID *uuid.UUID
+
 	// QualityRating and MessagingTier are assigned by WhatsApp, not by us, and
 	// stay nil for every other channel and for an account Meta has not yet
 	// rated. See db/migrations/00022_sender_wa_quality.sql.
@@ -103,7 +108,7 @@ func LoadSenderDNSRecords(ctx context.Context, tx pgx.Tx, senders []SenderID) er
 const senderColumns = `id, header, channel, country, status, rejection_reason,
 	external_id, waba_id, display_name, phone_number, email_domain, from_address,
 	from_name, caller_id_number, voice_code, voice_verified, created_at,
-	quality_rating, messaging_tier`
+	quality_rating, messaging_tier, rcs_agent_id`
 
 func scanSender(row pgx.Row) (SenderID, error) {
 	var s SenderID
@@ -111,7 +116,7 @@ func scanSender(row pgx.Row) (SenderID, error) {
 		&s.RejectionReason, &s.ExternalID, &s.WabaID, &s.DisplayName, &s.PhoneNumber,
 		&s.EmailDomain, &s.FromAddress, &s.FromName, &s.CallerIDNumber,
 		&s.VoiceCode, &s.VoiceVerified, &s.CreatedAt,
-		&s.QualityRating, &s.MessagingTier)
+		&s.QualityRating, &s.MessagingTier, &s.RcsAgentID)
 	return s, err
 }
 

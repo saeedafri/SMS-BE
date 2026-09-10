@@ -46,8 +46,9 @@ func TestEstimateMultipliesRecipientsBySegmentsByRate(t *testing.T) {
 	var estimate gen.CampaignEstimate
 	res.decode(t, &estimate)
 
-	if estimate.SegmentsPerMessage != 1 {
-		t.Fatalf("segmentsPerMessage = %d, want 1", estimate.SegmentsPerMessage)
+	if estimate.SegmentsPerMessageMin != 1 ||
+		estimate.SegmentsPerMessageMax != 1 {
+		t.Fatalf("segments = %d, want 1 with no variables", estimate.SegmentsPerMessageMin)
 	}
 	if estimate.CostMinorMin != 12_000 || estimate.CostMinorMax != 12_000 {
 		t.Fatalf("cost = %d..%d, want 12000..12000 (1000 × 1 × 12)",
@@ -76,8 +77,9 @@ func TestEstimateScalesWithSegments(t *testing.T) {
 	var estimate gen.CampaignEstimate
 	res.decode(t, &estimate)
 
-	if estimate.SegmentsPerMessage != 2 {
-		t.Fatalf("segmentsPerMessage = %d, want 2", estimate.SegmentsPerMessage)
+	if estimate.SegmentsPerMessageMin != 2 ||
+		estimate.SegmentsPerMessageMax != 2 {
+		t.Fatalf("segments = %d, want 2 with no variables", estimate.SegmentsPerMessageMin)
 	}
 	if estimate.CostMinorMin != 2_400 {
 		t.Fatalf("cost = %d, want 2400 (100 × 2 × 12)", estimate.CostMinorMin)
@@ -105,12 +107,14 @@ func TestEstimateReflectsUCS2ReEncoding(t *testing.T) {
 	var unicodeEstimate gen.CampaignEstimate
 	unicode.decode(t, &unicodeEstimate)
 
-	if plainEstimate.SegmentsPerMessage != 1 {
-		t.Fatalf("plain 160 chars = %d segments, want 1", plainEstimate.SegmentsPerMessage)
+	if plainEstimate.SegmentsPerMessageMin != 1 ||
+		plainEstimate.SegmentsPerMessageMax != 1 {
+		t.Fatalf("plain 160 chars = %d segments, want 1", plainEstimate.SegmentsPerMessageMin)
 	}
-	if unicodeEstimate.SegmentsPerMessage != 3 {
+	if unicodeEstimate.SegmentsPerMessageMin != 3 ||
+		unicodeEstimate.SegmentsPerMessageMax != 3 {
 		t.Fatalf("160 chars with a smart quote = %d segments, want 3",
-			unicodeEstimate.SegmentsPerMessage)
+			unicodeEstimate.SegmentsPerMessageMin)
 	}
 	if unicodeEstimate.CostMinorMin <= plainEstimate.CostMinorMin {
 		t.Fatal("the UCS-2 estimate is not more expensive than the GSM-7 one")

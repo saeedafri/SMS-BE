@@ -1311,6 +1311,13 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 	if err != nil {
 		return nil, err
 	}
+	// The fourth thing that needs a decision. An RCS agent carries a customer's
+	// brand onto every handset it reaches, so somebody has to have looked at
+	// the letter of authorisation behind it.
+	agents, err := store.ListPendingRcsAgents(ctx, s.operatorPool(), queueStatus)
+	if err != nil {
+		return nil, err
+	}
 
 	// Senders and templates share one queue because an operator works through
 	// "what needs a decision", not "what kind of thing needs a decision".
@@ -1353,7 +1360,8 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 		at   time.Time
 		item gen.ApprovalQueueItem
 	}
-	queued := make([]queuedItem, 0, len(senders)+len(templates)+len(registrations))
+	queued := make([]queuedItem, 0,
+		len(senders)+len(templates)+len(registrations)+len(agents))
 	for _, sender := range senders {
 		if !keep("sender", sender.Country, sender.Status) {
 			continue
@@ -1423,6 +1431,34 @@ func (s *Server) GetApprovalQueue(ctx context.Context, request gen.GetApprovalQu
 			return nil, err
 		}
 		queued = append(queued, queuedItem{at: reg.CreatedAt, item: item})
+	}
+	for _, agent := range agents {
+		if !keep("rcs_agent", agent.Country, agent.Status) {
+			continue
+		}
+		entry := gen.ApprovalQueueAgentItem{
+			Id: agent.ID, ItemType: gen.ApprovalQueueAgentItemItemTypeRcsAgent,
+			TenantId: agent.TenantID, TenantName: agent.TenantName,
+			DisplayName: agent.DisplayName,
+			Country:     gen.CountryCode(agent.Country),
+			UseCase:     gen.RcsAgentUseCase(agent.UseCase),
+			Status:      gen.RcsAgentStatus(agent.Status),
+			CreatedAt:   agent.CreatedAt,
+			// What the operator is being asked to judge. The contact details
+			// and the document are the evidence; without them the dialog says
+			// "approve this?" and shows nothing to approve against.
+			RegistrationId:  agent.RegistrationID,
+			ContactName:     agent.Verification.ContactName,
+			ContactEmail:    agent.Verification.ContactEmail,
+			ContactPhone:    agent.Verification.ContactPhone,
+			DocumentAssetId: agent.Verification.DocumentAssetID,
+			RejectionReason: agent.Verification.RejectionReason,
+		}
+		var item gen.ApprovalQueueItem
+		if err := item.FromApprovalQueueAgentItem(entry); err != nil {
+			return nil, err
+		}
+		queued = append(queued, queuedItem{at: agent.CreatedAt, item: item})
 	}
 	sort.SliceStable(queued, func(a, b int) bool { return queued[a].at.After(queued[b].at) })
 	items := make([]gen.ApprovalQueueItem, 0, len(queued))

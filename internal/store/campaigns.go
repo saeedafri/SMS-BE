@@ -15,25 +15,26 @@ import (
 // Campaign is a batch send. Its per-message rows live in ClickHouse; the
 // campaign row itself is small, mutable and foreign-keyed, so it stays here.
 type Campaign struct {
-	ID                 uuid.UUID
-	Name               string
-	Channel            string
-	Country            string
-	ListID             *uuid.UUID
-	SenderID           uuid.UUID
-	TemplateID         uuid.UUID
-	FallbackChannel    *string
-	FallbackSenderID   *uuid.UUID
-	FallbackTemplateID *uuid.UUID
-	Status             string
-	ScheduledAt        *time.Time
-	SendStartedAt      *time.Time
-	Recipients         int
-	SegmentsPerMessage int
-	CostMinorMin       int64
-	CostMinorMax       int64
-	Currency           string
-	RetryOf            *uuid.UUID
+	ID                    uuid.UUID
+	Name                  string
+	Channel               string
+	Country               string
+	ListID                *uuid.UUID
+	SenderID              uuid.UUID
+	TemplateID            uuid.UUID
+	FallbackChannel       *string
+	FallbackSenderID      *uuid.UUID
+	FallbackTemplateID    *uuid.UUID
+	Status                string
+	ScheduledAt           *time.Time
+	SendStartedAt         *time.Time
+	Recipients            int
+	SegmentsPerMessageMin int
+	SegmentsPerMessageMax int
+	CostMinorMin          int64
+	CostMinorMax          int64
+	Currency              string
+	RetryOf               *uuid.UUID
 	// RetriedByCampaignID is derived, not stored: it is whichever campaign
 	// names this one as its retry_of. Storing both directions would let them
 	// disagree.
@@ -55,7 +56,7 @@ const campaignColumns = `
 	c.id, c.name, c.channel, c.country, c.list_id, c.sender_id, c.template_id,
 	c.fallback_channel, c.fallback_sender_id, c.fallback_template_id,
 	c.status, c.scheduled_at, c.send_started_at, c.recipients,
-	c.segments_per_message, c.cost_minor_min, c.cost_minor_max, c.currency,
+	c.segments_per_message_min, c.segments_per_message_max, c.cost_minor_min, c.cost_minor_max, c.currency,
 	c.retry_of, (SELECT r.id FROM campaigns r WHERE r.retry_of = c.id LIMIT 1),
 	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, '')`
 
@@ -65,7 +66,8 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 		&campaign.ListID, &campaign.SenderID, &campaign.TemplateID,
 		&campaign.FallbackChannel, &campaign.FallbackSenderID, &campaign.FallbackTemplateID,
 		&campaign.Status, &campaign.ScheduledAt, &campaign.SendStartedAt,
-		&campaign.Recipients, &campaign.SegmentsPerMessage, &campaign.CostMinorMin,
+		&campaign.Recipients, &campaign.SegmentsPerMessageMin,
+		&campaign.SegmentsPerMessageMax, &campaign.CostMinorMin,
 		&campaign.CostMinorMax, &campaign.Currency, &campaign.RetryOf,
 		&campaign.RetriedByCampaignID, &campaign.CreatedAt,
 		&campaign.PausedAt, &campaign.CancelledAt, &campaign.DispatchCursor)
@@ -166,14 +168,16 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			INSERT INTO campaigns (tenant_id, name, channel, country, list_id,
 			    sender_id, template_id, fallback_channel, fallback_sender_id,
 			    fallback_template_id, status, scheduled_at, recipients,
-			    segments_per_message, cost_minor_min, cost_minor_max, currency, retry_of)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			    segments_per_message_min, segments_per_message_max,
+			    cost_minor_min, cost_minor_max, currency, retry_of)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
 			campaign.FallbackChannel, campaign.FallbackSenderID, campaign.FallbackTemplateID,
 			campaign.Status, campaign.ScheduledAt, campaign.Recipients,
-			campaign.SegmentsPerMessage, campaign.CostMinorMin, campaign.CostMinorMax,
+			campaign.SegmentsPerMessageMin, campaign.SegmentsPerMessageMax,
+			campaign.CostMinorMin, campaign.CostMinorMax,
 			campaign.Currency, campaign.RetryOf,
 		).Scan(&newID); err != nil {
 			return err

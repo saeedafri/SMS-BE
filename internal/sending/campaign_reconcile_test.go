@@ -106,9 +106,9 @@ func (f *fixture) seedStuckCampaign(templateID uuid.UUID, name string, startedAt
 		func(tx pgx.Tx) error {
 			_, err := tx.Exec(context.Background(), `
 		INSERT INTO campaigns (id, tenant_id, name, channel, country, sender_id,
-		    template_id, status, send_started_at, recipients, segments_per_message,
+		    template_id, status, send_started_at, recipients, segments_per_message_min, segments_per_message_max,
 		    cost_minor_min, cost_minor_max, currency)
-		VALUES ($1, $2, $3, 'SMS', 'IN', $4, $5, 'sending', $6, 1, 1, 12, 12, 'INR')`,
+		VALUES ($1, $2, $3, 'SMS', 'IN', $4, $5, 'sending', $6, 1, 1, 1, 12, 12, 'INR')`,
 				id, f.identity.TenantID, name, f.senderID, templateID, startedAt)
 			return err
 		}); err != nil {

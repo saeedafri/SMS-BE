@@ -194,9 +194,9 @@ func TestDeleteIsRefusedByEachKindOfReferenceOnItsOwn(t *testing.T) {
 				if _, err := h.admin.Exec(ctx, `
 					INSERT INTO campaigns (tenant_id, name, channel, country, sender_id,
 					                       template_id, status, recipients,
-					                       segments_per_message, cost_minor_min,
+					                       segments_per_message_min, segments_per_message_max, cost_minor_min,
 					                       cost_minor_max, currency)
-					VALUES ($1, $2, 'SMS', 'IN', $3, $4, 'scheduled', 0, 1, 0, 0, 'INR')`,
+					VALUES ($1, $2, 'SMS', 'IN', $3, $4, 'scheduled', 0, 1, 1, 0, 0, 'INR')`,
 					acct.TenantID, "C "+uuid.NewString()[:8], senderID, template); err != nil {
 					t.Fatalf("insert campaign: %v", err)
 				}
@@ -211,9 +211,9 @@ func TestDeleteIsRefusedByEachKindOfReferenceOnItsOwn(t *testing.T) {
 				if _, err := h.admin.Exec(ctx, `
 					INSERT INTO campaigns (tenant_id, name, channel, country, sender_id,
 					                       template_id, fallback_sender_id, status,
-					                       recipients, segments_per_message,
+					                       recipients, segments_per_message_min, segments_per_message_max,
 					                       cost_minor_min, cost_minor_max, currency)
-					VALUES ($1, $2, 'SMS', 'IN', $3, $4, $5, 'scheduled', 0, 1, 0, 0, 'INR')`,
+					VALUES ($1, $2, 'SMS', 'IN', $3, $4, $5, 'scheduled', 0, 1, 1, 0, 0, 'INR')`,
 					acct.TenantID, "F "+uuid.NewString()[:8], other.Id, template,
 					senderID); err != nil {
 					t.Fatalf("insert fallback campaign: %v", err)

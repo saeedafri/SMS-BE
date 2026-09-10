@@ -17,6 +17,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/mailer"
 	"github.com/saeedafri/sms-be/internal/platform/config"
+	"github.com/saeedafri/sms-be/internal/platform/mediastore"
 	"github.com/saeedafri/sms-be/internal/platform/resilience"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"github.com/saeedafri/sms-be/internal/platform/telemetry"
@@ -172,6 +173,19 @@ func run() error {
 	// Left nil when no carrier is configured, which is the honest state for a
 	// deployment without a commercial RCS agreement: capability discovery then
 	// says so, rather than answering "unreachable" for every handset in India.
+	// Uploads are off unless a root, a signing key and a public base URL are
+	// all present. Any one missing and the endpoint refuses rather than half
+	// working: a store with no signing key would serve identity documents to
+	// anyone who guessed a path.
+	var mediaStore *mediastore.Store
+	if cfg.MediaRoot != "" && cfg.MediaSigningKey != "" && cfg.MediaBaseURL != "" {
+		mediaStore = mediastore.New(cfg.MediaRoot, []byte(cfg.MediaSigningKey), cfg.MediaBaseURL)
+		logger.Info("media uploads enabled", "root", cfg.MediaRoot)
+	} else {
+		logger.Warn("media uploads are DISABLED — set MEDIA_ROOT, MEDIA_SIGNING_KEY " +
+			"and MEDIA_BASE_URL to accept agent artwork and verification documents")
+	}
+
 	var rcsCarrier connector.RCSCapabilityChecker
 	switch cfg.RCSCarrierName() {
 	case "airtel":
@@ -247,6 +261,7 @@ func run() error {
 		EnableDevEndpoints: cfg.EnableDevEndpoints,
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
 		Secrets:           connectionSecrets,
+		Media:             mediaStore,
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
