@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/saeedafri/sms-be/internal/platform/mediastore"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"io"
 	"log/slog"
@@ -122,7 +123,11 @@ func newHarness(t *testing.T) *harness {
 		// A fixed key, so the connection specs exercise the real encrypt path
 		// rather than the no-key refusal.
 		Secrets: testSecretsBox(t),
-		Logger:  slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		// Uploads write to a directory the test owns, so the dimension and
+		// signing paths are exercised against real bytes on a real disk rather
+		// than a stub that would agree with whatever the handler did.
+		Media:  mediastore.New(t.TempDir(), []byte("test-signing-key"), "https://api.test"),
+		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	h.router = api.NewRouter(h.server)
 	return h
@@ -315,6 +320,20 @@ func (r *bytesReader) Read(p []byte) (int, error) {
 
 // setEmailVerified flips the flag directly, so a test can start from an
 // unverified account without going through signup.
+// doRaw posts a body the harness does not encode — a multipart upload, where
+// the point of the test is what the bytes are.
+func (h *harness) doRaw(method, path, token, contentType string, body []byte) response {
+	h.t.Helper()
+	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	return response{Code: rec.Code, Body: rec.Body.Bytes(), Header: rec.Header()}
+}
+
 func (h *harness) setEmailVerified(userID uuid.UUID, verified bool) {
 	h.t.Helper()
 	if _, err := h.admin.Exec(context.Background(),

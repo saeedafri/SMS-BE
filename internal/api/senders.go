@@ -31,6 +31,9 @@ func senderResponse(s store.SenderID) gen.SenderId {
 		FromName:        s.FromName,
 		CallerIdNumber:  s.CallerIDNumber,
 		CreatedAt:       s.CreatedAt,
+		// The agent this header sends under. Null on an RCS sender registered
+		// before agents existed, and on every non-RCS sender by construction.
+		RcsAgentId: s.RcsAgentID,
 	}
 	// DNS records exist only for email senders. Absent rather than an empty
 	// array for other channels: the contract marks the field optional, and an

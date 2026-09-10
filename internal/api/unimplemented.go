@@ -316,6 +316,10 @@ func (Unimplemented) UpdateMe(ctx context.Context, request gen.UpdateMeRequestOb
 	return nil, errNotImplemented("UpdateMe")
 }
 
+func (Unimplemented) UploadMedia(ctx context.Context, request gen.UploadMediaRequestObject) (gen.UploadMediaResponseObject, error) {
+	return nil, errNotImplemented("UploadMedia")
+}
+
 func (Unimplemented) ListMessages(ctx context.Context, request gen.ListMessagesRequestObject) (gen.ListMessagesResponseObject, error) {
 	return nil, errNotImplemented("ListMessages")
 }
@@ -422,6 +426,14 @@ func (Unimplemented) RemoveRateOverride(ctx context.Context, request gen.RemoveR
 
 func (Unimplemented) EditRateOverride(ctx context.Context, request gen.EditRateOverrideRequestObject) (gen.EditRateOverrideResponseObject, error) {
 	return nil, errNotImplemented("EditRateOverride")
+}
+
+func (Unimplemented) ApproveRcsAgent(ctx context.Context, request gen.ApproveRcsAgentRequestObject) (gen.ApproveRcsAgentResponseObject, error) {
+	return nil, errNotImplemented("ApproveRcsAgent")
+}
+
+func (Unimplemented) RejectRcsAgent(ctx context.Context, request gen.RejectRcsAgentRequestObject) (gen.RejectRcsAgentResponseObject, error) {
+	return nil, errNotImplemented("RejectRcsAgent")
 }
 
 func (Unimplemented) ApproveRegistrationItem(ctx context.Context, request gen.ApproveRegistrationItemRequestObject) (gen.ApproveRegistrationItemResponseObject, error) {
@@ -538,6 +550,30 @@ func (Unimplemented) ExportUserActivity(ctx context.Context, request gen.ExportU
 
 func (Unimplemented) ListPricing(ctx context.Context, request gen.ListPricingRequestObject) (gen.ListPricingResponseObject, error) {
 	return nil, errNotImplemented("ListPricing")
+}
+
+func (Unimplemented) ListRcsAgents(ctx context.Context, request gen.ListRcsAgentsRequestObject) (gen.ListRcsAgentsResponseObject, error) {
+	return nil, errNotImplemented("ListRcsAgents")
+}
+
+func (Unimplemented) CreateRcsAgent(ctx context.Context, request gen.CreateRcsAgentRequestObject) (gen.CreateRcsAgentResponseObject, error) {
+	return nil, errNotImplemented("CreateRcsAgent")
+}
+
+func (Unimplemented) GetRcsAgent(ctx context.Context, request gen.GetRcsAgentRequestObject) (gen.GetRcsAgentResponseObject, error) {
+	return nil, errNotImplemented("GetRcsAgent")
+}
+
+func (Unimplemented) UpdateRcsAgent(ctx context.Context, request gen.UpdateRcsAgentRequestObject) (gen.UpdateRcsAgentResponseObject, error) {
+	return nil, errNotImplemented("UpdateRcsAgent")
+}
+
+func (Unimplemented) LaunchRcsAgentOnCarrier(ctx context.Context, request gen.LaunchRcsAgentOnCarrierRequestObject) (gen.LaunchRcsAgentOnCarrierResponseObject, error) {
+	return nil, errNotImplemented("LaunchRcsAgentOnCarrier")
+}
+
+func (Unimplemented) SubmitRcsAgentVerification(ctx context.Context, request gen.SubmitRcsAgentVerificationRequestObject) (gen.SubmitRcsAgentVerificationResponseObject, error) {
+	return nil, errNotImplemented("SubmitRcsAgentVerification")
 }
 
 func (Unimplemented) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsCapabilitiesRequestObject) (gen.CheckRcsCapabilitiesResponseObject, error) {

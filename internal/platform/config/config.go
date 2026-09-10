@@ -78,6 +78,19 @@ type Config struct {
 	// could serve both.
 	RCSVendor string
 
+	// MediaRoot is where uploaded files are written. Empty disables uploads
+	// entirely rather than falling back to a temporary directory: brand assets
+	// and identity documents that vanish on restart are worse than an endpoint
+	// that says it is not configured.
+	MediaRoot string
+	// MediaSigningKey signs the URLs assets are read back through. Empty
+	// disables uploads for the same reason — an unsigned URL is a public one.
+	MediaSigningKey string
+	// MediaBaseURL is the externally reachable origin a carrier fetches from.
+	// Not the listen address: a URL only resolvable inside the VPC is not one a
+	// carrier can fetch, and that failure lands days later at the gateway.
+	MediaBaseURL string
+
 	RCSAirtelBaseURL   string
 	RCSAirtelAuthToken string
 	RCSAirtelAgentID   string
@@ -146,6 +159,9 @@ func Load() (Config, error) {
 		}
 	}
 	cfg.RCSVendor = strings.ToLower(strings.TrimSpace(os.Getenv("RCS_VENDOR")))
+	cfg.MediaRoot = strings.TrimSpace(os.Getenv("MEDIA_ROOT"))
+	cfg.MediaSigningKey = strings.TrimSpace(os.Getenv("MEDIA_SIGNING_KEY"))
+	cfg.MediaBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_BASE_URL")), "/")
 	cfg.RCSAirtelBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("RCS_AIRTEL_BASE_URL")), "/")
 	cfg.RCSAirtelAuthToken = strings.TrimSpace(os.Getenv("RCS_AIRTEL_AUTH_TOKEN"))
 	cfg.RCSAirtelAgentID = strings.TrimSpace(os.Getenv("RCS_AIRTEL_AGENT_ID"))

@@ -17,11 +17,12 @@ import (
 // change the segment count: a template with a {{name}} in it costs one segment
 // for "Sam" and two for a longer name that tips it past the boundary.
 type CampaignEstimate struct {
-	Recipients         int
-	SegmentsPerMessage int
-	CostMinorMin       int64
-	CostMinorMax       int64
-	Currency           string
+	Recipients            int
+	SegmentsPerMessageMin int
+	SegmentsPerMessageMax int
+	CostMinorMin          int64
+	CostMinorMax          int64
+	Currency              string
 }
 
 // EstimateCampaign prices a campaign against its real audience.
@@ -57,24 +58,20 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		return CampaignEstimate{}, err
 	}
 
-	segments := billing.SegmentCount(body)
-	if segments < 1 {
-		segments = 1
-	}
-	// The upper bound assumes every personalised message tips into one more
-	// segment. Quoting the optimistic number and then charging more is how
-	// billing surprises happen.
-	maxSegments := segments
-	if strings.Contains(body, "{{") {
-		maxSegments = segments + 1
-	}
+	// The range, not a guess at one. This used to add 1 to the written count
+	// when the body contained "{{" — right often enough to look correct, and
+	// wrong twice over: the written count charges for braces no handset ever
+	// sees, and a body forty septets under the boundary with three long
+	// variables tips by two segments rather than one.
+	minSegments, maxSegments := billing.SegmentBounds(body)
 
 	return CampaignEstimate{
-		Recipients:         total,
-		SegmentsPerMessage: segments,
-		CostMinorMin:       int64(total) * int64(segments) * rate.PerSegmentMinor,
-		CostMinorMax:       int64(total) * int64(maxSegments) * rate.PerSegmentMinor,
-		Currency:           rate.Currency,
+		Recipients:            total,
+		SegmentsPerMessageMin: minSegments,
+		SegmentsPerMessageMax: maxSegments,
+		CostMinorMin:          int64(total) * int64(minSegments) * rate.PerSegmentMinor,
+		CostMinorMax:          int64(total) * int64(maxSegments) * rate.PerSegmentMinor,
+		Currency:              rate.Currency,
 	}, nil
 }
 

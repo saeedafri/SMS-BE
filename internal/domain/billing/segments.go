@@ -1,6 +1,9 @@
 package billing
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // SMS segment arithmetic. These numbers are from GSM 03.38 and are not
 // adjustable preferences: a 161-character GSM-7 message really is billed as two
@@ -90,4 +93,52 @@ func SegmentCount(body string) int {
 
 func ceilDiv(value, divisor int) int {
 	return (value + divisor - 1) / divisor
+}
+
+// AssumedVariableChars is the width one {{variable}} is assumed to substitute
+// to when quoting the upper bound of a segment range.
+//
+// Twenty, matching the frontend's ASSUMED_VARIABLE_CHARS, and the number
+// matters less than the two sides agreeing on it: a different constant here
+// would put a different range on the campaign wizard than on the template
+// editor, for the same body.
+const AssumedVariableChars = 20
+
+// variableToken is the {{name}} syntax, defined once. A second copy would drift
+// the day the syntax changes, and the drift would surface as a wrong price.
+var variableToken = regexp.MustCompile(`\{\{\s*[A-Za-z0-9_]+\s*\}\}`)
+
+// SegmentBounds returns how many segments one recipient's message can cost, as
+// a range.
+//
+// A body carrying {{variables}} becomes as many different messages as there are
+// recipients, and SMS bills per segment per message, so no single integer
+// describes it. Counting the token as written is the one answer that is
+// certainly wrong twice over: "{{first_name}}" is fourteen characters that
+// never reach a handset, and its braces are GSM 03.38 extension characters
+// charged at two septets each — eighteen septets of a message that will not
+// contain one of them.
+//
+// BOTH ENDS ARE MEASURED ON SUBSTITUTED TEXT, which is what keeps the braces
+// out of the arithmetic: every variable empty at the low end, every variable at
+// the assumed width at the high end. A body with no variables returns the same
+// number twice.
+//
+// The encoding is judged on the fixed text alone, because it is all that is
+// known. A value carrying an emoji would flip the whole message to UCS-2 and
+// halve its capacity at send time; nothing here can predict that, and
+// pretending otherwise would be a worse lie than the range already is.
+func SegmentBounds(body string) (int, int) {
+	emptied := variableToken.ReplaceAllString(body, "")
+	widened := variableToken.ReplaceAllString(body,
+		strings.Repeat("X", AssumedVariableChars))
+
+	low, high := SegmentCount(emptied), SegmentCount(widened)
+	if low < 1 {
+		low = 1
+	}
+	if high < low {
+		high = low
+	}
+	return low, high
 }

@@ -70,9 +70,9 @@ func (f *fixture) seedCampaign(templateID, listID uuid.UUID, status string, reci
 			}
 			_, err := tx.Exec(context.Background(), fmt.Sprintf(`
 				INSERT INTO campaigns (id, tenant_id, name, channel, country, sender_id,
-				    template_id, list_id, status, recipients, segments_per_message,
+				    template_id, list_id, status, recipients, segments_per_message_min, segments_per_message_max,
 				    cost_minor_min, cost_minor_max, currency, paused_at, cancelled_at)
-				VALUES ($1, $2, 'Halt fixture', 'SMS', 'IN', $3, $4, $5, $6, $7, 1,
+				VALUES ($1, $2, 'Halt fixture', 'SMS', 'IN', $3, $4, $5, $6, $7, 1, 1,
 				        12, 12, 'INR', %s, %s)`, pausedAt, cancelledAt),
 				id, f.identity.TenantID, f.senderID, templateID, listID, status, recipients)
 			return err

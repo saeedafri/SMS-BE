@@ -71,13 +71,21 @@ func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostReque
 		return nil, err
 	}
 
-	segments := billing.SegmentCount(request.Body.PrimaryBody)
-	primaryCost := int64(recipients) * int64(segments) * rate.PerSegmentMinor
+	// The same bounds the campaign wizard quotes, from the same function.
+	// These two estimates used to compute the upper bound differently — this
+	// one had no spread at all unless a fallback channel was set, while the
+	// wizard added 1 for any body containing "{{" — so the identical template
+	// priced through /billing/estimate and then through the wizard returned
+	// different numbers, and the estimator was the optimistic one. A customer
+	// saw the price go up for no reason they could see.
+	minSegments, maxSegments := billing.SegmentBounds(request.Body.PrimaryBody)
 
-	// With no fallback channel, min and max are the same number. The contract
-	// models a range because RCS→SMS fallback means some recipients may be
-	// billed at the fallback channel's rate instead.
-	minCost, maxCost := primaryCost, primaryCost
+	// A range has TWO independent causes and both have to be spanned: how long
+	// a recipient's substituted body is, and which channel that recipient lands
+	// on. Quoting a segment range beside a single exact price would have the
+	// screen contradict itself.
+	minCost := int64(recipients) * int64(minSegments) * rate.PerSegmentMinor
+	maxCost := int64(recipients) * int64(maxSegments) * rate.PerSegmentMinor
 	fallbackEligible := 0
 
 	if request.Body.Fallback != nil {
@@ -97,23 +105,32 @@ func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostReque
 			return nil, err
 		}
 
-		fallbackSegments := billing.SegmentCount(request.Body.Fallback.Body)
-		fallbackCost := int64(recipients) * int64(fallbackSegments) * fallbackRate.PerSegmentMinor
+		fallbackMin, fallbackMax := billing.SegmentBounds(request.Body.Fallback.Body)
+		fallbackCostMin := int64(recipients) * int64(fallbackMin) * fallbackRate.PerSegmentMinor
+		fallbackCostMax := int64(recipients) * int64(fallbackMax) * fallbackRate.PerSegmentMinor
 		fallbackEligible = recipients
 
-		// The bounds are "everyone on the primary channel" versus "everyone on
-		// the fallback", whichever way round is cheaper — the truth lands
-		// between them and depends on per-handset capability.
-		minCost, maxCost = min(primaryCost, fallbackCost), max(primaryCost, fallbackCost)
+		// Both causes at once: the cheapest a recipient can be is the shorter
+		// body on the cheaper channel, and the dearest is the longer body on
+		// the dearer one. The truth lands between and depends on per-handset
+		// capability.
+		minCost, maxCost = min(minCost, fallbackCostMin), max(maxCost, fallbackCostMax)
+		if minSegments > fallbackMin {
+			minSegments = fallbackMin
+		}
+		if maxSegments < fallbackMax {
+			maxSegments = fallbackMax
+		}
 	}
 
 	return gen.EstimateCost200JSONResponse(gen.CampaignEstimate{
-		Recipients:         recipients,
-		FallbackEligible:   fallbackEligible,
-		SegmentsPerMessage: segments,
-		CostMinorMin:       int(minCost),
-		CostMinorMax:       int(maxCost),
-		Currency:           gen.CurrencyCode(rate.Currency),
+		Recipients:            recipients,
+		FallbackEligible:      fallbackEligible,
+		SegmentsPerMessageMin: minSegments,
+		SegmentsPerMessageMax: maxSegments,
+		CostMinorMin:          int(minCost),
+		CostMinorMax:          int(maxCost),
+		Currency:              gen.CurrencyCode(rate.Currency),
 		// Suppression lists arrive in Stage 4; until then nothing is excluded,
 		// and reporting zero is accurate rather than a placeholder.
 		SuppressedExcluded: 0,

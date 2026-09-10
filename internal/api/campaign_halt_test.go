@@ -44,9 +44,9 @@ func (h *harness) seedNamedCampaign(tenant account, name, status string) string 
 	}
 	if err := h.admin.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO campaigns (tenant_id, name, channel, country, sender_id, template_id,
-		    status, recipients, segments_per_message, cost_minor_min, cost_minor_max,
+		    status, recipients, segments_per_message_min, segments_per_message_max, cost_minor_min, cost_minor_max,
 		    currency, paused_at, cancelled_at)
-		VALUES ($1, $5, 'SMS', 'IN', $2, $3, $4, 100, 1, 1200, 1200,
+		VALUES ($1, $5, 'SMS', 'IN', $2, $3, $4, 100, 1, 1, 1200, 1200,
 		        'INR', %s, %s) RETURNING id`, pausedAt, cancelledAt),
 		tenant.TenantID, senderID, templateID, status, name).Scan(&campaignID); err != nil {
 		h.t.Fatalf("seed campaign: %v", err)

@@ -24,21 +24,22 @@ func (s *Server) toCampaign(campaign store.Campaign,
 	counts store.CampaignCounts) gen.Campaign {
 
 	out := gen.Campaign{
-		Id:                 campaign.ID,
-		Name:               campaign.Name,
-		Channel:            gen.ChannelId(campaign.Channel),
-		Country:            gen.CountryCode(campaign.Country),
-		SenderId:           campaign.SenderID.String(),
-		TemplateId:         campaign.TemplateID.String(),
-		Status:             gen.CampaignStatus(campaign.Status),
-		Recipients:         campaign.Recipients,
-		SegmentsPerMessage: campaign.SegmentsPerMessage,
-		CostMinorMin:       int(campaign.CostMinorMin),
-		CostMinorMax:       int(campaign.CostMinorMax),
-		Currency:           gen.CurrencyCode(campaign.Currency),
-		CreatedAt:          campaign.CreatedAt,
-		ScheduledAt:        campaign.ScheduledAt,
-		SendStartedAt:      campaign.SendStartedAt,
+		Id:                    campaign.ID,
+		Name:                  campaign.Name,
+		Channel:               gen.ChannelId(campaign.Channel),
+		Country:               gen.CountryCode(campaign.Country),
+		SenderId:              campaign.SenderID.String(),
+		TemplateId:            campaign.TemplateID.String(),
+		Status:                gen.CampaignStatus(campaign.Status),
+		Recipients:            campaign.Recipients,
+		SegmentsPerMessageMin: campaign.SegmentsPerMessageMin,
+		SegmentsPerMessageMax: campaign.SegmentsPerMessageMax,
+		CostMinorMin:          int(campaign.CostMinorMin),
+		CostMinorMax:          int(campaign.CostMinorMax),
+		Currency:              gen.CurrencyCode(campaign.Currency),
+		CreatedAt:             campaign.CreatedAt,
+		ScheduledAt:           campaign.ScheduledAt,
+		SendStartedAt:         campaign.SendStartedAt,
 	}
 	if campaign.ListID != nil {
 		out.ListId = campaign.ListID.String()
@@ -286,7 +287,8 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 			campaign.Country, campaign.Channel, templateBody, templateCategory)
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
-			campaign.SegmentsPerMessage = estimate.SegmentsPerMessage
+			campaign.SegmentsPerMessageMin = estimate.SegmentsPerMessageMin
+			campaign.SegmentsPerMessageMax = estimate.SegmentsPerMessageMax
 			campaign.CostMinorMin = estimate.CostMinorMin
 			campaign.CostMinorMax = estimate.CostMinorMax
 			campaign.Currency = estimate.Currency
@@ -408,11 +410,12 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		return nil, err
 	}
 	return gen.EstimateCampaign200JSONResponse(gen.CampaignEstimate{
-		Recipients:         estimate.Recipients,
-		SegmentsPerMessage: estimate.SegmentsPerMessage,
-		CostMinorMin:       int(estimate.CostMinorMin),
-		CostMinorMax:       int(estimate.CostMinorMax),
-		Currency:           gen.CurrencyCode(estimate.Currency),
+		Recipients:            estimate.Recipients,
+		SegmentsPerMessageMin: estimate.SegmentsPerMessageMin,
+		SegmentsPerMessageMax: estimate.SegmentsPerMessageMax,
+		CostMinorMin:          int(estimate.CostMinorMin),
+		CostMinorMax:          int(estimate.CostMinorMax),
+		Currency:              gen.CurrencyCode(estimate.Currency),
 	}), nil
 }
 

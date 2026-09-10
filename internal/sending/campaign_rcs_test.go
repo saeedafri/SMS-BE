@@ -133,10 +133,10 @@ func (f *fixture) seedRCSCampaign(senderID, templateID, listID uuid.UUID) uuid.U
 	f.t.Helper()
 	id := uuid.New()
 	f.exec(`INSERT INTO campaigns (id, tenant_id, name, channel, country, list_id,
-	            sender_id, template_id, status, recipients, segments_per_message,
+	            sender_id, template_id, status, recipients, segments_per_message_min, segments_per_message_max,
 	            cost_minor_min, cost_minor_max, currency)
 	        VALUES ($1, $2, 'RCS personalised', 'RCS', 'IN', $3, $4, $5, 'queued',
-	                2, 1, 35, 70, 'INR')`,
+	                2, 1, 1, 35, 70, 'INR')`,
 		id, f.identity.TenantID, listID, senderID, templateID)
 	return id
 }
