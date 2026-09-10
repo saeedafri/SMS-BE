@@ -46,6 +46,15 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/log/relay
+# Uploaded agent artwork and verification documents. ProtectSystem=strict makes
+# the whole filesystem read-only apart from what is named here, so without this
+# every upload fails with "read-only file system" AFTER passing validation —
+# and the row rolls back, which is the right failure but an invisible one.
+ReadWritePaths=/var/lib/relay
+# Created with the right owner and mode on start, so a fresh box does not need
+# the directory made by hand.
+StateDirectory=relay
+StateDirectoryMode=0700
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
