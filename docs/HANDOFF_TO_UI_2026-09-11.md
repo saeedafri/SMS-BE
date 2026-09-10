@@ -192,6 +192,13 @@ discover.
   set.** Any one missing and the endpoint refuses rather than half-working; a
   store with no signing key serves identity documents to anyone who guesses.
 
+**On this deployment no carrier is reachable yet**, because `RCS_VENDOR` is
+unset — so `POST …/launch` correctly answers *"We hold no AIRTEL integration
+yet, so an agent cannot be put to them. Your agent is unaffected on every other
+network."* That is the §1 state your document describes, live: a carrier we
+cannot reach is shown, at `not_submitted`, rather than hidden. Your screens can
+be built against it today.
+
 **Retention is not built.** You said you had no opinion on the period but did
 have one that there should be one. Agreed, and it is a scheduled sweep rather
 than part of this slice — tell us the period for `verification_document` and it
@@ -304,9 +311,25 @@ suite:
   tenant — the one role the missing policy did not affect. Row-level security
   was doing exactly what it was told; what it was told was half the story.
 
-Both now have guards that fail without them: dropping the operator policy turns
-the queue test red with *"the agent is not in the operator queue — it cannot be
-approved, and the customer waits forever (0 rows)"*.
+- **Uploads failed on the deployed box with "read-only file system"**, after
+  passing every validation. `ProtectSystem=strict` makes the filesystem
+  read-only apart from what `ReadWritePaths` names. Adding it on the box was not
+  enough — the deploy copies our unit file over, so the fix lasted exactly until
+  the next push and an endpoint verified working broke again four minutes later.
+  It is in the repo now. The failure was at least the right shape: the row
+  rolled back rather than pointing at bytes that were never written.
+
+Both of the first two now have guards that fail without them: dropping the
+operator policy turns the queue test red with *"the agent is not in the operator
+queue — it cannot be approved, and the customer waits forever (0 rows)"*.
+
+**And live verification found a hole in our own coverage.** Every launch refusal
+was tested and the SUCCESS was not — the deployment holds no RCS vendor, so
+every launch there is correctly refused with *"we hold no AIRTEL integration
+yet"*, and the working path could not be exercised against it at all. Now
+covered with a configured vendor and a seeded corridor, asserting the thing that
+is easy to get wrong: launching on one carrier moves that carrier to `pending`
+and leaves the other at `not_submitted`.
 
 **One mutation was neutralised and we nearly recorded a green as evidence.** The
 first attempt at the isolation mutation read through the operator pool, which

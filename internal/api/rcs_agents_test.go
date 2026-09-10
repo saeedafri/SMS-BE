@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/saeedafri/sms-be/internal/connector"
 )
 
 // An agent's lifecycle refuses what it should, in the states it should.
@@ -426,5 +428,101 @@ func TestAnAgentAwaitingReviewReachesTheOperatorAndCanBeDecided(t *testing.T) {
 	if again := h.do(http.MethodPost, "/v1/operator/rcs-agents/"+agent.Id+"/approve",
 		operator, nil); again.Code != http.StatusConflict {
 		t.Errorf("approving twice = %d, want 409", again.Code)
+	}
+}
+
+// stubRCSCarrier stands in for a deployment that holds one vendor's
+// credentials. Only Vendor() is reached: reachability for launch is decided by
+// WHICH vendor is configured, not by asking the carrier anything.
+type stubRCSCarrier struct{ vendor string }
+
+func (s stubRCSCarrier) Vendor() string { return s.vendor }
+func (s stubRCSCarrier) Capability(context.Context, string) (connector.RCSCapability, error) {
+	return connector.RCSCapability{}, nil
+}
+func (s stubRCSCarrier) Reachable(context.Context, []string) ([]string, error) { return nil, nil }
+
+// A verified agent launches on a carrier we hold credentials for, and the
+// agent's own status moves once — not per carrier.
+//
+// The refusals were covered and the SUCCESS was not, which live verification
+// made obvious: the deployment holds no RCS vendor, so every launch there is
+// correctly refused with "we hold no AIRTEL integration yet" and the working
+// path could not be exercised against it at all.
+//
+// A live agent must stay live when a second carrier opens a review: one carrier
+// beginning to look does not withdraw the reach the agent already has on
+// another network.
+func TestAVerifiedAgentLaunchesOnACarrierWeCanReach(t *testing.T) {
+	h := newHarness(t)
+	// Mutated in place: handlers are methods on the pointer the router already
+	// holds, so this needs no second copy of the server literal.
+	h.server.RCSCarrier = stubRCSCarrier{vendor: "airtel"}
+
+	acct := h.newAccount("owner")
+	operator := h.operatorToken()
+	h.approveRegistration(acct, "IN")
+	// The carrier set is DERIVED from routes rather than a hardcoded table, so
+	// a country with no configured RCS corridor genuinely has no carrier to
+	// launch on. Production has one; the test database does not.
+	h.seedRcsRoute("IN", "AIRTEL")
+
+	agent := h.createAgent(acct, "Launchable "+uuid.NewString()[:6])
+	document := h.uploadAsset(acct, "verification_document", "loa.pdf",
+		"application/pdf", []byte("%PDF-1.4\nletter\n"))
+	h.submitVerification(acct, agent.Id, document)
+	if res := h.do(http.MethodPost, "/v1/operator/rcs-agents/"+agent.Id+"/approve",
+		operator, nil); res.Code != http.StatusOK {
+		t.Fatalf("approve = %d: %s", res.Code, res.Body)
+	}
+
+	res := h.do(http.MethodPost, "/v1/rcs/agents/"+agent.Id+"/launch", acct.Token,
+		map[string]any{"carrier": "AIRTEL"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("launch on a reachable carrier = %d: %s", res.Code, res.Body)
+	}
+	var launched agentBody
+	if err := json.Unmarshal(res.Body, &launched); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if launched.Status != "launch_pending" {
+		t.Errorf("after launching, the agent is %q, want launch_pending", launched.Status)
+	}
+	var airtel, jio string
+	for _, l := range launched.CarrierLaunches {
+		switch l.Carrier {
+		case "AIRTEL":
+			airtel = l.Status
+		case "JIO":
+			jio = l.Status
+		}
+	}
+	if airtel != "pending" {
+		t.Errorf("AIRTEL is %q after launching on it, want pending", airtel)
+	}
+	// The carrier we hold no integration for is untouched, and still visible.
+	if jio != "not_submitted" {
+		t.Errorf("JIO is %q, want not_submitted — launching on one carrier must "+
+			"not move another", jio)
+	}
+	// A second launch on the same carrier is refused rather than resetting the
+	// review that is already running.
+	if again := h.do(http.MethodPost, "/v1/rcs/agents/"+agent.Id+"/launch", acct.Token,
+		map[string]any{"carrier": "AIRTEL"}); again.Code != http.StatusConflict {
+		t.Errorf("launching the same carrier twice = %d, want 409", again.Code)
+	}
+}
+
+// seedRcsRoute configures an RCS corridor, which is what makes a carrier
+// visible on an agent's launch screen at all.
+func (h *harness) seedRcsRoute(country, carrier string) {
+	h.t.Helper()
+	if _, err := h.admin.Exec(context.Background(), `
+		INSERT INTO routes (country, channel, carrier, label, priority,
+		                    cost_per_segment_minor, currency, status)
+		VALUES ($1, 'RCS', $2, $3, $4, 30, 'INR', 'active')
+		ON CONFLICT DO NOTHING`,
+		country, carrier, carrier+" RCS", 900+len(carrier)); err != nil {
+		h.t.Fatalf("seed rcs route: %v", err)
 	}
 }
