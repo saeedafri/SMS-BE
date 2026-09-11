@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -175,6 +176,10 @@ func (s *Server) CreateRcsAgent(ctx context.Context, request gen.CreateRcsAgentR
 		return gen.CreateRcsAgent422JSONResponse(errorBody(codeValidation,
 			capitalise(err.Error())+".")), nil
 	}
+	if !request.Body.UseCase.Valid() {
+		return gen.CreateRcsAgent422JSONResponse(
+			unknownUseCase(request.Body.UseCase)), nil
+	}
 	country := string(request.Body.Country)
 	approved, err := store.HasApprovedRegistration(ctx, s.DB, identity, country)
 	if err != nil {
@@ -295,6 +300,10 @@ func (s *Server) UpdateRcsAgent(ctx context.Context, request gen.UpdateRcsAgentR
 		RegistrationID:    body.RegistrationId,
 	}
 	if body.UseCase != nil {
+		if !body.UseCase.Valid() {
+			return gen.UpdateRcsAgent422JSONResponse(
+				unknownUseCase(*body.UseCase)), nil
+		}
 		useCase := string(*body.UseCase)
 		update.UseCase = &useCase
 	}
@@ -360,6 +369,25 @@ func (s *Server) SubmitRcsAgentVerification(ctx context.Context,
 // Empty when the agent cannot be read: the transition below answers 404 for
 // that, and guessing here would turn a missing agent into a validation error
 // about a name nobody typed.
+// unknownUseCase is the refusal for a use case no carrier recognises.
+//
+// It exists because the alternative is a 500. The use_case check constraint is
+// the floor under this column, and a value that reaches it is refused by
+// Postgres as an integrity error — which surfaces to a customer as "an
+// unexpected error occurred", naming neither the field nor the accepted set.
+// MULTI_USE was a legal value until migration 00047 dropped it, so the callers
+// most likely to send one are the ones who integrated against the old contract.
+//
+// The accepted values are the GENERATED constants rather than a literal list:
+// dropping a member from the contract then deletes an identifier this function
+// names, and the build fails instead of the message quietly going stale.
+func unknownUseCase(value gen.RcsAgentUseCase) gen.Error {
+	return errorBody(codeValidation, fmt.Sprintf(
+		"%q is not a use case any carrier recognises. Accepted values are %s, %s and %s.",
+		string(value), gen.RcsAgentUseCaseOTP,
+		gen.RcsAgentUseCaseTRANSACTIONAL, gen.RcsAgentUseCasePROMOTIONAL))
+}
+
 func (s *Server) brandProblem(ctx context.Context, identity store.Identity,
 	agentID uuid.UUID) string {
 
