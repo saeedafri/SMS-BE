@@ -510,5 +510,10 @@ is worth knowing before that day rather than during it.
    `POST /v1/templates/{id}/carrier-registration` (§8). The second is the one
    that blocks a real send.
 3. Tell us whether a `null` on `displayName` or `useCase` in a PATCH should be
-   a 422 rather than ignored (§4).
+   a 422 rather than ignored (§4). Note these are now two different cases: a
+   null on `useCase` is ignored, while an unrecognised *value* is a 422 naming
+   the accepted set (§7). Only the null half is still open.
 4. Confirm the single-carrier corridors are intended (§5.1).
+5. Check whether any screen can still emit `MULTI_USE` from a cached build. It
+   now fails cleanly rather than as a 500, but it still fails — and per §7 this
+   is the direction of contract change that tells neither of us anything.
