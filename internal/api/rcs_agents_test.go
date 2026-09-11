@@ -596,3 +596,45 @@ func incompressiblePNG(width, height int) *bytes.Buffer {
 	_ = png.Encode(&buf, canvas)
 	return &buf
 }
+
+// A use case the carriers do not recognise is refused with a reason, not a 500.
+//
+// MULTI_USE was a legal value until migration 00047 dropped it, so the callers
+// most likely to send one are those who integrated against the older contract.
+// Without a check at the edge the value reaches the use_case constraint and
+// Postgres refuses it as an integrity error, which surfaces as "an unexpected
+// error occurred" — naming neither the field nor what would have been accepted.
+//
+// Found on the deployment rather than here: this test exists because the live
+// probe returned 500 where it should have returned 422.
+func TestARetiredUseCaseIsRefusedWithAReasonRatherThanA500(t *testing.T) {
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	h.approveRegistration(acct, "IN")
+
+	for _, path := range []string{"create", "patch"} {
+		t.Run(path, func(t *testing.T) {
+			var res response
+			if path == "create" {
+				res = h.do(http.MethodPost, "/v1/rcs/agents", acct.Token, map[string]any{
+					"displayName": "Retired enum", "country": "IN", "useCase": "MULTI_USE",
+				})
+			} else {
+				agent := h.createAgent(acct, "Retired enum patch")
+				res = h.do(http.MethodPatch, "/v1/rcs/agents/"+agent.Id, acct.Token,
+					map[string]any{"useCase": "MULTI_USE"})
+			}
+			if res.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("useCase=MULTI_USE = %d, want 422 (%s)", res.Code, res.Body)
+			}
+			// The accepted set has to be IN the message. A refusal that does not
+			// say what would have worked leaves the caller guessing which of the
+			// three survived.
+			for _, accepted := range []string{"OTP", "TRANSACTIONAL", "PROMOTIONAL"} {
+				if !bytes.Contains(res.Body, []byte(accepted)) {
+					t.Errorf("refusal does not name %s: %s", accepted, res.Body)
+				}
+			}
+		})
+	}
+}
