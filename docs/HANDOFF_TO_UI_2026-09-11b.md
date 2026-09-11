@@ -9,9 +9,11 @@ Everything in your §6 list is done except the retention sweep, which we agreed
 is a separate slice. Two of the answers are not the ones you asked for, and both
 are better; one of them is a correction to a number you gave us today.
 
-Read §1 and §6 if you read nothing else. §1 is the one that changes what a
+Read §1, §6 and §9 if you read nothing else. §1 is the one that changes what a
 handset shows. §6 is a finding about your own §7 that turns a nicety into a
-control.
+control. §9 is what we probed on the deployment afterwards — including a `500`
+we shipped and then caught, and the one behaviour this deployment cannot show
+you.
 
 ---
 
@@ -322,6 +324,38 @@ quietly forward. You were right that nothing on our side would have reported the
 enum member leaving — the check constraint was the only thing that would have
 noticed, and it still admitted the value.
 
+**And your "silent" is too kind to it. We shipped this, probed the deployment,
+and got a 500.**
+
+```
+POST /v1/rcs/agents  {"useCase":"MULTI_USE", ...}
+500  {"code":"internal_error","message":"an unexpected error occurred"}
+```
+
+Removing an enum member does not merely fail to announce itself. It converts a
+value that was *legal yesterday* into an unhandled integrity error, because the
+tightened check constraint is the only thing left that refuses it and a
+constraint has no vocabulary for talking to a customer. The message names
+neither the field nor the accepted set — and the callers most likely to send
+`MULTI_USE` are precisely those still on the older contract, so it fires hardest
+on the clients least equipped to guess.
+
+Fixed: `422`, naming all three accepted values, on both the create and the PATCH
+path. The guard reads the **generated** `Valid()`, so the accepted set tracks
+the contract with no second list to maintain, and dropping a member later
+deletes an identifier the refusal message references — a build failure rather
+than a message that quietly goes stale.
+
+**The general form, which is worth more than this instance:** a removed enum
+member is silent at compile time *and* loud at runtime, in that order, and the
+gap between the two is however long it takes someone to send the old value. Any
+enum you narrow needs a refusal at the edge in the same change as the constraint
+that tightens. We had done exactly this for `sender_ids_agent_is_rcs` one field
+over and did not think to do it here.
+
+Worth checking on your side too: if any screen still offers `MULTI_USE` from a
+cached build, it now gets a clean 422 rather than a 500, but it will still fail.
+
 **`displayName` 40 and the 4.5:1 contrast rule — we will own both.** You offered
 to keep the contrast check client-side; keep it, as the fast one. Both are now
 enforced server-side as well, at edit *and* at verification submission, which is
@@ -393,7 +427,43 @@ rather we proposed a shape, say so and we will send one.
 
 ---
 
-## 9. What we would like next
+## 9. What we checked on the deployment, and the one thing we could not
+
+Your §1 checked our last build against the wire rather than reading the
+document, which is the right way round and is how the `MULTI_USE` 500 above was
+found. So here is ours, against `sms-api.saqibsaeed.cloud` after this deploy.
+
+| Behaviour | Result |
+| --- | --- |
+| `rcsAgentId` accepted on an RCS sender | `201`, and **read back out of Postgres** rather than trusted from the response |
+| `rcsAgentId` on an SMS sender | `422` *"An RCS agent can only be attached to an RCS sender."* |
+| `rcsAgentId` naming a draft agent | `422` naming the state it is in |
+| `rcsAgentId` naming another tenant's agent | `422` *"No such RCS agent."* — same answer as one that does not exist |
+| 41-character `displayName` | `422` *"The display name is 41 characters and the carrier allows 40."* |
+| `primaryColor` `#FFFF66` | `422` *"reaches only 1.1:1 against white and the carrier requires 4.5:1"* |
+| `useCase: MULTI_USE` | `422` naming all three accepted values |
+| PATCH `{"description":null}` | clears it, and leaves `primaryColor` untouched |
+| PATCH `{}` | changes nothing |
+| PATCH `{"notAField":"x"}` | `422` *"Unknown field(s): notAField."* |
+| 1.44 MB `template_media` | `201` — refused before this change, accepted now |
+| 2.42 MB `template_media` | `413` *"The file is 2.4 MB and the limit for this purpose is 2.0 MB."* |
+| 1.44 MB as `agent_logo` | `413` against the 50 KB figure |
+| shell bytes labelled `image/png` | `422` *"text/plain" is not an accepted type here* |
+| `carrierLaunches` for an IN agent | `AIRTEL`, `JIO`, **`VI`** — and `updatedAt` is `null`, not the zero time |
+
+**The one we cannot show you.** Step 6's refusal — an RCS send with no
+resolvable agent rejected as `rcs_agent_not_resolved` — **is not observable on
+this deployment**, and we are not going to imply otherwise. `RCS_VENDOR` is
+unset, so no carrier is reachable, so the agent is deliberately not required and
+RCS goes to the sandbox. The refusal is proven by test only: at the gate, in
+`internal/domain/messaging`, including that it fires *ahead of* the balance
+check so a doomed message never moves money.
+
+That is the honest state rather than a gap. It also means the first deployment
+with real carrier credentials is the first place this path runs for real, which
+is worth knowing before that day rather than during it.
+
+## 10. What we would like next
 
 1. Declare `vendor` on the carrier-registration attach request (§6). Small,
    and it restores a control rather than adding a nicety.
