@@ -379,10 +379,16 @@ founder@northwind.test / relay-dev     Northwind Logistics (tenant aaaaaaaa-1111
 ```
 
 Northwind already existed as an operator fixture; what it lacked was a way in.
-It now has an owner login, an approved IN entity, and a **live RCS agent with an
-approved AIRTEL launch** (`northwind_airtel_agent`) — because an agent is the
-one object where a mistake is invisible from our side and visible on a
-stranger's handset, so the proof wants one on each side of the boundary.
+In the seed it now has an owner login, an approved IN entity, and a **live RCS
+agent with an approved AIRTEL launch** (`northwind_airtel_agent`) — because an
+agent is the one object where a mistake is invisible from our side and visible
+on a stranger's handset, so the proof wants one on each side of the boundary.
+
+**On the deployment the account was created through public signup instead**, for
+the reason in §9.1: the seed resets before it writes. So the live Northwind has
+a login and no agent yet. The isolation attempts in §9.1 did not need one — they
+are attempts to reach ACME's agent, and the attacking side needs only a
+session.
 
 Two tests cross that boundary now: an inbound event carrying one tenant's
 carrier agent id resolves to that tenant and never the other, and the database
@@ -450,6 +456,39 @@ found. So here is ours, against `sms-api.saqibsaeed.cloud` after this deploy.
 | 1.44 MB as `agent_logo` | `413` against the 50 KB figure |
 | shell bytes labelled `image/png` | `422` *"text/plain" is not an accepted type here* |
 | `carrierLaunches` for an IN agent | `AIRTEL`, `JIO`, **`VI`** — and `updatedAt` is `null`, not the zero time |
+
+### 9.1 Your §1 — there is a second identity now, and the leak was attempted
+
+You said you had no second account to attempt a leak from and were not
+pretending otherwise. There is one:
+
+```
+founder@northwind.test / relay-dev     Northwind Logistics (IN)
+```
+
+Created through `POST /v1/auth/signup` — the ordinary public path, not a
+fixture — so it is a real tenant with a real session and nothing about it is
+privileged. **We did not run the demo seed to get it.** That binary clears
+tenants, users, routes and pricing rates before it writes, and production data
+is not ours to reset for our own convenience.
+
+Then we attempted the leak from it, which is the half that matters:
+
+| Attempt, as Northwind | Answer |
+| --- | --- |
+| `GET /v1/rcs/agents` | `total: 0` — Acme's six are invisible |
+| `GET /v1/rcs/agents/{an Acme agent id}` | `404` |
+| the same id, as Acme | `200` — so the id is real and the `404` is isolation, not a typo |
+| `POST /v1/sender-ids` with `rcsAgentId` = Acme's agent | `422` *"No such RCS agent."* |
+| `GET /v1/campaigns` | `total: 0`, against Acme's `75` |
+
+The fourth row is the one worth having. It is the send path's tenant check
+reached through the registration path, and a `404`-shaped answer rather than a
+"that belongs to someone else" — which is the correct wording, because anything
+else confirms that a given id belongs to somebody.
+
+This is now yours to re-run rather than ours to assert. The account is
+permanent.
 
 **The one we cannot show you.** Step 6's refusal — an RCS send with no
 resolvable agent rejected as `rcs_agent_not_resolved` — **is not observable on
