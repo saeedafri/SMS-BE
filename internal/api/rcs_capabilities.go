@@ -63,8 +63,18 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 		Results: make([]gen.RcsCapability, 0, len(valid)+len(rejected)),
 	}
 
+	// The deployment agent, not the caller's own — because the caller has no way
+	// to name one. Reachability is agent-specific: a handset with RCS enabled is
+	// unreachable for an agent that has not launched on its subscriber's
+	// carrier, so the same list gives different answers per agent. This request
+	// body declares only msisdns, so the honest answer here is about the shared
+	// agent and nothing else. Raised with the frontend — their own reach-check
+	// screen already sits on an agent's page, so the field is missing rather
+	// than unwanted.
+	agentID := s.RCSFallbackAgentID
+
 	if len(valid) == 1 {
-		capability, err := s.RCSCarrier.Capability(ctx, valid[0])
+		capability, err := s.RCSCarrier.Capability(ctx, agentID, valid[0])
 		if err != nil {
 			return rcsCarrierError(err)
 		}
@@ -82,7 +92,7 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 			Features:  &features,
 		})
 	} else {
-		reachable, err := s.RCSCarrier.Reachable(ctx, valid)
+		reachable, err := s.RCSCarrier.Reachable(ctx, agentID, valid)
 		if err != nil {
 			return rcsCarrierError(err)
 		}
@@ -118,7 +128,7 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 // neither belongs in a tenant-facing body. The detail is already in the
 // request log.
 func rcsCarrierError(err error) (gen.CheckRcsCapabilitiesResponseObject, error) {
-	if errors.Is(err, connector.ErrRCSNotConfigured) {
+	if errors.Is(err, connector.ErrRCSNotConfigured) || errors.Is(err, connector.ErrRCSNoAgent) {
 		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
 			"This deployment has no RCS carrier configured, so handset reachability cannot be checked")), nil
 	}

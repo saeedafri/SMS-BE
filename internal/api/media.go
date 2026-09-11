@@ -115,7 +115,7 @@ func (s *Server) UploadMedia(ctx context.Context, request gen.UploadMediaRequest
 		return gen.UploadMedia422JSONResponse(errorBody(codeValidation,
 			capitalise(err.Error())+".")), nil
 	}
-	if err := rule.CheckSize(int64(len(body))); err != nil {
+	if err := rule.CheckSize(contentType, int64(len(body))); err != nil {
 		// 413 rather than 422: the request was well formed and simply too big,
 		// and the frontend's error states are written against that distinction.
 		return gen.UploadMedia413JSONResponse(errorBody(codeValidation,

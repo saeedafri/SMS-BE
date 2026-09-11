@@ -113,6 +113,15 @@ type Server struct {
 	// identical to a country with no RCS and quietly disable the channel.
 	RCSCarrier connector.RCSCapabilityChecker
 
+	// RCSFallbackAgentID is the deployment-wide RBM agent, RCS_AIRTEL_AGENT_ID
+	// or RCS_VI_BOT_ID, from before customers owned their own.
+	//
+	// It is a FALLBACK and nothing else: it is used where the caller has no
+	// agent of its own to name, and every such place is a gap being closed
+	// rather than a design. Empty is a legitimate value on a deployment that
+	// never had a shared agent.
+	RCSFallbackAgentID string
+
 	// Gateway captures payments. Nil means the manual gateway, which records a
 	// capture without contacting anyone — correct for bank-transfer and
 	// invoice-paid customers, and the seam a real provider slots into.
@@ -194,6 +203,12 @@ func NewRouter(s *Server) http.Handler {
 		// how that happens, so the contract's declaration is enforced here.
 		"POST /v1/operator/tenants/{id}/throttle": {"ratePerSecond", "reason"},
 		"PATCH /v1/sender-ids/{id}":               {"header", "displayName", "registrationId"},
+		// Registered for the SECOND thing this middleware does: recording which
+		// keys the caller actually sent. An agent PATCH is JSON Merge Patch —
+		// an omitted key leaves the value alone, an explicit null clears it —
+		// and the two are the same nil pointer in the generated struct, so the
+		// presence map is the only place the difference survives.
+		"PATCH /v1/rcs/agents/{id}": rcsAgentBodyFields,
 	}))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"testing"
@@ -315,19 +316,12 @@ func TestTheCarrierSizeLimitsAreTheOnesEnforced(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
-	// A 224x224 PNG of noise, comfortably over 50 KB but far under the 2 MB the
+	// A 224x224 PNG comfortably over 50 KB but far under the 2 MB the
 	// frontend's provisional table would have allowed.
-	big := image.NewRGBA(image.Rect(0, 0, 224, 224))
-	for x := 0; x < 224; x++ {
-		for y := 0; y < 224; y++ {
-			big.Set(x, y, color.RGBA{R: uint8(x * y), G: uint8(x ^ y), B: uint8(x + y), A: 255})
-		}
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, big)
+	buf := incompressiblePNG(224, 224)
 	if buf.Len() <= 50*1024 {
-		t.Skipf("the noise image compressed to %d bytes, under the 50 KB limit — "+
-			"this fixture no longer straddles it", buf.Len())
+		t.Fatalf("the fixture compressed to %d bytes, under the 50 KB limit — "+
+			"it no longer straddles the boundary and this test proves nothing", buf.Len())
 	}
 
 	res := h.uploadAttempt(acct, "agent_logo", "logo.png", "image/png", buf.Bytes())
@@ -437,10 +431,12 @@ func TestAnAgentAwaitingReviewReachesTheOperatorAndCanBeDecided(t *testing.T) {
 type stubRCSCarrier struct{ vendor string }
 
 func (s stubRCSCarrier) Vendor() string { return s.vendor }
-func (s stubRCSCarrier) Capability(context.Context, string) (connector.RCSCapability, error) {
+func (s stubRCSCarrier) Capability(context.Context, string, string) (connector.RCSCapability, error) {
 	return connector.RCSCapability{}, nil
 }
-func (s stubRCSCarrier) Reachable(context.Context, []string) ([]string, error) { return nil, nil }
+func (s stubRCSCarrier) Reachable(context.Context, string, []string) ([]string, error) {
+	return nil, nil
+}
 
 // A verified agent launches on a carrier we hold credentials for, and the
 // agent's own status moves once — not per carrier.
@@ -525,4 +521,78 @@ func (h *harness) seedRcsRoute(country, carrier string) {
 		country, carrier, carrier+" RCS", 900+len(carrier)); err != nil {
 		h.t.Fatalf("seed rcs route: %v", err)
 	}
+}
+
+// mp4Of is the smallest thing http.DetectContentType calls a video: an ftyp box
+// naming the mp42 brand, padded to the requested length.
+func mp4Of(size int) []byte {
+	header := append([]byte{0x00, 0x00, 0x00, 0x18}, []byte("ftypmp42")...)
+	header = append(header, make([]byte, 8)...)
+	header = append(header, []byte("mp42isom")...)
+	if size <= len(header) {
+		return header
+	}
+	return append(header, make([]byte, size-len(header))...)
+}
+
+// Vi's card limits are per MEDIUM, not per surface: the same rich card takes a
+// 2 MB image or a 10 MB video (Template Management p94).
+//
+// One flat number cannot express that. It has to be the smaller of the two,
+// which refuses every legitimate card video at a fifth of its allowance and
+// tells the customer the limit is 2 MB — true of images, false of the file they
+// are holding.
+func TestTemplateMediaLimitsAreThePerMediumOnes(t *testing.T) {
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+
+	// 4 MB: over the image ceiling, well under the video one. The same number
+	// on purpose, so the only thing separating the two answers is the medium.
+	const size = 4 * 1024 * 1024
+
+	video := h.uploadAttempt(acct, "template_media", "clip.mp4", "video/mp4", mp4Of(size))
+	if video.Code != http.StatusCreated {
+		t.Errorf("a 4 MB card video = %d, want 201 — Vi allows 10 MB: %s",
+			video.Code, video.Body)
+	}
+
+	buf := incompressiblePNG(900, 900)
+	if buf.Len() <= 2*1024*1024 {
+		t.Fatalf("the fixture compressed to %d bytes, under the 2 MB image limit — "+
+			"it no longer straddles the boundary and this test proves nothing", buf.Len())
+	}
+
+	still := h.uploadAttempt(acct, "template_media", "card.png", "image/png", buf.Bytes())
+	if still.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("a %d-byte card image = %d, want 413", buf.Len(), still.Code)
+	}
+	if !bytes.Contains(still.Body, []byte("2.0 MB")) {
+		t.Errorf("the refusal does not name the image limit: %s", still.Body)
+	}
+}
+
+// incompressiblePNG is a PNG that PNG cannot shrink: every pixel is random, so
+// DEFLATE has nothing to find and the encoded size tracks the pixel count.
+//
+// The arithmetic pattern this replaces (x*y, x^y, x+y) LOOKS like noise and is
+// highly compressible — a 224x224 image of it encoded to 35 KB against a 50 KB
+// limit, so the size test skipped itself and had been proving nothing. A
+// fixture that cannot reach the boundary it is testing is worse than no test:
+// it reports SKIP, which reads as a pass in every summary.
+//
+// Seeded, so a failure is reproducible rather than a coin toss.
+func incompressiblePNG(width, height int) *bytes.Buffer {
+	source := rand.New(rand.NewSource(1))
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	for x := 0; x < width; x++ {
+		for y := 0; y < height; y++ {
+			canvas.Set(x, y, color.RGBA{
+				R: uint8(source.Intn(256)), G: uint8(source.Intn(256)),
+				B: uint8(source.Intn(256)), A: 255,
+			})
+		}
+	}
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, canvas)
+	return &buf
 }

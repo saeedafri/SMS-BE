@@ -28,13 +28,10 @@ type AirtelRCS struct {
 	// over the encoded value.
 	AuthToken string
 
-	// AgentID is the registered RBM agent. Airtel rejects an empty one, and a
-	// capability answer is agent-specific: the same handset is reachable for a
-	// launched agent and unreachable for one still in test.
-	AgentID string
-
-	// CustomerID and SubAccountID identify the Airtel IQ account the agent
-	// hangs off. The capability endpoints do not want them; template
+	// CustomerID and SubAccountID identify the Airtel IQ account the agents
+	// hang off. One account holds many agents — the agent itself arrives per
+	// call, because it belongs to a customer and this connector serves all of
+	// them. The capability endpoints do not want these two; template
 	// registration and send both reject the request without them, with
 	// "Mandatory Request Parameter(s) cannot be null!".
 	CustomerID   string
@@ -78,12 +75,15 @@ type airtelEnvelope struct {
 	Status           string `json:"status"`
 }
 
-func (a *AirtelRCS) Capability(ctx context.Context, msisdn string) (RCSCapability, error) {
-	if a.BaseURL == "" || a.AuthToken == "" || a.AgentID == "" {
+func (a *AirtelRCS) Capability(ctx context.Context, agentID, msisdn string) (RCSCapability, error) {
+	if a.BaseURL == "" || a.AuthToken == "" {
 		return RCSCapability{}, ErrRCSNotConfigured
 	}
+	if agentID == "" {
+		return RCSCapability{}, ErrRCSNoAgent
+	}
 
-	body := map[string]string{"phoneNumber": msisdn, "agentId": a.AgentID}
+	body := map[string]string{"phoneNumber": msisdn, "agentId": agentID}
 	envelope, err := a.call(ctx, http.MethodGet, "/rcs-content-manager/v1/rcs/capabilities", nil, body)
 	if err != nil {
 		// Airtel reports "this handset cannot receive RCS from this agent" as a
@@ -105,9 +105,12 @@ func (a *AirtelRCS) Capability(ctx context.Context, msisdn string) (RCSCapabilit
 	}, nil
 }
 
-func (a *AirtelRCS) Reachable(ctx context.Context, msisdns []string) ([]string, error) {
-	if a.BaseURL == "" || a.AuthToken == "" || a.AgentID == "" {
+func (a *AirtelRCS) Reachable(ctx context.Context, agentID string, msisdns []string) ([]string, error) {
+	if a.BaseURL == "" || a.AuthToken == "" {
 		return nil, ErrRCSNotConfigured
+	}
+	if agentID == "" {
+		return nil, ErrRCSNoAgent
 	}
 
 	unique := dedupe(msisdns)
@@ -121,13 +124,15 @@ func (a *AirtelRCS) Reachable(ctx context.Context, msisdns []string) ([]string, 
 	// pasting a handful of numbers into a screen, not a 30,000-contact
 	// audience.
 	case len(unique) < AirtelBulkMinimum:
-		return checkEach(ctx, a.Capability, unique)
+		return checkEach(ctx, func(ctx context.Context, msisdn string) (RCSCapability, error) {
+			return a.Capability(ctx, agentID, msisdn)
+		}, unique)
 
 	case len(unique) > MaxRCSBulkNumbers:
 		return nil, ErrRCSTooManyNumbers
 	}
 
-	body := map[string]any{"agentId": a.AgentID, "users": unique}
+	body := map[string]any{"agentId": agentID, "users": unique}
 	envelope, err := a.call(ctx, http.MethodGet, "/rcs-content-manager/v1/rcs/users/reachability", nil, body)
 	if err != nil {
 		return nil, err
@@ -233,22 +238,27 @@ func (a *AirtelRCS) Health(ctx context.Context) Health {
 // sendConfigured is stricter than the capability check's own guard: templates
 // and sends need the account identifiers that capability discovery does not.
 func (a *AirtelRCS) sendConfigured() bool {
-	return a.BaseURL != "" && a.AuthToken != "" && a.AgentID != "" &&
+	return a.BaseURL != "" && a.AuthToken != "" &&
 		a.CustomerID != "" && a.SubAccountID != ""
 }
 
-// account is the four identifiers every non-capability Airtel call repeats.
-func (a *AirtelRCS) account() map[string]any {
+// account is the three identifiers every non-capability Airtel call repeats.
+// Two are the deployment's Airtel IQ account; the third is the customer's own
+// agent and arrives with the call.
+func (a *AirtelRCS) account(agentID string) map[string]any {
 	return map[string]any{
 		"customerId":   a.CustomerID,
 		"subAccountId": a.SubAccountID,
-		"agentId":      a.AgentID,
+		"agentId":      agentID,
 	}
 }
 
-func (a *AirtelRCS) RegisterTemplate(ctx context.Context, spec RCSTemplateSpec) (RCSTemplateRegistration, error) {
+func (a *AirtelRCS) RegisterTemplate(ctx context.Context, agentID string, spec RCSTemplateSpec) (RCSTemplateRegistration, error) {
 	if !a.sendConfigured() {
 		return RCSTemplateRegistration{}, ErrRCSNotConfigured
+	}
+	if agentID == "" {
+		return RCSTemplateRegistration{}, ErrRCSNoAgent
 	}
 	// Checked here rather than only at the API layer so a caller that reaches
 	// this connector any other way still cannot spend a 24-hour review on
@@ -257,7 +267,7 @@ func (a *AirtelRCS) RegisterTemplate(ctx context.Context, spec RCSTemplateSpec) 
 		return RCSTemplateRegistration{}, err
 	}
 
-	body := a.account()
+	body := a.account(agentID)
 	body["templateName"] = spec.Name
 	// Only the text shape is modelled. Submitting a card as TEXT would have
 	// Airtel store and approve something that is not the template Relay holds.
@@ -291,15 +301,18 @@ func (a *AirtelRCS) RegisterTemplate(ctx context.Context, spec RCSTemplateSpec) 
 	}, nil
 }
 
-func (a *AirtelRCS) TemplateStatus(ctx context.Context, carrierTemplateID string) (RCSTemplateRegistration, error) {
+func (a *AirtelRCS) TemplateStatus(ctx context.Context, agentID, carrierTemplateID string) (RCSTemplateRegistration, error) {
 	if !a.sendConfigured() {
 		return RCSTemplateRegistration{}, ErrRCSNotConfigured
+	}
+	if agentID == "" {
+		return RCSTemplateRegistration{}, ErrRCSNoAgent
 	}
 
 	query := url.Values{}
 	query.Set("customerId", a.CustomerID)
 	query.Set("subAccountId", a.SubAccountID)
-	query.Set("agentId", a.AgentID)
+	query.Set("agentId", agentID)
 	query.Set("templateId", carrierTemplateID)
 
 	envelope, err := a.call(ctx, http.MethodGet,
@@ -342,8 +355,18 @@ func (a *AirtelRCS) submitOne(ctx context.Context, submission Submission) Receip
 			ErrorCode: "template_not_registered",
 		}
 	}
+	if submission.AgentID == "" {
+		// Airtel rejects an empty agentId outright. Refusing here names the
+		// real cause — this sender has no agent launched on Airtel — instead of
+		// spending a round trip to be told a mandatory parameter was null.
+		return Receipt{
+			MessageID: submission.MessageID,
+			Accepted:  false,
+			ErrorCode: "agent_not_resolved",
+		}
+	}
 
-	body := a.account()
+	body := a.account(submission.AgentID)
 	body["msisdn"] = submission.Msisdn
 	body["templateId"] = submission.CarrierTemplateID
 	// Airtel wants the values alone, in the template's own order. The names

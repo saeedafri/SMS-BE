@@ -7,7 +7,10 @@
 // refuses after the customer has already exported it, sized it and uploaded it.
 package media
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Purpose is what an asset is for. Constraints differ per purpose — a logo is
 // square and tiny, a hero is a wide banner — so the server validates against
@@ -29,8 +32,20 @@ const (
 type Rule struct {
 	ContentTypes []string
 	MaxBytes     int64
-	Width        int
-	Height       int
+
+	// MaxVideoBytes is the ceiling for a video where the carrier states a
+	// separate one, zero where it does not and MaxBytes governs everything.
+	//
+	// It exists because Vi's card limits are per MEDIUM, not per surface: the
+	// same rich card takes a 2 MB image or a 10 MB video (Template Management
+	// p94). One flat number has to be the smaller of the two, which refuses
+	// every legitimate card video at a fifth of its allowance — and the
+	// customer is told the limit is 2 MB, which is true of images and false of
+	// the file they are holding.
+	MaxVideoBytes int64
+
+	Width  int
+	Height int
 	// Source is the document and page the numbers came from, so the next person
 	// to change one can check it rather than trusting this comment.
 	Source string
@@ -74,10 +89,21 @@ var rules = map[Purpose]Rule{
 	// template can use, and an asset uploaded for "template media" does not yet
 	// know whether it will end up in a carousel. Refusing at 1 MB is the only
 	// bound that cannot produce a carrier rejection later.
+	// Vi Template Management p94, all three standalone rich-card orientations:
+	// "max file size of 2MB ... If you are uploading a video, the max file size
+	// is 10MB". p95 caps a CAROUSEL card image at 1 MB, which is tighter — but
+	// RcsContent declares text and card only, so nothing this product can
+	// produce lands on a carousel, and holding every card to the carousel's
+	// limit refused half of what the contract allows.
+	//
+	// Revisit the moment a carousel exists: this becomes two purposes, not one
+	// smaller number, because by then both surfaces are reachable and a single
+	// limit would be wrong for one of them whichever value it took.
 	PurposeTemplateMedia: {
-		ContentTypes: []string{"image/png", "image/jpeg", "image/gif", "video/mp4"},
-		MaxBytes:     1024 * 1024,
-		Source:       "Vi Template Management API v17, p95 (carousel image, the tightest of four surfaces); Airtel p22 states 5mb with no per-surface breakdown",
+		ContentTypes:  []string{"image/png", "image/jpeg", "image/gif", "video/mp4"},
+		MaxBytes:      2 * 1024 * 1024,
+		MaxVideoBytes: 10 * 1024 * 1024,
+		Source:        "Vi Template Management API v17, p94 (rich card: 2 MB image, 10 MB video); p95 carousel is 1 MB and is unreachable from RcsContent; Airtel p22 states 5mb with no per-surface breakdown",
 	},
 	// Neither carrier constrains this: it never reaches a carrier at all. It is
 	// ours, read by an operator reviewing a brand claim, so the number is a
@@ -111,12 +137,16 @@ func (r Rule) CheckType(contentType string) error {
 // The customer has to go and re-export the file, so the message has to carry
 // enough to do it with. "Invalid image" costs them a support ticket; "1.8 MB,
 // the limit is 50 KB" costs them ninety seconds.
-func (r Rule) CheckSize(bytes int64) error {
-	if bytes <= r.MaxBytes {
+func (r Rule) CheckSize(contentType string, bytes int64) error {
+	limit := r.MaxBytes
+	if r.MaxVideoBytes > 0 && strings.HasPrefix(contentType, "video/") {
+		limit = r.MaxVideoBytes
+	}
+	if bytes <= limit {
 		return nil
 	}
 	return fmt.Errorf("the file is %s and the limit for this purpose is %s",
-		humanBytes(bytes), humanBytes(r.MaxBytes))
+		humanBytes(bytes), humanBytes(limit))
 }
 
 // CheckDimensions refuses artwork that is not the exact size the carrier

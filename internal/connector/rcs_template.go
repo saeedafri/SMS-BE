@@ -92,8 +92,15 @@ type RCSTemplateRegistration struct {
 // with something that reads like an outage.
 type RCSTemplateRegistrar interface {
 	Vendor() string
-	RegisterTemplate(ctx context.Context, spec RCSTemplateSpec) (RCSTemplateRegistration, error)
-	TemplateStatus(ctx context.Context, carrierTemplateID string) (RCSTemplateRegistration, error)
+
+	// agentID is the agent the template is registered UNDER, and it is not
+	// decoration: a carrier scopes a template to one agent, so a template
+	// registered under the deployment's agent and sent under a customer's own
+	// fails at the gateway with "Template not found". That failure is silent
+	// here and visible only as a carrier rejection hours later, which is why
+	// this is a parameter rather than connector configuration.
+	RegisterTemplate(ctx context.Context, agentID string, spec RCSTemplateSpec) (RCSTemplateRegistration, error)
+	TemplateStatus(ctx context.Context, agentID, carrierTemplateID string) (RCSTemplateRegistration, error)
 }
 
 // ErrTemplateRegistrationManual means this carrier has no template API and the

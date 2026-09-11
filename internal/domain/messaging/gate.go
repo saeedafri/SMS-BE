@@ -42,6 +42,20 @@ var (
 		"messaging: this country requires a registered template on every send")
 	ErrTemplateBodyMismatch = errors.New(
 		"messaging: body is not a legal instantiation of the registered template")
+
+	// ErrRCSAgentNotResolved is an RCS send whose sender has no usable brand
+	// identity on the carrier it would route over: no agent attached, a launch
+	// still pending or rejected, or an agent suspended since the sender was
+	// registered.
+	//
+	// It is refused HERE, before any money moves, rather than left to the
+	// connector — which would also refuse it, but as a carrier rejection. The
+	// carrier has said nothing; we have. Reporting our own refusal in the
+	// carrier's name is the mistake ErrCarrierTemplateNotApproved exists to
+	// avoid, one field over: it sends the customer to argue with Airtel about
+	// an agent Airtel has never been asked to review.
+	ErrRCSAgentNotResolved = errors.New(
+		"messaging: this sender has no RCS agent identity on that carrier")
 )
 
 // GateInput is everything the gate needs to decide. It is a plain struct with
@@ -69,10 +83,22 @@ type GateInput struct {
 	// set, a send must name an approved template AND its body must be an
 	// instantiation of that template's registered text.
 	RegisteredTemplateRequired bool
+
 	// TemplateBody is the registered text, empty when no template was named.
 	TemplateBody string
 	// Body is what the caller actually asked us to send.
 	Body string
+
+	// RCSAgentRequired marks a channel that reaches a handset under a brand
+	// identity — RCS, and only RCS today. RCSAgentResolved says the sender
+	// actually has one on the carrier this message routes over.
+	//
+	// Two fields rather than one string because the two facts come from
+	// different places and mean different things: the first is a property of
+	// the channel, the second the answer to a per-tenant lookup that can change
+	// between two messages when a carrier suspends an agent.
+	RCSAgentRequired bool
+	RCSAgentResolved bool
 }
 
 // Check runs the gate. Order matters and is deliberate: compliance failures
@@ -129,6 +155,13 @@ func Check(input GateInput) error {
 		return fmt.Errorf("%w (status %s)", ErrCarrierTemplateNotApproved,
 			input.CarrierTemplateStatus)
 	}
+	// The brand the handset will draw. Last of the carrier-side checks and
+	// still before money, because a message with no identity to send under was
+	// never going to leave — and the alternative, falling back to a shared
+	// agent, delivers it perfectly under someone else's name.
+	if input.RCSAgentRequired && !input.RCSAgentResolved {
+		return ErrRCSAgentNotResolved
+	}
 	// Suppression is checked before balance so an opted-out recipient is never
 	// billed for, not even momentarily.
 	if input.Suppressed {
@@ -157,6 +190,7 @@ func IsRefusal(err error) bool {
 		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
 		ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 		ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
+		ErrRCSAgentNotResolved,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -181,6 +215,8 @@ func GateFailureCode(err error) string {
 		return "sender_template_mismatch"
 	case errors.Is(err, ErrRegisteredTemplateRequired):
 		return "registered_template_required"
+	case errors.Is(err, ErrRCSAgentNotResolved):
+		return "rcs_agent_not_resolved"
 	case errors.Is(err, ErrTemplateBodyMismatch):
 		return "template_body_mismatch"
 	case errors.Is(err, ErrSuppressed):

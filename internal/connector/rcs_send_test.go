@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -16,7 +17,7 @@ func airtelSendStub(t *testing.T, handler http.HandlerFunc) *AirtelRCS {
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return &AirtelRCS{
-		BaseURL: server.URL, AuthToken: "dGVzdDp0ZXN0", AgentID: "relay_agent",
+		BaseURL: server.URL, AuthToken: "dGVzdDp0ZXN0",
 		CustomerID: "Profile_1", SubAccountID: "sub-1", HTTP: server.Client(),
 	}
 }
@@ -40,8 +41,15 @@ func TestAirtelSendsATemplateAndReturnsTheCarriersReference(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if body.CustomerID == "" || body.SubAccountID == "" || body.AgentID == "" {
-			t.Errorf("account identifiers missing: %+v — Airtel rejects the send without all three", body)
+		if body.CustomerID == "" || body.SubAccountID == "" {
+			t.Errorf("account identifiers missing: %+v — Airtel rejects the send without them", body)
+		}
+		// The submission's agent, not the connector's. There is no connector
+		// field left to fall back to, which is the point of the change: an
+		// identity held here would be the deployment's brand on every tenant's
+		// handset.
+		if body.AgentID != "relay_agent" {
+			t.Errorf("agentId = %q, want the agent the SUBMISSION named", body.AgentID)
 		}
 		if body.TemplateID != "carrier-tmpl-1" {
 			t.Errorf("templateId = %q, want the carrier's id", body.TemplateID)
@@ -59,7 +67,7 @@ func TestAirtelSendsATemplateAndReturnsTheCarriersReference(t *testing.T) {
 
 	receipts, err := airtel.Submit(context.Background(), []Submission{{
 		MessageID: "relay-1", Msisdn: "+919820000002", Channel: "RCS",
-		CarrierTemplateID: "carrier-tmpl-1", TTLSeconds: 120,
+		CarrierTemplateID: "carrier-tmpl-1", AgentID: "relay_agent", TTLSeconds: 120,
 		TemplateVariables: []TemplateVariable{
 			{Name: "first_name", Value: "Priya"},
 			{Name: "discount", Value: "20%"},
@@ -123,7 +131,7 @@ func TestAirtelSendFailuresBecomeCodesAScreenCanGroupBy(t *testing.T) {
 		})
 		receipts, err := airtel.Submit(context.Background(), []Submission{{
 			MessageID: "relay-1", Msisdn: "+919820000002",
-			CarrierTemplateID: "carrier-tmpl-1",
+			CarrierTemplateID: "carrier-tmpl-1", AgentID: "relay_agent",
 		}})
 		if err != nil {
 			t.Fatalf("Submit: %v", err)
@@ -151,6 +159,7 @@ func TestAirtelThrottlingIsItsOwnOutcome(t *testing.T) {
 
 	receipts, _ := airtel.Submit(context.Background(), []Submission{{
 		MessageID: "relay-1", Msisdn: "+919820000002", CarrierTemplateID: "t",
+		AgentID: "relay_agent",
 	}})
 	// A throttled send should be retried after a pause; a rejected one should
 	// not. Collapsing them would have a campaign either give up or hammer.
@@ -177,6 +186,7 @@ func TestABatchIsSentOneMessageAtATimeAndKeepsItsOrder(t *testing.T) {
 			MessageID:         fmt.Sprintf("relay-%d", i),
 			Msisdn:            fmt.Sprintf("+91982000000%d", i),
 			CarrierTemplateID: "carrier-tmpl-1",
+			AgentID:           "relay_agent",
 		})
 	}
 
@@ -247,7 +257,7 @@ func TestViSendsATemplateWithNamedParametersAsAJSONString(t *testing.T) {
 
 	receipts, err := vi.Submit(context.Background(), []Submission{{
 		MessageID: "relay-77", Msisdn: "+914253136789", Channel: "RCS",
-		CarrierTemplateID: "vi-template-9", TTLSeconds: 120,
+		CarrierTemplateID: "vi-template-9", AgentID: "b", TTLSeconds: 120,
 		TemplateVariables: []TemplateVariable{
 			{Name: "first_name", Value: "Priya"},
 			{Name: "discount", Value: "20%"},
@@ -269,13 +279,13 @@ func TestViSendsATemplateWithNamedParametersAsAJSONString(t *testing.T) {
 func TestViHasNoTemplateAPIAndSaysSo(t *testing.T) {
 	vi := &ViRCS{
 		BaseURL: "https://example.test", TokenURL: "https://example.test/t",
-		ClientID: "c", ClientSecret: "s", BotID: "b",
+		ClientID: "c", ClientSecret: "s",
 	}
-	_, err := vi.RegisterTemplate(context.Background(), RCSTemplateSpec{Name: "x"})
+	_, err := vi.RegisterTemplate(context.Background(), "b", RCSTemplateSpec{Name: "x"})
 	if err != ErrTemplateRegistrationManual {
 		t.Errorf("RegisterTemplate err = %v, want ErrTemplateRegistrationManual", err)
 	}
-	if _, err := vi.TemplateStatus(context.Background(), "code"); err != ErrTemplateRegistrationManual {
+	if _, err := vi.TemplateStatus(context.Background(), "b", "code"); err != ErrTemplateRegistrationManual {
 		t.Errorf("TemplateStatus err = %v, want ErrTemplateRegistrationManual", err)
 	}
 }
@@ -317,7 +327,7 @@ func TestAirtelRegistersATemplateAndReturnsItPending(t *testing.T) {
 			"templateId":"01kct02npb5demxdk62wxjqmqb","templateStatus":"PENDING"}}`)
 	})
 
-	registration, err := airtel.RegisterTemplate(context.Background(), RCSTemplateSpec{
+	registration, err := airtel.RegisterTemplate(context.Background(), "relay_agent", RCSTemplateSpec{
 		Name: "Login OTP", UseCase: "TRANSACTIONAL",
 		Text: "Hi {{1}}, your code is {{2}}.", SubmittedBy: "ops@acme.test",
 	})
@@ -338,7 +348,7 @@ func TestATemplateAcceptedWithNoIdIsAFailure(t *testing.T) {
 	airtel := airtelSendStub(t, func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"success":true,"code":200,"message":"success"}`)
 	})
-	if _, err := airtel.RegisterTemplate(context.Background(),
+	if _, err := airtel.RegisterTemplate(context.Background(), "relay_agent",
 		RCSTemplateSpec{Name: "x", UseCase: "OTP", Text: "hi", SubmittedBy: "a@b.test"}); err == nil {
 		t.Fatal("a response with no templateId was treated as a success")
 	}
@@ -356,7 +366,7 @@ func TestAirtelReadsBackATemplatesApprovalState(t *testing.T) {
 			"templateId":"tmpl-1","templateStatus":"APPROVED"}}`)
 	})
 
-	registration, err := airtel.TemplateStatus(context.Background(), "tmpl-1")
+	registration, err := airtel.TemplateStatus(context.Background(), "relay_agent", "tmpl-1")
 	if err != nil {
 		t.Fatalf("TemplateStatus: %v", err)
 	}
@@ -379,5 +389,72 @@ func TestAnUnrecognisedCarrierStateIsPendingNotApproved(t *testing.T) {
 	}
 	if normaliseCarrierTemplateStatus("REJECTED") != RCSTemplateRejected {
 		t.Error("REJECTED did not map to rejected")
+	}
+}
+
+// One batch, two tenants, two brands.
+//
+// This is the whole reason the agent is a field on Submission rather than on
+// the connector. A connector-held identity cannot express it at all: the second
+// message would go out under the first one's brand, silently, and the only
+// evidence would be a handset showing the wrong company's name.
+func TestOneBatchCanCarryTwoAgents(t *testing.T) {
+	var seen sync.Mutex
+	agentFor := map[string]string{}
+
+	airtel := airtelSendStub(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			AgentID string `json:"agentId"`
+			Msisdn  string `json:"msisdn"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode: %v", err)
+			return
+		}
+		seen.Lock()
+		agentFor[body.Msisdn] = body.AgentID
+		seen.Unlock()
+		fmt.Fprint(w, `{"success":true,"code":200,"messageRequestId":"ref","status":"INITIATED"}`)
+	})
+
+	if _, err := airtel.Submit(context.Background(), []Submission{
+		{MessageID: "m1", Msisdn: "+919820000001", CarrierTemplateID: "t", AgentID: "acme_agent"},
+		{MessageID: "m2", Msisdn: "+919820000002", CarrierTemplateID: "t", AgentID: "globex_agent"},
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	seen.Lock()
+	defer seen.Unlock()
+	if agentFor["+919820000001"] != "acme_agent" {
+		t.Errorf("first message went out as %q, want acme_agent", agentFor["+919820000001"])
+	}
+	if agentFor["+919820000002"] != "globex_agent" {
+		t.Errorf("second message went out as %q, want globex_agent", agentFor["+919820000002"])
+	}
+}
+
+// A submission with no agent is refused HERE rather than at the gateway, and
+// the refusal names the cause. Airtel answers a blank agentId with "Mandatory
+// Request Parameter(s) cannot be null!", which sends whoever reads it looking
+// at the account identifiers instead of at the sender's agent.
+func TestASendWithNoAgentIsRefusedBeforeItLeaves(t *testing.T) {
+	var calls atomic.Int64
+	airtel := airtelSendStub(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `{"success":true,"code":200,"messageRequestId":"ref","status":"INITIATED"}`)
+	})
+
+	receipts, err := airtel.Submit(context.Background(), []Submission{{
+		MessageID: "m1", Msisdn: "+919820000001", CarrierTemplateID: "t",
+	}})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if receipts[0].Accepted || receipts[0].ErrorCode != "agent_not_resolved" {
+		t.Errorf("receipt = %+v, want a refusal naming the agent", receipts[0])
+	}
+	if calls.Load() != 0 {
+		t.Errorf("made %d carrier calls, want none", calls.Load())
 	}
 }

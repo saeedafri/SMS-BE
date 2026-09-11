@@ -199,15 +199,20 @@ func CreateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, sender
 		created, err = scanSender(tx.QueryRow(ctx, `
 			INSERT INTO sender_ids (tenant_id, header, channel, country,
 			    waba_id, display_name, phone_number, email_domain,
-			    from_address, from_name, caller_id_number, external_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			    from_address, from_name, caller_id_number, external_id,
+			    rcs_agent_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			RETURNING `+senderColumns,
 			id.TenantID, sender.Header, sender.Channel, sender.Country,
 			sender.WabaID, sender.DisplayName, sender.PhoneNumber, sender.EmailDomain,
 			sender.FromAddress, sender.FromName, sender.CallerIDNumber,
 			// Written verbatim, only ever from client input. Nothing derives or
 			// defaults this: a DLT id is issued by DLT, not by us.
-			sender.ExternalID))
+			sender.ExternalID,
+			// The brand this header sends under. Validated at the edge, because
+			// sender_ids_agent_is_rcs would otherwise refuse a non-RCS sender
+			// carrying one as a 500 with nothing a customer could act on.
+			sender.RcsAgentID))
 		if err != nil {
 			return err
 		}

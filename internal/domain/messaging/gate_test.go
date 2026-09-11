@@ -43,6 +43,10 @@ func TestGateRefusesEachViolation(t *testing.T) {
 			messaging.ErrInsufficientFunds},
 		{"invalid recipient", func(i *messaging.GateInput) { i.RecipientValid = false },
 			messaging.ErrInvalidRecipient},
+		{"an RCS sender with no agent identity", func(i *messaging.GateInput) {
+			i.RCSAgentRequired = true
+			i.RCSAgentResolved = false
+		}, messaging.ErrRCSAgentNotResolved},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,5 +109,36 @@ func TestExactBalanceIsSufficient(t *testing.T) {
 
 	if err := messaging.Check(input); err != nil {
 		t.Fatalf("a balance exactly equal to the cost was refused: %v", err)
+	}
+}
+
+// The brand a handset draws is checked before money, and only where a real
+// gateway is configured.
+//
+// Both halves matter. Refusing after the hold would take and release money on a
+// message that was never going to leave; refusing when no RCS gateway exists
+// would stop every send on a deployment that has not got carrier credentials
+// yet — which is every deployment until they land.
+func TestTheAgentCheckCostsNothingAndOnlyBindsWhereACarrierExists(t *testing.T) {
+	unresolved := validInput()
+	unresolved.RCSAgentRequired = true
+	unresolved.BalanceMinor = 0
+	if err := messaging.Check(unresolved); !errors.Is(err, messaging.ErrRCSAgentNotResolved) {
+		t.Errorf("err = %v, want the agent refusal ahead of the balance one", err)
+	}
+
+	// No gateway configured: not required, so nothing to resolve.
+	noCarrier := validInput()
+	noCarrier.RCSAgentRequired = false
+	noCarrier.RCSAgentResolved = false
+	if err := messaging.Check(noCarrier); err != nil {
+		t.Errorf("a send with no RCS gateway was refused: %v", err)
+	}
+
+	resolved := validInput()
+	resolved.RCSAgentRequired = true
+	resolved.RCSAgentResolved = true
+	if err := messaging.Check(resolved); err != nil {
+		t.Errorf("a resolved agent was refused: %v", err)
 	}
 }

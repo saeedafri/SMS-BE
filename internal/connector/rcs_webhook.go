@@ -74,6 +74,14 @@ type RCSEvent struct {
 	TemplateStatus    string
 	RejectionReason   string
 
+	// AgentID is the carrier's own id for the agent this event is about — what
+	// rcs_agent_carrier_launches.carrier_agent_id holds.
+	//
+	// On an inbound event it is the ONLY tenant discriminator there is: the
+	// payload names no tenant, and unlike a delivery report there is no message
+	// of ours to look the sender up from.
+	AgentID string
+
 	// Inbound events.
 	Msisdn       string
 	Text         string
@@ -128,6 +136,7 @@ func ParseAirtelWebhook(payload []byte) (RCSEvent, error) {
 		Raw:        body.EventType,
 		CarrierRef: body.MessageID,
 		Msisdn:     body.Msisdn,
+		AgentID:    strings.TrimSpace(body.AgentID),
 		OccurredAt: parseCarrierTime(body.SendTime),
 	}
 
@@ -204,6 +213,12 @@ type viPubSubEnvelope struct {
 }
 
 type viEvent struct {
+	// AgentID is Google's RBM agent ADDRESS, e.g.
+	// "dotgo-gupshup_r0mhjgkx_agent@rbm.goog" (§3.8.2.1). It is NOT the botId
+	// we send on every request, and it is not what carrier_agent_id holds — see
+	// ParseViWebhook.
+	AgentID string `json:"agentId"`
+
 	SenderPhoneNumber string `json:"senderPhoneNumber"`
 	PhoneNumber       string `json:"phoneNumber"`
 	MessageID         string `json:"messageId"`
@@ -245,11 +260,30 @@ func ParseViWebhook(payload []byte) (RCSEvent, error) {
 	if msisdn == "" {
 		msisdn = body.PhoneNumber
 	}
+	// TWO agent identifiers arrive on a Vi event and they are different values.
+	//
+	// The envelope's attributes carry business_id, which Vi's §3.8.2 states
+	// plainly: "'business_id' -> botId provided by the platform". That is the
+	// botId we put on every request and therefore the one stored in
+	// carrier_agent_id. The payload's own agentId is Google's RBM address
+	// (…@rbm.goog), which we never send and never store.
+	//
+	// Matching on agentId would look right in review and find nothing, on every
+	// event, forever — so business_id wins and agentId is only the fallback for
+	// a deployment where the envelope is stripped.
+	agentID := body.AgentID
+	if envelope.Message != nil {
+		if businessID := envelope.Message.Attributes["business_id"]; businessID != "" {
+			agentID = businessID
+		}
+	}
+
 	event := RCSEvent{
 		Vendor:     "vi",
 		Raw:        body.EventType,
 		CarrierRef: body.MessageID,
 		Msisdn:     msisdn,
+		AgentID:    strings.TrimSpace(agentID),
 		OccurredAt: parseCarrierTime(body.SendTime),
 	}
 

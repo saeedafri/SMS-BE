@@ -142,7 +142,12 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 				"match the one your RCS agent was approved under.")), nil
 	}
 
-	registration, err := registrar.RegisterTemplate(ctx, connector.RCSTemplateSpec{
+	// The deployment agent, for the same reason as the capability check: a
+	// carrier scopes a template to one agent, this request names none, and a
+	// tenant may hold several. Guessing would register the template under an
+	// agent the customer did not choose and the send would fail later with
+	// "Template not found" — the exact failure their own §6 just described.
+	registration, err := registrar.RegisterTemplate(ctx, s.RCSFallbackAgentID, connector.RCSTemplateSpec{
 		Name:        template.Name,
 		UseCase:     useCase,
 		Text:        text,

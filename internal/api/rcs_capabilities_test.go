@@ -21,12 +21,14 @@ type stubCarrier struct {
 	singleCalls int
 	bulkCalls   int
 	sawNumbers  []string
+	sawAgent    string
 }
 
 func (c *stubCarrier) Vendor() string { return c.vendor }
 
-func (c *stubCarrier) Capability(_ context.Context, msisdn string) (connector.RCSCapability, error) {
+func (c *stubCarrier) Capability(_ context.Context, agentID, msisdn string) (connector.RCSCapability, error) {
 	c.singleCalls++
+	c.sawAgent = agentID
 	c.sawNumbers = append(c.sawNumbers, msisdn)
 	if c.err != nil {
 		return connector.RCSCapability{}, c.err
@@ -39,8 +41,9 @@ func (c *stubCarrier) Capability(_ context.Context, msisdn string) (connector.RC
 	}, nil
 }
 
-func (c *stubCarrier) Reachable(_ context.Context, msisdns []string) ([]string, error) {
+func (c *stubCarrier) Reachable(_ context.Context, agentID string, msisdns []string) ([]string, error) {
 	c.bulkCalls++
+	c.sawAgent = agentID
 	c.sawNumbers = append(c.sawNumbers, msisdns...)
 	if c.err != nil {
 		return nil, c.err

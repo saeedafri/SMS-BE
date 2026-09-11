@@ -86,20 +86,30 @@ func (c RCSCapability) Supports(feature string) bool {
 	return false
 }
 
-// RCSCapabilityChecker is one carrier's capability API. The agent identity
-// (Airtel's agentId, Vi's botId) is configuration held by the implementation,
-// not a parameter: a caller that had to supply it could supply the wrong one,
-// and the resulting answer would be about a different brand's reachability.
+// RCSCapabilityChecker is one carrier's capability API.
+//
+// The agent identity (Airtel's agentId, Vi's botId) is a PARAMETER, not
+// configuration held by the implementation. It used to be the latter, and the
+// comment here used to defend that: a caller supplying it could supply the
+// wrong one. That reasoning held while one agent served the whole deployment
+// and is wrong now that customers own their agents — an identity held by the
+// connector makes the brand a property of the process, so every tenant's
+// handsets see the same name whoever sent the message.
+//
+// Reachability is genuinely agent-specific, which is what makes this more than
+// bookkeeping: a handset with RCS enabled is unreachable for an agent that has
+// not launched on that subscriber's carrier. The same list of numbers gives
+// different answers for different agents.
 type RCSCapabilityChecker interface {
 	Vendor() string
 
 	// Capability answers for one handset, including which features it supports.
-	Capability(ctx context.Context, msisdn string) (RCSCapability, error)
+	Capability(ctx context.Context, agentID, msisdn string) (RCSCapability, error)
 
 	// Reachable answers for many, and ONLY reachability — neither vendor's bulk
 	// endpoint returns features. It returns the subset of msisdns that can
 	// receive RCS, in the order they were given.
-	Reachable(ctx context.Context, msisdns []string) ([]string, error)
+	Reachable(ctx context.Context, agentID string, msisdns []string) ([]string, error)
 }
 
 var (
@@ -120,6 +130,15 @@ var (
 	// request leaves this process. Discovering it from a vendor 400 costs a
 	// round trip and returns a message written for their support desk.
 	ErrRCSTooManyNumbers = errors.New("connector: more than 10000 numbers in one capability check")
+
+	// ErrRCSNoAgent is a carrier call with no agent identity to make it under.
+	//
+	// Distinct from ErrRCSNotConfigured because the two have different causes
+	// and different fixes: not-configured is a deployment without carrier
+	// credentials, and this is a deployment with credentials but a sender whose
+	// agent has not launched on the carrier it routed to. Collapsing them would
+	// tell a customer to go and find an operator about their own agent.
+	ErrRCSNoAgent = errors.New("connector: no RCS agent identity for this send")
 )
 
 // MaxRCSBulkNumbers is the ceiling both vendors document.

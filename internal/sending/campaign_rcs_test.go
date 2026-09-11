@@ -91,7 +91,35 @@ func (f *fixture) seedApprovedSender(header, channel string) uuid.UUID {
 	f.exec(`INSERT INTO sender_ids (id, tenant_id, header, channel, country, status)
 	        VALUES ($1, $2, $3, $4, 'IN', 'approved')`,
 		id, f.identity.TenantID, header, channel)
+	if channel == "RCS" {
+		f.attachRCSAgent(id)
+	}
 	return id
+}
+
+// attachRCSAgent gives an RCS sender the brand identity it now cannot send
+// without. There is no shared agent left to fall back to, so a sender with none
+// is refused at the gate before the carrier is ever called — which reaches a
+// test asserting what the carrier received as "carrier saw 0 submissions", with
+// nothing naming the cause.
+//
+// Launched on AIRTEL because that is what the stub in this package calls itself
+// and therefore what dedicatedCarrier resolves the route to.
+func (f *fixture) attachRCSAgent(senderID uuid.UUID) {
+	f.t.Helper()
+	agentID := uuid.New()
+	f.exec(`INSERT INTO rcs_agents (id, tenant_id, display_name, use_case, country,
+	            status, verification_status, verification_reviewed_at)
+	        VALUES ($1, $2, $3, 'TRANSACTIONAL', 'IN', 'live', 'approved', now())`,
+		agentID, f.identity.TenantID, "Sending fixture "+agentID.String()[:8])
+	// Unique per agent: rcs_launch_carrier_identity is UNIQUE on
+	// (carrier, carrier_agent_id), so a fixed literal would collide with the
+	// previous test's row on the second run.
+	f.exec(`INSERT INTO rcs_agent_carrier_launches
+	            (agent_id, tenant_id, carrier, status, carrier_agent_id, submitted_at)
+	        VALUES ($1, $2, 'AIRTEL', 'approved', $3, now())`,
+		agentID, f.identity.TenantID, "airtel-"+agentID.String())
+	f.exec(`UPDATE sender_ids SET rcs_agent_id = $1 WHERE id = $2`, agentID, senderID)
 }
 
 // seedCarrierApprovedRCSTemplate is approved on BOTH sides: Relay's review and

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -154,6 +156,25 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 			"message", messageID, "delivered", event.Delivered)
 
 	case connector.RCSEventInbound:
+		// Attribution first, because on an inbound event the carrier's agent id
+		// is the ONLY thing that names a tenant. A delivery report resolves
+		// through our own carrier reference above — the message is ours and the
+		// tenant comes with it — but an inbound message is a stranger writing
+		// to a brand, and the brand is all we get.
+		//
+		// Unattributed is logged, not dropped. Every inbound event on this
+		// deployment is unattributed today, because the shared agent has no
+		// launch row at all: that is a true statement about the migration, and
+		// silence would make it look like the carrier had stopped calling.
+		tenantID, agentID, err := s.attributeToAgent(ctx, event)
+		switch {
+		case err != nil:
+			log.Info("inbound RCS could not be attributed to a tenant",
+				"carrier_agent", event.AgentID, "msisdn", event.Msisdn)
+		default:
+			log = log.With("tenant", tenantID, "agent", agentID)
+		}
+
 		// Not wired. Inbound RCS belongs in the inbox alongside SMS replies,
 		// and threading a suggestion tap back to the campaign that offered it
 		// needs the conversation model this send path does not touch. Logged
@@ -167,4 +188,26 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 	default:
 		log.Debug("carrier event with no consequence")
 	}
+}
+
+// attributeToAgent resolves a carrier event to the tenant that owns the agent
+// it names.
+//
+// The carrier column is upper case because that is the vocabulary the routes
+// table and the launch rows use — AIRTEL, VI — while a connector's vendor is
+// lower case. The two meet here and nowhere else, which is why the conversion
+// is at this seam rather than in the store.
+//
+// The unique index rcs_launch_carrier_identity on (carrier, carrier_agent_id)
+// is what makes the answer single-valued. Without it two tenants could hold the
+// same carrier agent id and each would receive the other's inbound messages —
+// the worst failure available in this feature, and a silent one.
+func (s *Server) attributeToAgent(ctx context.Context, event connector.RCSEvent) (
+	uuid.UUID, uuid.UUID, error) {
+
+	if s.OperatorDB == nil || event.AgentID == "" {
+		return uuid.Nil, uuid.Nil, store.ErrNotFound
+	}
+	return store.TenantForCarrierAgent(ctx, s.OperatorDB,
+		strings.ToUpper(event.Vendor), event.AgentID)
 }

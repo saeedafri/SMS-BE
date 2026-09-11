@@ -39,6 +39,17 @@ type Submission struct {
 	// Airtel caps each value at 30 characters.
 	TemplateVariables []TemplateVariable
 
+	// AgentID is the RBM agent this message goes out under — Airtel's agentId,
+	// Vi's botId. It is the brand the handset draws: name, logo and colour.
+	//
+	// Per submission rather than per connector because a single batch can hold
+	// several senders, and two senders in one tenant may hold different agents.
+	// A connector-level field would make the brand a property of the DEPLOYMENT,
+	// which is the arrangement this replaces.
+	//
+	// Empty on every channel but RCS, and a refusal on RCS — see ErrRCSNoAgent.
+	AgentID string
+
 	// TTLSeconds stops delivery attempts after a while and revokes the message.
 	// Zero means the template's own TTL applies, or none. A send-time value
 	// overrides the template's on both carriers.
