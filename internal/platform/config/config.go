@@ -264,10 +264,16 @@ func (c Config) validateRCS() error {
 	}
 
 	if c.RCSCarrierName() == "airtel" || (c.RCSVendor == "" && airtelPresent) {
+		// RCS_AIRTEL_AGENT_ID is deliberately NOT required.
+		//
+		// It used to be a connector credential; it is now the deployment-wide
+		// FALLBACK agent, used only where a caller has no agent of its own to
+		// name. Requiring it would refuse to start exactly the deployment this
+		// work is aiming at — one where every tenant owns its agent and no
+		// shared identity is left.
 		missing := missingFields(map[string]string{
 			"RCS_AIRTEL_BASE_URL":      c.RCSAirtelBaseURL,
 			"RCS_AIRTEL_AUTH_TOKEN":    c.RCSAirtelAuthToken,
-			"RCS_AIRTEL_AGENT_ID":      c.RCSAirtelAgentID,
 			"RCS_AIRTEL_CUSTOMER_ID":   c.RCSAirtelCustomerID,
 			"RCS_AIRTEL_SUBACCOUNT_ID": c.RCSAirtelSubAccountID,
 		})
@@ -277,12 +283,12 @@ func (c Config) validateRCS() error {
 		}
 	}
 	if c.RCSCarrierName() == "vi" || (c.RCSVendor == "" && viPresent) {
+		// RCS_VI_BOT_ID is not required, for the reason given above Airtel's.
 		missing := missingFields(map[string]string{
 			"RCS_VI_BASE_URL":      c.RCSViBaseURL,
 			"RCS_VI_TOKEN_URL":     c.RCSViTokenURL,
 			"RCS_VI_CLIENT_ID":     c.RCSViClientID,
 			"RCS_VI_CLIENT_SECRET": c.RCSViClientSecret,
-			"RCS_VI_BOT_ID":        c.RCSViBotID,
 		})
 		if len(missing) > 0 {
 			return fmt.Errorf("config: Vi RCS is selected but %s missing",

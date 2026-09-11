@@ -226,6 +226,13 @@ type mixedPlan struct {
 	carrier   string
 	routeID   *string
 
+	// rcsCarrier is the gateway RCS has to itself, empty when there is none,
+	// and agentID the brand this message's sender goes out under on it.
+	// Resolved with the plan so the gate and the submission cannot disagree
+	// about which brand this message was allowed to use.
+	rcsCarrier string
+	agentID    string
+
 	// createdAt is when the message was recorded as queued. The settled row
 	// carries it forward: messages is a ReplacingMergeTree collapsing on
 	// version, so a version-2 row with a fresh created_at does not add a
@@ -291,6 +298,10 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			// instead of going negative — the same running total SendBatch keeps.
 			BalanceMinor: state.balance(plan.rate.Currency) - holds[plan.walletKey()],
 			CostMinor:    plan.cost, RecipientValid: plan.valid,
+			// The brand the handset draws, applied identically to the batched
+			// path for the same reason the template binding is.
+			RCSAgentRequired: plan.sender.Channel == "RCS" && plan.rcsCarrier != "",
+			RCSAgentResolved: plan.agentID != "",
 		})
 		if gateErr != nil {
 			plan.refusal = messaging.GateFailureCode(gateErr)
@@ -419,6 +430,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 			routes[corridor] = path
 		}
 		plan.carrier, plan.routeID = path.carrier, path.routeID
+		plan.rcsCarrier = s.dedicatedCarrier(sender.Channel)
+		plan.agentID = s.rcsAgentFor(ctx, identity, sender, plan.rcsCarrier)
 
 		if valid {
 			recipients[identity.TenantID] = append(recipients[identity.TenantID], msisdn)
@@ -602,6 +615,7 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 				Sender: plan.sender.Header, Body: plan.pending.request.Body,
 				Channel: plan.sender.Channel, Country: plan.sender.Country,
 				CarrierTemplateID: carrierTemplateID,
+				AgentID:           plan.agentID,
 				TemplateVariables: TemplateVariables(plan.template,
 					plan.pending.request.Variables),
 			})

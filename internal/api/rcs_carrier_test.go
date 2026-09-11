@@ -26,6 +26,7 @@ type stubRegistrar struct {
 	err    error
 
 	sawSpec        connector.RCSTemplateSpec
+	sawAgent       string
 	calls          int
 	sawSubmissions []connector.Submission
 	mu             sync.Mutex
@@ -53,18 +54,19 @@ func (r *stubRegistrar) Submit(_ context.Context, submissions []connector.Submis
 	return receipts, nil
 }
 
-func (r *stubRegistrar) Capability(_ context.Context, msisdn string) (connector.RCSCapability, error) {
+func (r *stubRegistrar) Capability(_ context.Context, _, msisdn string) (connector.RCSCapability, error) {
 	return connector.RCSCapability{Msisdn: msisdn, Reachable: true, Vendor: r.vendor}, nil
 }
 
-func (r *stubRegistrar) Reachable(_ context.Context, msisdns []string) ([]string, error) {
+func (r *stubRegistrar) Reachable(_ context.Context, _ string, msisdns []string) ([]string, error) {
 	return msisdns, nil
 }
 
-func (r *stubRegistrar) RegisterTemplate(_ context.Context,
+func (r *stubRegistrar) RegisterTemplate(_ context.Context, agentID string,
 	spec connector.RCSTemplateSpec) (connector.RCSTemplateRegistration, error) {
 	r.calls++
 	r.sawSpec = spec
+	r.sawAgent = agentID
 	if r.err != nil {
 		return connector.RCSTemplateRegistration{}, r.err
 	}
@@ -73,7 +75,7 @@ func (r *stubRegistrar) RegisterTemplate(_ context.Context,
 	}, nil
 }
 
-func (r *stubRegistrar) TemplateStatus(context.Context, string) (connector.RCSTemplateRegistration, error) {
+func (r *stubRegistrar) TemplateStatus(context.Context, string, string) (connector.RCSTemplateRegistration, error) {
 	return connector.RCSTemplateRegistration{
 		CarrierTemplateID: r.issued, Status: connector.RCSTemplatePending,
 	}, nil

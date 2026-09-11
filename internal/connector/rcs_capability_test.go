@@ -25,7 +25,6 @@ func airtelStub(t *testing.T, handler http.HandlerFunc) *AirtelRCS {
 	return &AirtelRCS{
 		BaseURL:   server.URL,
 		AuthToken: "dGVzdDp0ZXN0",
-		AgentID:   "relay_test_agent",
 		HTTP:      server.Client(),
 	}
 }
@@ -57,7 +56,7 @@ func TestAirtelReturnsTheFeaturesAHandsetSupports(t *testing.T) {
 			"features":["RICHCARD_STANDALONE","ACTION_DIAL","PDF_IN_RICH_CARDS"]}`)
 	})
 
-	capability, err := airtel.Capability(context.Background(), "+919820000001")
+	capability, err := airtel.Capability(context.Background(), "relay_test_agent", "+919820000001")
 	if err != nil {
 		t.Fatalf("Capability: %v", err)
 	}
@@ -83,7 +82,7 @@ func TestAirtelUnreachableHandsetIsAnAnswerNotAnError(t *testing.T) {
 		fmt.Fprint(w, `{"success":false,"code":400,"message":"Failed to fetch capabilities: 404 Not Found\nGET https://asia-rcsbusinessmessaging.googleapis.com/v1/phones/+917388000000/capabilities \"status\" : \"NOT_FOUND\""}`)
 	})
 
-	capability, err := airtel.Capability(context.Background(), "+917388000000")
+	capability, err := airtel.Capability(context.Background(), "relay_test_agent", "+917388000000")
 	if err != nil {
 		t.Fatalf("Capability: %v — an unreachable handset must not be an error", err)
 	}
@@ -100,7 +99,7 @@ func TestAirtelValidationFailureIsStillAnError(t *testing.T) {
 		fmt.Fprint(w, `{"success":false,"code":400,"message":"Validation Error - Invalid Phone Number: 888XXXX"}`)
 	})
 
-	if _, err := airtel.Capability(context.Background(), "888"); err == nil {
+	if _, err := airtel.Capability(context.Background(), "relay_test_agent", "888"); err == nil {
 		t.Fatal("a malformed number was reported as a successful check")
 	}
 }
@@ -130,7 +129,7 @@ func TestAirtelBulkCheckUsesTheBulkEndpointAtOrAboveItsFloor(t *testing.T) {
 		numbers[i] = fmt.Sprintf("+9198200%05d", i)
 	}
 
-	reachable, err := airtel.Reachable(context.Background(), numbers)
+	reachable, err := airtel.Reachable(context.Background(), "relay_test_agent", numbers)
 	if err != nil {
 		t.Fatalf("Reachable: %v", err)
 	}
@@ -166,7 +165,7 @@ func TestAirtelSmallListFallsBackToSingleChecksInInputOrder(t *testing.T) {
 	numbers := []string{"+910000000004", "+910000000001", "+910000000002",
 		"+910000000003", "+910000000000"}
 
-	reachable, err := airtel.Reachable(context.Background(), numbers)
+	reachable, err := airtel.Reachable(context.Background(), "relay_test_agent", numbers)
 	if err != nil {
 		t.Fatalf("Reachable: %v", err)
 	}
@@ -185,18 +184,18 @@ func TestBulkCheckRefusesMoreThanTenThousandBeforeCallingTheCarrier(t *testing.T
 	for i := range numbers {
 		numbers[i] = fmt.Sprintf("+9199%09d", i)
 	}
-	if _, err := airtel.Reachable(context.Background(), numbers); !errors.Is(err, ErrRCSTooManyNumbers) {
+	if _, err := airtel.Reachable(context.Background(), "relay_test_agent", numbers); !errors.Is(err, ErrRCSTooManyNumbers) {
 		t.Fatalf("err = %v, want ErrRCSTooManyNumbers", err)
 	}
 }
 
 func TestAnUnconfiguredCarrierSaysSoRatherThanReportingEveryoneUnreachable(t *testing.T) {
 	airtel := &AirtelRCS{}
-	if _, err := airtel.Capability(context.Background(), "+919820000001"); !errors.Is(err, ErrRCSNotConfigured) {
+	if _, err := airtel.Capability(context.Background(), "relay_test_agent", "+919820000001"); !errors.Is(err, ErrRCSNotConfigured) {
 		t.Errorf("airtel err = %v, want ErrRCSNotConfigured", err)
 	}
 	vi := &ViRCS{}
-	if _, err := vi.Reachable(context.Background(), []string{"+919820000001"}); !errors.Is(err, ErrRCSNotConfigured) {
+	if _, err := vi.Reachable(context.Background(), "OsQ0GwNvUdLTV9Bd", []string{"+919820000001"}); !errors.Is(err, ErrRCSNotConfigured) {
 		t.Errorf("vi err = %v, want ErrRCSNotConfigured", err)
 	}
 }
@@ -229,7 +228,6 @@ func viStub(t *testing.T, tokens *int32, handler http.HandlerFunc) *ViRCS {
 		TokenURL:     server.URL + "/auth/oauth/token",
 		ClientID:     "cid",
 		ClientSecret: "secret",
-		BotID:        "OsQ0GwNvUdLTV9Bd",
 		HTTP:         server.Client(),
 	}
 }
@@ -249,7 +247,7 @@ func TestViReturnsTheSameFeatureVocabularyAirtelDoes(t *testing.T) {
 		fmt.Fprint(w, `{"features":["REVOCATION","RICHCARD_STANDALONE","ACTION_DIAL"]}`)
 	})
 
-	capability, err := vi.Capability(context.Background(), "+914253136789")
+	capability, err := vi.Capability(context.Background(), "OsQ0GwNvUdLTV9Bd", "+914253136789")
 	if err != nil {
 		t.Fatalf("Capability: %v", err)
 	}
@@ -273,7 +271,7 @@ func TestViEmptyObjectMeansTheHandsetHasNoRCS(t *testing.T) {
 		fmt.Fprint(w, `{}`)
 	})
 
-	capability, err := vi.Capability(context.Background(), "+914253136700")
+	capability, err := vi.Capability(context.Background(), "OsQ0GwNvUdLTV9Bd", "+914253136700")
 	if err != nil {
 		t.Fatalf("Capability: %v — Vi answers this with 200, not an error", err)
 	}
@@ -295,7 +293,7 @@ func TestViBulkCheckServesSmallListsDirectly(t *testing.T) {
 
 	// Three numbers: below Airtel's floor, and Vi has no floor at all, so this
 	// must stay a single bulk call rather than fanning out.
-	reachable, err := vi.Reachable(context.Background(),
+	reachable, err := vi.Reachable(context.Background(), "OsQ0GwNvUdLTV9Bd",
 		[]string{"+919687895543", "+919686960876", "+919688757768"})
 	if err != nil {
 		t.Fatalf("Reachable: %v", err)
@@ -317,7 +315,7 @@ func TestViMintsOneTokenAndReusesIt(t *testing.T) {
 	})
 
 	for i := 0; i < 5; i++ {
-		if _, err := vi.Capability(context.Background(), "+91425313678"+fmt.Sprint(i)); err != nil {
+		if _, err := vi.Capability(context.Background(), "OsQ0GwNvUdLTV9Bd", "+91425313678"+fmt.Sprint(i)); err != nil {
 			t.Fatalf("Capability %d: %v", i, err)
 		}
 	}
@@ -339,10 +337,10 @@ func TestViDropsARejectedTokenSoTheNextCallMintsAFreshOne(t *testing.T) {
 		fmt.Fprint(w, `{"features":["ACTION_DIAL"]}`)
 	})
 
-	if _, err := vi.Capability(context.Background(), "+914253136789"); err == nil {
+	if _, err := vi.Capability(context.Background(), "OsQ0GwNvUdLTV9Bd", "+914253136789"); err == nil {
 		t.Fatal("a 401 was reported as a successful check")
 	}
-	if _, err := vi.Capability(context.Background(), "+914253136789"); err != nil {
+	if _, err := vi.Capability(context.Background(), "OsQ0GwNvUdLTV9Bd", "+914253136789"); err != nil {
 		t.Fatalf("second Capability: %v — a stale token must not be permanent", err)
 	}
 	if tokens != 2 {
@@ -366,7 +364,7 @@ func TestDuplicateNumbersAreCollapsedBeforeTheCarrierSeesThem(t *testing.T) {
 		fmt.Fprint(w, `{"rcsEnabledContacts":[]}`)
 	})
 
-	if _, err := vi.Reachable(context.Background(),
+	if _, err := vi.Reachable(context.Background(), "OsQ0GwNvUdLTV9Bd",
 		[]string{"+911111111111", "+912222222222", "+911111111111", ""}); err != nil {
 		t.Fatalf("Reachable: %v", err)
 	}

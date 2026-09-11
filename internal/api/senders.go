@@ -11,6 +11,8 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
 
@@ -160,6 +162,16 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
 	}
 
+	// rcsAgentId. Wired DELIBERATELY, because nothing would have said it
+	// arrived: a brand-new optional field on a REQUEST body is the silent
+	// direction of a contract change — make generate adds it to the struct and
+	// no existing code has to read it, so the build stays green and every
+	// registration quietly drops the agent the customer chose.
+	if problem := s.rcsAgentProblem(ctx, identity,
+		string(request.Body.Channel), request.Body.RcsAgentId); problem != "" {
+		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+
 	created, err := store.CreateSenderID(ctx, s.DB, identity, store.SenderID{
 		// Stored exactly as typed. This is the customer's DLT header id, issued
 		// to them on their operator portal — Relay is the system of record for
@@ -182,6 +194,11 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 		// dialog had nothing to show the operator, and the verification step
 		// that is supposed to gate approval had no number to verify.
 		CallerIDNumber: request.Body.CallerIdNumber,
+		// The customer's own brand identity this header sends under. Never
+		// derived from the tenant and country: a tenant may hold several agents
+		// in one country — order notifications and marketing are the ordinary
+		// case — so there is nothing to derive from.
+		RcsAgentID: request.Body.RcsAgentId,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		return gen.CreateSenderId409JSONResponse(errorBody(codeConflict,
@@ -315,6 +332,53 @@ func senderIdentityProblem(regime compliance.Regime, channel, header string,
 			"so it cannot be cleared."
 	}
 	return ""
+}
+
+// rcsAgentProblem validates the agent a sender will send under, and returns
+// the customer-facing reason it cannot.
+//
+// Two rules, both from the contract:
+//
+//   - accepted only on RCS. No other channel reaches a handset through an
+//     agent, and the sender_ids_agent_is_rcs constraint would refuse the write
+//     anyway — as a 500, with no reason anyone could act on.
+//
+//   - the agent must have passed verification. Registration is the first of two
+//     checks and not the last: the send path re-reads this, because an agent
+//     approved in June is not evidence about today and suspension is the whole
+//     reason to look again.
+func (s *Server) rcsAgentProblem(ctx context.Context, identity store.Identity,
+	channel string, agentID *openapi_types.UUID) string {
+
+	if agentID == nil {
+		return ""
+	}
+	if channel != "RCS" {
+		return "An RCS agent can only be attached to an RCS sender."
+	}
+
+	agent, err := store.GetRcsAgent(ctx, s.DB, identity, *agentID)
+	if errors.Is(err, store.ErrNotFound) {
+		// Another tenant's agent is indistinguishable from one that does not
+		// exist, which is the point: a different message here would confirm
+		// that a given id belongs to somebody.
+		return "No such RCS agent."
+	}
+	if err != nil {
+		return "That RCS agent could not be read. Try again shortly."
+	}
+	switch agent.Status {
+	case "verification_approved", "launch_pending", "live":
+		return ""
+	case "draft", "verification_submitted":
+		return "That agent has not finished brand verification yet, so a sender " +
+			"cannot send under it."
+	case "suspended", "archived":
+		return "That agent is " + agent.Status + " and cannot carry a sender."
+	default:
+		return "That agent's brand verification was not approved, so a sender " +
+			"cannot send under it."
+	}
 }
 
 // UpdateSenderId corrects a sender that no registry has bound yet.

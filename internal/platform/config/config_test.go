@@ -100,16 +100,36 @@ func TestASingleCarriersCredentialsSelectItWithoutBeingNamed(t *testing.T) {
 func TestHalfConfiguredCarrierRefusesToStart(t *testing.T) {
 	setValidEnv(t)
 	setAirtelEnv(t)
-	t.Setenv("RCS_AIRTEL_AGENT_ID", "")
+	t.Setenv("RCS_AIRTEL_CUSTOMER_ID", "")
 
 	_, err := Load()
 	if err == nil {
-		t.Fatal("Load accepted Airtel credentials with no agent id")
+		t.Fatal("Load accepted Airtel credentials with no customer id")
 	}
 	// The message has to name the field. "RCS misconfigured" sends someone
 	// reading three env files instead of one line.
-	if !contains(err.Error(), "RCS_AIRTEL_AGENT_ID") {
+	if !contains(err.Error(), "RCS_AIRTEL_CUSTOMER_ID") {
 		t.Errorf("error = %q, want it to name the missing field", err)
+	}
+}
+
+// The agent id is NOT a credential any more and must not be required.
+//
+// It was one while a single RBM agent served the whole deployment. It is now
+// the fallback used only where a caller has no agent of its own to name, and
+// requiring it would refuse to start precisely the deployment this work exists
+// to reach: one where every tenant owns its agent and nothing shared is left.
+func TestACarrierStartsWithoutADeploymentWideAgent(t *testing.T) {
+	setValidEnv(t)
+	setAirtelEnv(t)
+	t.Setenv("RCS_AIRTEL_AGENT_ID", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load refused a carrier with no shared agent: %v", err)
+	}
+	if cfg.RCSCarrierName() != "airtel" {
+		t.Errorf("RCSCarrierName = %q, want airtel", cfg.RCSCarrierName())
 	}
 }
 

@@ -352,3 +352,63 @@ func TestAirtelTimestampWithSpacesStillParses(t *testing.T) {
 		t.Errorf("OccurredAt = %v, want the carrier's own timestamp", event.OccurredAt)
 	}
 }
+
+// Two agent identifiers arrive on a Vi event and only one of them is ours.
+//
+// The envelope's business_id is the botId Vi issued and the botId we send on
+// every request, so it is what carrier_agent_id holds. The payload's own
+// agentId is Google's RBM address, which we never send and never store.
+//
+// Reading agentId would look correct in review and match nothing in the launch
+// table, on every event, forever — and the only symptom would be inbound RCS
+// that is never attributed to any tenant.
+func TestViAttributionUsesTheBotIdAndNotGooglesAgentAddress(t *testing.T) {
+	inner := `{
+	  "senderPhoneNumber": "+919986473361",
+	  "messageId": "4a1d7c74-2b3c-4ec7-b6be-ed7205a15aa3",
+	  "sendTime": "2026-08-24T15:01:23.045123456Z",
+	  "agentId": " dotgo-gupshup_r0mhjgkx_agent@rbm.goog",
+	  "suggestionResponse": {"postbackData": "suggestion_1", "text": "Suggestion #1"}
+	}`
+	envelope := `{"message":{"data":"` +
+		base64.StdEncoding.EncodeToString([]byte(inner)) +
+		`","attributes":{"business_id":"OsQ0GwNvUdLTV9Bd","type":"message"}}}`
+
+	event, err := ParseViWebhook([]byte(envelope))
+	if err != nil {
+		t.Fatalf("ParseViWebhook: %v", err)
+	}
+	if event.AgentID != "OsQ0GwNvUdLTV9Bd" {
+		t.Errorf("AgentID = %q, want the botId from business_id", event.AgentID)
+	}
+
+	// Without the envelope there is nothing else to use, so the RBM address is
+	// the fallback rather than nothing at all — trimmed, because Vi's own
+	// examples carry a leading space in it.
+	bare, err := ParseViWebhook([]byte(inner))
+	if err != nil {
+		t.Fatalf("ParseViWebhook bare: %v", err)
+	}
+	if bare.AgentID != "dotgo-gupshup_r0mhjgkx_agent@rbm.goog" {
+		t.Errorf("AgentID = %q, want the trimmed agentId as the fallback", bare.AgentID)
+	}
+}
+
+// Airtel puts its agentId at the top level of every event shape. It was parsed
+// and thrown away until agents were per-tenant; now it is the discriminator.
+func TestAirtelEventsCarryTheAgentTheyAreAbout(t *testing.T) {
+	payload := `{
+	  "messageId": "01kf0vy2s2ap1bb3an5z7vpva0",
+	  "agentId": "acme_airtel_agent",
+	  "msisdn": "+919820000002",
+	  "eventType": "DELIVERED",
+	  "sendTime": "2026-08-24 15:01:23"
+	}`
+	event, err := ParseAirtelWebhook([]byte(payload))
+	if err != nil {
+		t.Fatalf("ParseAirtelWebhook: %v", err)
+	}
+	if event.AgentID != "acme_airtel_agent" {
+		t.Errorf("AgentID = %q", event.AgentID)
+	}
+}

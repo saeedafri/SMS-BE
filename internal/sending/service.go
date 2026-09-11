@@ -51,6 +51,54 @@ type Service struct {
 	Coalescer *Coalescer
 }
 
+// dedicatedCarrier is the gateway a channel has all to itself, upper-cased into
+// the vocabulary the routes table and the launch rows use. Empty means the
+// channel has no gateway of its own and falls to the default connector.
+//
+// It answers from configuration alone, with no database round trip, which is
+// what lets the gate know which carrier an RCS message would go over before it
+// decides whether to let it.
+func (s *Service) dedicatedCarrier(channel string) string {
+	dedicated, ok := s.Carriers.Dedicated(channel)
+	if !ok {
+		return ""
+	}
+	return strings.ToUpper(dedicated.Name())
+}
+
+// rcsAgentFor is the agent identity one message goes out under.
+//
+// Non-RCS channels have none: no other channel reaches a carrier through an
+// agent, and returning a value for them would put an agentId on an SMS.
+//
+// There is NO fallback. An RCS sender with no resolvable agent is refused at
+// the gate, and that is the whole point of the change: the deployment-wide
+// agent used to stand in silently, so a bank's message went out under whatever
+// brand RCS_AIRTEL_AGENT_ID happened to name, delivered successfully, and
+// looked identical to a correct send in every log and screen we have.
+//
+// An empty answer for an RCS message is therefore a refusal, not a default.
+func (s *Service) rcsAgentFor(ctx context.Context, identity store.Identity,
+	sender store.SenderID, carrier string) string {
+
+	if sender.Channel != "RCS" || sender.RcsAgentID == nil {
+		return ""
+	}
+
+	carrierAgentID, err := store.CachedCarrierAgentID(ctx, s.DB, s.Hot,
+		identity, *sender.RcsAgentID, carrier)
+	if err != nil && s.Logger != nil {
+		// Logged rather than returned because the caller's next move is the
+		// same either way — refuse this message — and because the two causes
+		// read very differently to whoever is looking: a launch that never
+		// completed, or an agent suspended after the sender was registered.
+		s.Logger.Warn("rcs send has no agent identity on this carrier",
+			"sender", sender.ID, "agent", *sender.RcsAgentID,
+			"carrier", carrier, "error", err)
+	}
+	return carrierAgentID
+}
+
 // carrierFor picks the gateway for a channel.
 //
 // The registry's Default is only consulted when it is set, so a Service built
@@ -194,6 +242,12 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		return SendResult{}, err
 	}
 
+	// The brand this message would go out under, resolved BEFORE the gate so a
+	// sender with no identity on its carrier is refused rather than charged and
+	// then rejected. It costs one cached lookup and only on RCS.
+	rcsCarrier := s.dedicatedCarrier(sender.Channel)
+	agentID := s.rcsAgentFor(ctx, identity, sender, rcsCarrier)
+
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
@@ -205,6 +259,12 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		RegisteredTemplateRequired: registeredTemplateRequired(sender.Country),
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
+		// Required only where a real RCS gateway is configured. With none, the
+		// message goes to the sandbox and no handset sees a brand at all, so
+		// demanding an agent would refuse every send on a deployment that has
+		// not got carrier credentials yet.
+		RCSAgentRequired: sender.Channel == "RCS" && rcsCarrier != "",
+		RCSAgentResolved: agentID != "",
 	})
 
 	messageID := uuid.New()
@@ -269,6 +329,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
 		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
 		CarrierTemplateID: carrierTemplateID,
+		AgentID:           agentID,
 		TemplateVariables: TemplateVariables(template, request.Variables),
 	}})
 	if err != nil {
@@ -524,8 +585,7 @@ func TemplateVariables(template store.Template, values map[string]string) []conn
 // Absence is normal, not an error. Email and WhatsApp do not go over a carrier
 // at all, and a corridor with no active route sends exactly as before.
 func (s *Service) resolvePath(ctx context.Context, country, channel string) (string, *string) {
-	if dedicated, ok := s.Carriers.Dedicated(channel); ok {
-		carrier := strings.ToUpper(dedicated.Name())
+	if carrier := s.dedicatedCarrier(channel); carrier != "" {
 		route, err := store.SelectRouteForCarrier(ctx, s.DB, country, channel, carrier)
 		if err != nil {
 			// No route row for this carrier is worth recording as-is rather

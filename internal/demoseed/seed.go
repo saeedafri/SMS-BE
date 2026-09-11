@@ -80,6 +80,13 @@ const (
 	conversationFour  = "cf000007-0000-0000-0000-000000000007"
 	verifyService     = "ffffffff-0000-0000-0000-000000000001"
 	password          = "relay-dev"
+
+	// The second account. Northwind Logistics already existed as an operator
+	// fixture; what it lacked was a way in, which is what made cross-tenant
+	// isolation unprovable from outside this process.
+	secondTenantID = "aaaaaaaa-1111-1111-1111-111111111111"
+	secondUserID   = "99999999-9999-9999-9999-00000000000a"
+	secondAgentID  = "a9000001-0000-4000-8000-00000000000a"
 )
 
 // Apply rebuilds the demo tenant from scratch.
@@ -249,7 +256,7 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	// spec performed, and is exactly what makes the next run's signup collide.
 	if _, err := pool.Exec(ctx, `
 		DELETE FROM users
-		WHERE email = 'founder@acme.test'
+		WHERE email IN ('founder@acme.test', 'founder@northwind.test')
 		   OR id NOT IN (SELECT user_id FROM tenant_users)`); err != nil {
 		return fmt.Errorf("clear demo user: %w", err)
 	}
@@ -948,6 +955,61 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 			tenant.flagHoursAgo, tenant.flagReason); err != nil {
 			return fmt.Errorf("seed tenant %s: %w", tenant.name, err)
 		}
+	}
+
+	// A SECOND ACCOUNT SOMEBODY CAN LOG IN TO.
+	//
+	// Every other tenant here is a row with no way in, so the only credentials
+	// on the deployment belonged to Acme Retail — which made cross-tenant
+	// isolation the one property nobody could test from outside the process.
+	// Our counterparts said so plainly: they had no second identity to attempt
+	// a leak from, and took our word for it.
+	//
+	// Northwind is given the login rather than a ninth tenant because it
+	// already carries its own sender and approval fixtures, so a leak between
+	// these two accounts has something on both sides to find.
+	//
+	// The agent is the sharp end. An RCS agent is the one object where a
+	// mistake is invisible from our side and visible on a stranger's handset,
+	// so the isolation proof wants one on each side of the boundary.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (id, email, name, password_hash, email_verified)
+		VALUES ($1, 'founder@northwind.test', 'Dana Okafor', $2, true)
+		ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+		secondUserID, hash); err != nil {
+		return fmt.Errorf("seed second user: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO tenant_users (tenant_id, user_id, role) VALUES ($1, $2, 'owner')
+		ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'owner'`,
+		secondTenantID, secondUserID); err != nil {
+		return fmt.Errorf("seed second membership: %w", err)
+	}
+	// An agent carries the tenant's registered brand identity, so the entity
+	// behind it has to be approved before the agent can exist.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO registrations (tenant_id, country, object_key, status)
+		VALUES ($1, 'IN', 'entity-northwind', 'approved')
+		ON CONFLICT DO NOTHING`, secondTenantID); err != nil {
+		return fmt.Errorf("seed second registration: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rcs_agents (id, tenant_id, display_name, use_case, country,
+		                        status, verification_status, verification_reviewed_at)
+		VALUES ($1, $2, 'Northwind Dispatch', 'TRANSACTIONAL', 'IN',
+		        'live', 'approved', now())
+		ON CONFLICT (id) DO UPDATE SET status = 'live'`,
+		secondAgentID, secondTenantID); err != nil {
+		return fmt.Errorf("seed second agent: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rcs_agent_carrier_launches
+		    (agent_id, tenant_id, carrier, status, carrier_agent_id, submitted_at)
+		VALUES ($1, $2, 'AIRTEL', 'approved', 'northwind_airtel_agent', now())
+		ON CONFLICT (agent_id, carrier) DO UPDATE
+		    SET status = 'approved', carrier_agent_id = EXCLUDED.carrier_agent_id`,
+		secondAgentID, secondTenantID); err != nil {
+		return fmt.Errorf("seed second agent launch: %w", err)
 	}
 
 	activityTenants := make([]string, 0, len(otherTenants)+1)
@@ -1986,6 +2048,21 @@ func rebuildRoutes(ctx context.Context, tx pgx.Tx) error {
 		       ('IN','SMS','VI',         'Vi Direct',                   4,'grey',       8,'INR','disabled'),
 		       ('IN','RCS','JIO',        'Jio RCS Direct',              1,'registered',45,'INR','active'),
 		       ('IN','RCS','AIRTEL',     'Airtel RCS Direct',           2,'registered',48,'INR','active'),
+		       -- Vi was missing, and its absence was invisible until the agent
+		       -- launch screen started deriving its carrier list from this
+		       -- table: India resolved to JIO and AIRTEL, so the one Indian
+		       -- network we have a working adapter for could not be offered,
+		       -- while Jio — which we have no adapter for at all — sat at
+		       -- priority 1. Jio stays: a carrier we cannot reach is SHOWN and
+		       -- refused with a reason, which is the designed behaviour. Vi
+		       -- being hidden was the defect.
+		       --
+		       -- The cost is Airtel's figure standing in. Vi commercials are
+		       -- not agreed, and this column feeds operator margin screens
+		       -- rather than any customer's bill — pricing_rates does that — so
+		       -- a placeholder here misstates our own reporting and nobody's
+		       -- invoice. Replace it when the rate card lands.
+		       ('IN','RCS','VI',         'Vi RCS Direct',               3,'registered',48,'INR','active'),
 		       ('IN','VOICE','JIO',      'Jio Voice Direct',            1,'registered',40,'INR','active'),
 		       ('US','SMS','VERIZON',    'Verizon Direct',              1,'registered', 1,'USD','active'),
 		       ('US','SMS','ATT',        'AT&T Direct',                 2,'registered', 1,'USD','active'),

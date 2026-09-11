@@ -140,6 +140,11 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// for it, or counting it against the delivery rate, would be wrong
 			// in both directions.
 			RecipientValid: recipientAddressable(context.sender.Channel, msisdn, email),
+			// The brand the handset draws. Refused here rather than at the
+			// carrier so a campaign with no identity to send under costs
+			// nothing instead of taking and releasing a hold per recipient.
+			RCSAgentRequired: context.sender.Channel == "RCS" && context.rcsCarrier != "",
+			RCSAgentResolved: context.agentID != "",
 		})
 		if gateErr != nil {
 			plan.refusal = messaging.GateFailureCode(gateErr)
@@ -185,6 +190,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 				Sender: context.sender.Header, Body: plan.body,
 				Channel: context.sender.Channel, Country: context.sender.Country,
 				CarrierTemplateID: context.carrierTemplateID(),
+				AgentID:           context.agentID,
 				// The SAME contact fields that personalised the body above.
 				// The carrier holds the template and renders it from these, so
 				// a campaign that personalises its body and sends the carrier
@@ -348,6 +354,13 @@ type batchContext struct {
 	// go over a carrier at all.
 	carrier string
 	routeID *string
+
+	// rcsCarrier is the gateway RCS has to itself, empty when there is none,
+	// and agentID the brand this campaign's sender goes out under on it. Both
+	// resolved once: a campaign has one sender, so every message in it carries
+	// the same identity.
+	rcsCarrier string
+	agentID    string
 }
 
 // emailForChannel returns the address to record as the recipient, and only for

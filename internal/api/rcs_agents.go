@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/domain/rcs"
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 	"github.com/saeedafri/sms-be/internal/store"
 )
@@ -170,6 +171,10 @@ func (s *Server) CreateRcsAgent(ctx context.Context, request gen.CreateRcsAgentR
 		return gen.CreateRcsAgent422JSONResponse(errorBody(codeValidation,
 			"An agent needs a display name.")), nil
 	}
+	if err := rcs.CheckDisplayName(name); err != nil {
+		return gen.CreateRcsAgent422JSONResponse(errorBody(codeValidation,
+			capitalise(err.Error())+".")), nil
+	}
 	country := string(request.Body.Country)
 	approved, err := store.HasApprovedRegistration(ctx, s.DB, identity, country)
 	if err != nil {
@@ -240,7 +245,43 @@ func (s *Server) UpdateRcsAgent(ctx context.Context, request gen.UpdateRcsAgentR
 	}
 
 	body := request.Body
+	// The two carrier rules that refuse an agent at SUBMISSION, days later, in
+	// a queue the customer cannot see. Checked on the edit rather than only at
+	// submit so the refusal arrives while the field is still on the screen.
+	if body.DisplayName != nil {
+		if err := rcs.CheckDisplayName(strings.TrimSpace(*body.DisplayName)); err != nil {
+			return gen.UpdateRcsAgent422JSONResponse(errorBody(codeValidation,
+				capitalise(err.Error())+".")), nil
+		}
+	}
+	if body.PrimaryColor != nil {
+		if err := rcs.CheckPrimaryColor(*body.PrimaryColor); err != nil {
+			return gen.UpdateRcsAgent422JSONResponse(errorBody(codeValidation,
+				capitalise(err.Error())+".")), nil
+		}
+	}
+
 	update := store.RcsAgentUpdate{
+		// JSON Merge Patch: an omitted key leaves the stored value alone, an
+		// explicit null clears it. Both arrive here as a nil pointer, so the
+		// difference comes from the middleware's record of which keys the
+		// request actually carried — see clearedFields.
+		//
+		// displayName and useCase are absent from this map on purpose. Neither
+		// is nullable in the table and an agent with no name is not an agent,
+		// so a null there is a caller mistake rather than an instruction.
+		Cleared: clearedFields(ctx, map[string]bool{
+			"description":       body.Description == nil,
+			"logoAssetId":       body.LogoAssetId == nil,
+			"heroImageAssetId":  body.HeroImageAssetId == nil,
+			"primaryColor":      body.PrimaryColor == nil,
+			"phoneNumber":       body.PhoneNumber == nil,
+			"email":             body.Email == nil,
+			"website":           body.Website == nil,
+			"privacyPolicyUrl":  body.PrivacyPolicyUrl == nil,
+			"termsOfServiceUrl": body.TermsOfServiceUrl == nil,
+			"registrationId":    body.RegistrationId == nil,
+		}),
 		DisplayName:       body.DisplayName,
 		Description:       body.Description,
 		LogoAssetID:       body.LogoAssetId,
@@ -284,6 +325,19 @@ func (s *Server) SubmitRcsAgentVerification(ctx context.Context,
 			"That verification document does not exist on this account.")), nil
 	}
 
+	// The carrier's own brand rules, checked at the moment they would be
+	// applied. Airtel refuses the agent here — up to 24 hours later, with its
+	// own wording, in a queue the customer cannot see — so refusing now is the
+	// difference between a corrected field and a lost day.
+	//
+	// The edit path checks these too. This is not a duplicate: an agent can
+	// reach submission carrying a colour set before the rule existed, and the
+	// last gate before a carrier sees it is the one that must hold.
+	if problem := s.brandProblem(ctx, identity, request.Id); problem != "" {
+		return gen.SubmitRcsAgentVerification422JSONResponse(
+			errorBody(codeValidation, problem)), nil
+	}
+
 	agent, err := store.SubmitRcsAgentVerification(ctx, s.DB, identity, request.Id,
 		strings.TrimSpace(body.ContactName), strings.TrimSpace(body.ContactEmail),
 		strings.TrimSpace(body.ContactPhone), body.DocumentAssetId)
@@ -298,6 +352,30 @@ func (s *Server) SubmitRcsAgentVerification(ctx context.Context,
 		return nil, err
 	}
 	return gen.SubmitRcsAgentVerification200JSONResponse(s.rcsAgentResponse(ctx, agent)), nil
+}
+
+// brandProblem re-reads the agent and applies the carrier's brand rules,
+// returning the customer-facing reason it would be refused.
+//
+// Empty when the agent cannot be read: the transition below answers 404 for
+// that, and guessing here would turn a missing agent into a validation error
+// about a name nobody typed.
+func (s *Server) brandProblem(ctx context.Context, identity store.Identity,
+	agentID uuid.UUID) string {
+
+	agent, err := store.GetRcsAgent(ctx, s.DB, identity, agentID)
+	if err != nil {
+		return ""
+	}
+	if err := rcs.CheckDisplayName(agent.DisplayName); err != nil {
+		return capitalise(err.Error()) + "."
+	}
+	if agent.PrimaryColor != nil {
+		if err := rcs.CheckPrimaryColor(*agent.PrimaryColor); err != nil {
+			return capitalise(err.Error()) + "."
+		}
+	}
+	return ""
 }
 
 // LaunchRcsAgentOnCarrier puts a verified agent to one carrier.

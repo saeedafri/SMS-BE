@@ -35,9 +35,6 @@ type ViRCS struct {
 	ClientID     string
 	ClientSecret string
 
-	// BotID is the registered bot, Vi's equivalent of Airtel's agentId.
-	BotID string
-
 	HTTP *http.Client
 
 	mu        sync.Mutex
@@ -54,21 +51,27 @@ func (v *ViRCS) client() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
+// configured is about the DEPLOYMENT's Vi credentials only. The bot id is not
+// among them any more: it identifies a customer's agent and arrives per call,
+// so a deployment is configured whether or not any agent has launched yet.
 func (v *ViRCS) configured() bool {
 	return v.BaseURL != "" && v.TokenURL != "" &&
-		v.ClientID != "" && v.ClientSecret != "" && v.BotID != ""
+		v.ClientID != "" && v.ClientSecret != ""
 }
 
-func (v *ViRCS) Capability(ctx context.Context, msisdn string) (RCSCapability, error) {
+func (v *ViRCS) Capability(ctx context.Context, agentID, msisdn string) (RCSCapability, error) {
 	if !v.configured() {
 		return RCSCapability{}, ErrRCSNotConfigured
+	}
+	if agentID == "" {
+		return RCSCapability{}, ErrRCSNoAgent
 	}
 
 	// The Google-style endpoint (§3.5), not the GSMA one (§2.3): it returns the
 	// same feature vocabulary Airtel does, so one Relay answer means one thing
 	// regardless of which carrier served it. See rcs_capability.go.
 	path := "/rcs/v1/phones/" + url.PathEscape(msisdn) + "/capabilities" +
-		"?botId=" + url.QueryEscape(v.BotID)
+		"?botId=" + url.QueryEscape(agentID)
 
 	response, err := v.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
@@ -101,9 +104,12 @@ func (v *ViRCS) Capability(ctx context.Context, msisdn string) (RCSCapability, e
 	}, nil
 }
 
-func (v *ViRCS) Reachable(ctx context.Context, msisdns []string) ([]string, error) {
+func (v *ViRCS) Reachable(ctx context.Context, agentID string, msisdns []string) ([]string, error) {
 	if !v.configured() {
 		return nil, ErrRCSNotConfigured
+	}
+	if agentID == "" {
+		return nil, ErrRCSNoAgent
 	}
 
 	unique := dedupe(msisdns)
@@ -122,7 +128,7 @@ func (v *ViRCS) Reachable(ctx context.Context, msisdns []string) ([]string, erro
 	}
 
 	response, err := v.do(ctx, http.MethodPost,
-		"/bot/v1/"+url.PathEscape(v.BotID)+"/rcsEnabledContacts", payload)
+		"/bot/v1/"+url.PathEscape(agentID)+"/rcsEnabledContacts", payload)
 	if err != nil {
 		return nil, err
 	}
@@ -270,13 +276,13 @@ func (v *ViRCS) Health(context.Context) Health {
 // This is implemented rather than left off the type so the product can say that
 // clearly in one place — a customer on Vi needs to be told where to go, not
 // shown a failure that looks like an outage.
-func (v *ViRCS) RegisterTemplate(context.Context, RCSTemplateSpec) (RCSTemplateRegistration, error) {
+func (v *ViRCS) RegisterTemplate(context.Context, string, RCSTemplateSpec) (RCSTemplateRegistration, error) {
 	return RCSTemplateRegistration{}, ErrTemplateRegistrationManual
 }
 
 // TemplateStatus refuses for the same reason. Vi publishes no way to read a
 // template's approval state, so the only source of truth is the portal.
-func (v *ViRCS) TemplateStatus(context.Context, string) (RCSTemplateRegistration, error) {
+func (v *ViRCS) TemplateStatus(context.Context, string, string) (RCSTemplateRegistration, error) {
 	return RCSTemplateRegistration{}, ErrTemplateRegistrationManual
 }
 
@@ -296,6 +302,16 @@ func (v *ViRCS) submitOne(ctx context.Context, submission Submission) Receipt {
 			MessageID: submission.MessageID,
 			Accepted:  false,
 			ErrorCode: "template_not_registered",
+		}
+	}
+	if submission.AgentID == "" {
+		// Vi's send path takes the botId as a query parameter. Without one the
+		// request is about no brand at all, and the refusal names the sender's
+		// missing agent rather than whatever Vi says about a blank parameter.
+		return Receipt{
+			MessageID: submission.MessageID,
+			Accepted:  false,
+			ErrorCode: "agent_not_resolved",
 		}
 	}
 
@@ -337,7 +353,7 @@ func (v *ViRCS) submitOne(ctx context.Context, submission Submission) Receipt {
 	// which turns an accidental re-send of the same message into a refusal
 	// rather than a second charge and a second handset notification.
 	query := url.Values{}
-	query.Set("botId", v.BotID)
+	query.Set("botId", submission.AgentID)
 	query.Set("messageId", submission.MessageID)
 	path := "/rcs/v1/phones/" + url.PathEscape(submission.Msisdn) +
 		"/agentMessages/async?" + query.Encode()

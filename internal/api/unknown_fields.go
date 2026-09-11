@@ -115,6 +115,15 @@ var connectionBodyFields = []string{
 	"reconnectBackoffSeconds",
 }
 
+// rcsAgentBodyFields is the agent PATCH body, which is a JSON Merge Patch.
+// Listed here so the middleware records which of them each request mentioned;
+// the unknown-field refusal is the same list doing its other job.
+var rcsAgentBodyFields = []string{
+	"displayName", "description", "logoAssetId", "heroImageAssetId",
+	"primaryColor", "phoneNumber", "email", "website", "privacyPolicyUrl",
+	"termsOfServiceUrl", "useCase", "registrationId",
+}
+
 type bodyKeysContextKey struct{}
 
 // bodyMentions reports whether the request body carried this key at all,
@@ -123,4 +132,21 @@ type bodyKeysContextKey struct{}
 func bodyMentions(ctx context.Context, field string) bool {
 	keys, ok := ctx.Value(bodyKeysContextKey{}).(map[string]bool)
 	return ok && keys[field]
+}
+
+// clearedFields is the JSON Merge Patch half of the same question: which of
+// these keys the caller sent AND left null, meaning "remove this".
+//
+// A key that was sent with a value decodes into the typed struct and never
+// reaches here. A key that was not sent at all is absent from the presence map.
+// Only the third case — sent, null — is both mentioned and nil, and it is the
+// one the generated struct cannot express.
+func clearedFields(ctx context.Context, isNil map[string]bool) map[string]bool {
+	cleared := make(map[string]bool, len(isNil))
+	for field, nilValue := range isNil {
+		if nilValue && bodyMentions(ctx, field) {
+			cleared[field] = true
+		}
+	}
+	return cleared
 }

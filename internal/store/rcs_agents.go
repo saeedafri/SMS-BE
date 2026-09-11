@@ -254,42 +254,63 @@ type RcsAgentUpdate struct {
 	TermsOfServiceURL *string
 	UseCase           *string
 	RegistrationID    *string
+
+	// Cleared names the fields the request sent as an explicit null, keyed by
+	// the contract's own field names.
+	//
+	// It exists because a nil pointer above means two different things — "not
+	// mentioned" and "set to null" — and the generated struct cannot tell them
+	// apart. That is JSON Merge Patch (RFC 7386), and the alternative was
+	// inventing a sentinel value, which gives some ordinary string a second
+	// meaning forever.
+	Cleared map[string]bool
 }
 
-// UpdateRcsAgent applies a PATCH.
+// UpdateRcsAgent applies a PATCH with JSON Merge Patch semantics.
 //
-// Every column is written as "keep unless this argument says otherwise", which
-// is what lets one statement express a partial update without building SQL per
-// request. The pair of booleans per field is the difference between "not
-// mentioned" and "set to null", which a single nullable argument cannot carry.
+// Three cases per field, and coalesce alone carries only two of them: a NULL
+// argument means "keep", so it can never also mean "clear". The flag beside
+// each value is the third — it is the difference between a key the request
+// omitted and a key it sent as null, which the generated struct collapses into
+// one nil pointer.
+//
+// The SQL text is fixed rather than assembled per request. Building a SET
+// clause from field names would work and would put caller-influenced strings
+// into a statement, which is a thing to avoid on principle rather than after an
+// argument about whether this particular map is safe. A query whose text does
+// not vary is also one the planner caches and a reader can check.
+//
+// display_name and use_case take no flag: neither is nullable, and an agent
+// with no name is not an agent.
 func UpdateRcsAgent(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	agentID uuid.UUID, update RcsAgentUpdate) (RcsAgent, error) {
 
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		// coalesce reads as "keep unless this argument says otherwise", which
-		// is what lets one statement express a partial update without building
-		// SQL per request — and a query whose text does not vary is one the
-		// planner caches and a reader can check.
 		tag, err := tx.Exec(ctx, `
 			UPDATE rcs_agents SET
 			    display_name         = coalesce($2,  display_name),
 			    use_case             = coalesce($3,  use_case),
-			    description          = coalesce($4,  description),
-			    logo_asset_id        = coalesce($5,  logo_asset_id),
-			    hero_asset_id        = coalesce($6,  hero_asset_id),
-			    primary_color        = coalesce($7,  primary_color),
-			    phone_number         = coalesce($8,  phone_number),
-			    email                = coalesce($9,  email),
-			    website              = coalesce($10, website),
-			    privacy_policy_url   = coalesce($11, privacy_policy_url),
-			    terms_of_service_url = coalesce($12, terms_of_service_url),
-			    registration_id      = coalesce($13, registration_id),
+			    description          = CASE WHEN $14 THEN NULL ELSE coalesce($4,  description)          END,
+			    logo_asset_id        = CASE WHEN $15 THEN NULL ELSE coalesce($5,  logo_asset_id)        END,
+			    hero_asset_id        = CASE WHEN $16 THEN NULL ELSE coalesce($6,  hero_asset_id)        END,
+			    primary_color        = CASE WHEN $17 THEN NULL ELSE coalesce($7,  primary_color)        END,
+			    phone_number         = CASE WHEN $18 THEN NULL ELSE coalesce($8,  phone_number)         END,
+			    email                = CASE WHEN $19 THEN NULL ELSE coalesce($9,  email)                END,
+			    website              = CASE WHEN $20 THEN NULL ELSE coalesce($10, website)              END,
+			    privacy_policy_url   = CASE WHEN $21 THEN NULL ELSE coalesce($11, privacy_policy_url)   END,
+			    terms_of_service_url = CASE WHEN $22 THEN NULL ELSE coalesce($12, terms_of_service_url) END,
+			    registration_id      = CASE WHEN $23 THEN NULL ELSE coalesce($13, registration_id)      END,
 			    updated_at           = now()
 			WHERE id = $1`,
 			agentID, update.DisplayName, update.UseCase, update.Description,
 			update.LogoAssetID, update.HeroAssetID, update.PrimaryColor,
 			update.PhoneNumber, update.Email, update.Website,
-			update.PrivacyPolicyURL, update.TermsOfServiceURL, update.RegistrationID)
+			update.PrivacyPolicyURL, update.TermsOfServiceURL, update.RegistrationID,
+			update.Cleared["description"], update.Cleared["logoAssetId"],
+			update.Cleared["heroImageAssetId"], update.Cleared["primaryColor"],
+			update.Cleared["phoneNumber"], update.Cleared["email"],
+			update.Cleared["website"], update.Cleared["privacyPolicyUrl"],
+			update.Cleared["termsOfServiceUrl"], update.Cleared["registrationId"])
 		if err != nil {
 			return err
 		}
@@ -514,6 +535,116 @@ func HasApprovedRegistration(ctx context.Context, pool *pgxpool.Pool, id Identit
 		return false, fmt.Errorf("store: check approved registration: %w", err)
 	}
 	return approved, nil
+}
+
+// CarrierAgentID is the id one carrier issued for one agent — Airtel's agentId,
+// Vi's botId — and it is what the send path puts on the wire.
+//
+// Three conditions, and every one of them can change after the sender was
+// registered, which is why this is asked at SEND time rather than trusted from
+// registration:
+//
+//   - the launch is approved and carries an id. A pending launch has no id to
+//     send under, and a rejected one never will.
+//   - the agent is not suspended or archived. An agent approved in June is not
+//     evidence about today; suspension is the whole reason to re-check.
+//   - the agent belongs to this tenant. RLS enforces that rather than a WHERE
+//     clause, so a stolen agent id reads as "not found" and not as a leak.
+//
+// ErrNotFound means "this agent cannot send on this carrier", and the caller
+// must NOT substitute the deployment's shared agent for it: a tenant that owns
+// an agent and sends under someone else's identity is the failure this whole
+// feature exists to remove.
+func CarrierAgentID(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	agentID uuid.UUID, carrier string) (string, error) {
+
+	var carrierAgentID string
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT l.carrier_agent_id
+			  FROM rcs_agent_carrier_launches l
+			  JOIN rcs_agents a ON a.id = l.agent_id
+			 WHERE l.agent_id = $1
+			   AND l.carrier = $2
+			   AND l.status = 'approved'
+			   AND l.carrier_agent_id IS NOT NULL
+			   AND a.status NOT IN ('suspended', 'archived')`,
+			agentID, carrier).Scan(&carrierAgentID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: carrier agent id: %w", err)
+	}
+	return carrierAgentID, nil
+}
+
+// CachedCarrierAgentID is CarrierAgentID with the send path's cache in front,
+// for the same reason CachedSenderID exists: this is one more round trip on
+// every single RCS message, asking a question whose answer changes when an
+// operator or a carrier changes it, not between two messages in a burst.
+//
+// The TTL is the blast radius, exactly as it is for a suspended tenant: an
+// agent suspended at t keeps sending until t+TTL. That window is the same one
+// the send path already accepts for tenant status, and it is shorter than the
+// time it takes anyone to notice the button was clicked.
+//
+// A miss is cached too. Without that, the failing case — an agent with no
+// approved launch — pays the full round trip on every message of a campaign
+// that is refusing all of them anyway.
+func CachedCarrierAgentID(ctx context.Context, pool *pgxpool.Pool, cache *HotCache,
+	id Identity, agentID uuid.UUID, carrier string) (string, error) {
+
+	key := "rcsagent:" + id.TenantID.String() + ":" + agentID.String() + ":" + carrier
+	if value, found := cache.Get(key); found {
+		carrierAgentID := value.(string)
+		if carrierAgentID == "" {
+			return "", ErrNotFound
+		}
+		return carrierAgentID, nil
+	}
+	carrierAgentID, err := CarrierAgentID(ctx, pool, id, agentID, carrier)
+	if errors.Is(err, ErrNotFound) {
+		cache.Put(key, "")
+		return "", err
+	}
+	if err != nil {
+		return "", err
+	}
+	cache.Put(key, carrierAgentID)
+	return carrierAgentID, nil
+}
+
+// TenantForCarrierAgent resolves an inbound carrier event to the tenant that
+// owns the agent it names.
+//
+// On an inbound RCS event the carrier's agent id is the ONLY tenant
+// discriminator there is: the payload carries no tenant, and unlike a delivery
+// report there is no message of ours to look the sender up from. The unique
+// index rcs_launch_carrier_identity on (carrier, carrier_agent_id) is what
+// makes this answer single-valued — without it two tenants could collide on one
+// carrier id and each would receive the other's inbound messages.
+//
+// Read on the OPERATOR pool, and it has to be: the caller is a carrier, there
+// is no session, and a tenant-scoped read would have to already know the answer
+// it is asking for.
+func TenantForCarrierAgent(ctx context.Context, pool *pgxpool.Pool,
+	carrier, carrierAgentID string) (uuid.UUID, uuid.UUID, error) {
+
+	var tenantID, agentID uuid.UUID
+	err := pool.QueryRow(ctx, `
+		SELECT tenant_id, agent_id
+		  FROM rcs_agent_carrier_launches
+		 WHERE carrier = $1 AND carrier_agent_id = $2`,
+		carrier, carrierAgentID).Scan(&tenantID, &agentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, uuid.Nil, ErrNotFound
+	}
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("store: tenant for carrier agent: %w", err)
+	}
+	return tenantID, agentID, nil
 }
 
 // PendingRcsAgent is one operator queue row.
