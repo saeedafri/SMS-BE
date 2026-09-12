@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
+
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/audience"
+	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
@@ -18,7 +21,8 @@ import (
 // mean the audience screen and the send path disagreeing about which endpoint
 // is authoritative, and neither carrier offers features in bulk anyway.
 func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsCapabilitiesRequestObject) (gen.CheckRcsCapabilitiesResponseObject, error) {
-	if _, ok := identityFrom(ctx); !ok {
+	identity, ok := identityFrom(ctx)
+	if !ok {
 		return gen.CheckRcsCapabilities401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
@@ -26,11 +30,16 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 		return gen.CheckRcsCapabilities400JSONResponse(
 			errorBody(codeValidation, "Provide at least one msisdn to check")), nil
 	}
-	if s.RCSCarrier == nil {
-		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
-			"This deployment has no RCS carrier configured, so handset reachability cannot be checked")), nil
+	// Required, and checked here rather than trusted to the binder. A
+	// non-pointer uuid decodes an omitted key as the zero id, so a request that
+	// never named an agent arrives looking like one that named uuid.Nil — and
+	// nothing in Go forces a handler to notice. Answering for no agent would be
+	// the shared-agent answer this field exists to retire.
+	if request.Body.RcsAgentId == uuid.Nil {
+		return gen.CheckRcsCapabilities400JSONResponse(errorBody(codeValidation,
+			"Name the agent to check reach for: rcsAgentId is required, because the "+
+				"same handset is reachable for one agent and not another.")), nil
 	}
-
 	// Normalise here rather than letting the carrier judge. Airtel refuses an
 	// entire list on its first malformed number, so one bad row in a
 	// ten-thousand-contact audience would take the whole check down with it.
@@ -58,20 +67,40 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 			"Both carriers cap a capability check at 10,000 numbers; split the list")), nil
 	}
 
-	report := gen.RcsCapabilityReport{
-		Vendor:  gen.RcsCapabilityReportVendor(s.RCSCarrier.Vendor()),
-		Results: make([]gen.RcsCapability, 0, len(valid)+len(rejected)),
+	// Before the carrier check, so the answer about the agent does not depend on
+	// whether this deployment has credentials. Another tenant's agent reads as
+	// one that does not exist: a distinct answer would confirm the id is real.
+	if _, err := store.GetRcsAgent(ctx, s.DB, identity, request.Body.RcsAgentId); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.CheckRcsCapabilities404JSONResponse(
+				errorBody(codeNotFound, "No such RCS agent.")), nil
+		}
+		return nil, err
+	}
+	if s.RCSCarrier == nil {
+		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
+			"This deployment has no RCS carrier configured, so handset reachability cannot be checked")), nil
+	}
+	// The carrier's own id for this agent, on the carrier this deployment checks
+	// through — under the same three conditions a send uses, from the same query,
+	// so "reachable" here and "sendable" at the gate cannot disagree.
+	carrier := connector.RCSIntegrations[s.RCSCarrier.Vendor()]
+	agentID, err := store.CarrierAgentID(ctx, s.DB, identity, request.Body.RcsAgentId, carrier)
+	if errors.Is(err, store.ErrNotFound) {
+		// Refused rather than answered with reachableCount 0. A zero reads as a
+		// fact about the handsets; the truth is a fact about the agent.
+		return gen.CheckRcsCapabilities422JSONResponse(errorBody(codeValidation,
+			"This agent has no approved launch on "+carrier+", so it reaches no one "+
+				"there. Reach is checked through "+carrier+" on this deployment.")), nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	// The deployment agent, not the caller's own — because the caller has no way
-	// to name one. Reachability is agent-specific: a handset with RCS enabled is
-	// unreachable for an agent that has not launched on its subscriber's
-	// carrier, so the same list gives different answers per agent. This request
-	// body declares only msisdns, so the honest answer here is about the shared
-	// agent and nothing else. Raised with the frontend — their own reach-check
-	// screen already sits on an agent's page, so the field is missing rather
-	// than unwanted.
-	agentID := s.RCSFallbackAgentID
+	report := gen.RcsCapabilityReport{
+		Vendor:  gen.RcsVendor(s.RCSCarrier.Vendor()),
+		Results: make([]gen.RcsCapability, 0, len(valid)+len(rejected)),
+	}
 
 	if len(valid) == 1 {
 		capability, err := s.RCSCarrier.Capability(ctx, agentID, valid[0])

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/rcs"
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -181,6 +182,15 @@ func (s *Server) CreateRcsAgent(ctx context.Context, request gen.CreateRcsAgentR
 			unknownUseCase(request.Body.UseCase)), nil
 	}
 	country := string(request.Body.Country)
+	// Before the entity check. Telling someone to get a business entity approved
+	// in a country where no agent can ever launch sends them through days of
+	// compliance review for nothing, and they learn why only at the end.
+	if problem, err := s.rcsUnavailableIn(ctx, country); err != nil || problem != "" {
+		if err != nil {
+			return nil, err
+		}
+		return gen.CreateRcsAgent422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
 	approved, err := store.HasApprovedRegistration(ctx, s.DB, identity, country)
 	if err != nil {
 		return nil, err
@@ -250,6 +260,25 @@ func (s *Server) UpdateRcsAgent(ctx context.Context, request gen.UpdateRcsAgentR
 	}
 
 	body := request.Body
+	// A null here is refused, not ignored. Neither can be cleared — an agent
+	// with no name shows nothing on a handset, and carriers review an agent by
+	// its use case — and silently dropping the null reports success for a change
+	// that did not happen: the caller believes the field is gone and the record
+	// still holds it. Merge Patch's "null clears" still applies to every field
+	// that CAN be cleared, below.
+	for _, uncleared := range []struct {
+		field    string
+		sentNull bool
+	}{
+		{"displayName", body.DisplayName == nil},
+		{"useCase", body.UseCase == nil},
+	} {
+		if field := uncleared.field; uncleared.sentNull && bodyMentions(ctx, field) {
+			return gen.UpdateRcsAgent422JSONResponse(errorBody(codeValidation,
+				field+" cannot be cleared. Send a new value, or leave the key out to keep "+
+					"the current one.")), nil
+		}
+	}
 	// The two carrier rules that refuse an agent at SUBMISSION, days later, in
 	// a queue the customer cannot see. Checked on the edit rather than only at
 	// submit so the refusal arrives while the field is still on the screen.
@@ -272,9 +301,8 @@ func (s *Server) UpdateRcsAgent(ctx context.Context, request gen.UpdateRcsAgentR
 		// difference comes from the middleware's record of which keys the
 		// request actually carried — see clearedFields.
 		//
-		// displayName and useCase are absent from this map on purpose. Neither
-		// is nullable in the table and an agent with no name is not an agent,
-		// so a null there is a caller mistake rather than an instruction.
+		// displayName and useCase are absent from this map on purpose: a null
+		// on either was refused above.
 		Cleared: clearedFields(ctx, map[string]bool{
 			"description":       body.Description == nil,
 			"logoAssetId":       body.LogoAssetId == nil,
@@ -369,6 +397,39 @@ func (s *Server) SubmitRcsAgentVerification(ctx context.Context,
 // Empty when the agent cannot be read: the transition below answers 404 for
 // that, and guessing here would turn a missing agent into a validation error
 // about a name nobody typed.
+// rcsUnavailableIn is the refusal for creating an agent in a country none of
+// whose carriers we can reach, naming where RCS is available instead. Empty
+// means the country is fine.
+//
+// "Integrated" means we hold an adapter, not that this deployment has signed
+// credentials for it — see connector.RCSIntegrations. Gating on credentials
+// would refuse every country on a deployment still waiting for its contract,
+// including India, and brand verification is days of work a customer should be
+// able to start before then.
+//
+// Derived from routes and the adapter list rather than written down as "IN",
+// so the day an adapter lands elsewhere that country opens with no change here.
+func (s *Server) rcsUnavailableIn(ctx context.Context, country string) (string, error) {
+	integrated := make([]string, 0, len(connector.RCSIntegrations))
+	for _, carrier := range connector.RCSIntegrations {
+		integrated = append(integrated, carrier)
+	}
+	available, err := store.RCSCountries(ctx, s.operatorPool(), integrated)
+	if err != nil {
+		return "", err
+	}
+	if slices.Contains(available, country) {
+		return "", nil
+	}
+	if len(available) == 0 {
+		return "RCS is not available in any country yet. A country opens when one " +
+			"of its carriers has an RCS integration.", nil
+	}
+	return "RCS is not available in " + country + " yet: none of its carriers has " +
+		"an RCS integration, so an agent created there could never launch. RCS " +
+		"agents can be created in " + strings.Join(available, ", ") + ".", nil
+}
+
 // unknownUseCase is the refusal for a use case no carrier recognises.
 //
 // It exists because the alternative is a 500. The use_case check constraint is

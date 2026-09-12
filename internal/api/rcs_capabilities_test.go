@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/saeedafri/sms-be/internal/connector"
 )
 
@@ -71,15 +73,17 @@ type capabilityReport struct {
 
 func TestASingleNumberCheckReturnsTheFeaturesTheHandsetSupports(t *testing.T) {
 	h := newHarness(t)
-	h.server.RCSCarrier = &stubCarrier{
+	carrier := &stubCarrier{
 		vendor:    "airtel",
 		reachable: map[string]bool{"+919820000001": true},
 		features:  []string{"RICHCARD_STANDALONE", "ACTION_DIAL"},
 	}
+	h.server.RCSCarrier = carrier
 	acct := h.newAccount("admin")
+	agent, carrierIDs := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token,
-		map[string]any{"msisdns": []string{"+91 98200 00001"}})
+		map[string]any{"rcsAgentId": agent.String(), "msisdns": []string{"+91 98200 00001"}})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", res.Code, res.Body)
 	}
@@ -88,6 +92,13 @@ func TestASingleNumberCheckReturnsTheFeaturesTheHandsetSupports(t *testing.T) {
 	res.decode(t, &report)
 	if report.Vendor != "airtel" {
 		t.Errorf("vendor = %q, want the carrier that answered", report.Vendor)
+	}
+	// The field is READ, not merely required: the carrier was asked about the
+	// id Airtel issued for THIS agent. A handler that validated rcsAgentId and
+	// then asked about anything else would pass every refusal test below.
+	if carrier.sawAgent != carrierIDs["AIRTEL"] {
+		t.Errorf("carrier asked about agent %q, want %q — the one named in the request",
+			carrier.sawAgent, carrierIDs["AIRTEL"])
 	}
 	if !report.FeaturesIncluded {
 		t.Error("featuresIncluded = false on a single-number check")
@@ -118,9 +129,10 @@ func TestAReachableHandsetWithNoRichFeaturesIsNotTheSameAsABulkAnswer(t *testing
 		features:  nil,
 	}
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token,
-		map[string]any{"msisdns": []string{"+914253136789"}})
+		map[string]any{"rcsAgentId": agent.String(), "msisdns": []string{"+914253136789"}})
 	var report capabilityReport
 	res.decode(t, &report)
 
@@ -145,9 +157,11 @@ func TestAMultiNumberCheckUsesTheBulkPathAndOmitsFeatures(t *testing.T) {
 	}
 	h.server.RCSCarrier = carrier
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token, map[string]any{
-		"msisdns": []string{"+919687895543", "+919686960876", "+919688757768"},
+		"rcsAgentId": agent.String(),
+		"msisdns":    []string{"+919687895543", "+919686960876", "+919688757768"},
 	})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", res.Code, res.Body)
@@ -182,9 +196,11 @@ func TestOneMalformedNumberDoesNotFailTheWholeList(t *testing.T) {
 	}
 	h.server.RCSCarrier = carrier
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token, map[string]any{
-		"msisdns": []string{"+919820000001", "not-a-number", "+919820000002"},
+		"rcsAgentId": agent.String(),
+		"msisdns":    []string{"+919820000001", "not-a-number", "+919820000002"},
 	})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", res.Code, res.Body)
@@ -223,9 +239,10 @@ func TestANumberThatIsEntirelyMalformedIsRejectedRatherThanCalledUnreachable(t *
 	carrier := &stubCarrier{vendor: "airtel"}
 	h.server.RCSCarrier = carrier
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token,
-		map[string]any{"msisdns": []string{"98200"}})
+		map[string]any{"rcsAgentId": agent.String(), "msisdns": []string{"98200"}})
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (%s)", res.Code, res.Body)
 	}
@@ -237,9 +254,10 @@ func TestANumberThatIsEntirelyMalformedIsRejectedRatherThanCalledUnreachable(t *
 func TestADeploymentWithNoRCSCarrierSaysSoInsteadOfReportingEveryoneUnreachable(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token,
-		map[string]any{"msisdns": []string{"+919820000001"}})
+		map[string]any{"rcsAgentId": agent.String(), "msisdns": []string{"+919820000001"}})
 	if res.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (%s)", res.Code, res.Body)
 	}
@@ -255,9 +273,10 @@ func TestACarrierFailureIsABadGatewayWithoutLeakingTheAgentIdentity(t *testing.T
 			".googleapis.com/v1/phones/+91/capabilities?agentId=relay_prod_agent_7f3a"),
 	}
 	acct := h.newAccount("admin")
+	agent, _ := h.launchedAgent(acct)
 
 	res := h.do(http.MethodPost, "/v1/rcs/capabilities", acct.Token,
-		map[string]any{"msisdns": []string{"+919820000001"}})
+		map[string]any{"rcsAgentId": agent.String(), "msisdns": []string{"+919820000001"}})
 	if res.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502 (%s)", res.Code, res.Body)
 	}
@@ -289,6 +308,21 @@ func TestAnEmptyListIsRejected(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (%s)", res.Code, res.Body)
 	}
+}
+
+// launchedAgent is an agent this tenant owns, approved on both carriers, and the
+// id each carrier issued for it — so a test can check the carrier was asked
+// about THIS agent rather than about something non-empty.
+func (h *harness) launchedAgent(acct account) (uuid.UUID, map[string]string) {
+	h.t.Helper()
+	h.approveRegistration(acct, "IN")
+	agentID := uuid.MustParse(h.createAgent(acct, "Reach "+uuid.NewString()[:6]).Id)
+	suffix := uuid.NewString()[:8]
+	ids := map[string]string{"AIRTEL": "airtel-reach-" + suffix, "VI": "vi-reach-" + suffix}
+	for carrier, id := range ids {
+		h.launchAgentOnCarrier(acct, agentID, carrier, id)
+	}
+	return agentID, ids
 }
 
 type errCarrier string

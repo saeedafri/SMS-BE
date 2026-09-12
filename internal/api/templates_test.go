@@ -177,7 +177,15 @@ func TestTemplateEndpointsRespectRole(t *testing.T) {
 func TestTemplateWithoutABodyStillReportsEmptyVariables(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
-	sender := createSender(t, h, acct.Token, "NOBODY", "RCS", "IN")
+	created := h.do(http.MethodPost, "/v1/sender-ids", acct.Token, map[string]string{
+		"header": "NOBODY", "channel": "RCS", "country": "IN",
+		"rcsAgentId": h.verifiedAgent(acct).String(),
+	})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create sender: status = %d; body = %s", created.Code, created.Body)
+	}
+	var sender gen.SenderId
+	created.decode(t, &sender)
 
 	res := h.do(http.MethodPost, "/v1/templates", acct.Token, map[string]any{
 		"name": "No body", "senderId": sender.Id.String(),

@@ -93,7 +93,6 @@ type Config struct {
 
 	RCSAirtelBaseURL   string
 	RCSAirtelAuthToken string
-	RCSAirtelAgentID   string
 	// The account the agent hangs off. Capability discovery does not want
 	// these; template registration and send both refuse without them.
 	RCSAirtelCustomerID   string
@@ -103,7 +102,6 @@ type Config struct {
 	RCSViTokenURL     string
 	RCSViClientID     string
 	RCSViClientSecret string
-	RCSViBotID        string
 
 	// CarrierWebhookToken authenticates the RCS delivery and template
 	// callbacks. Empty leaves those routes unmounted, which is right for any
@@ -164,14 +162,12 @@ func Load() (Config, error) {
 	cfg.MediaBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_BASE_URL")), "/")
 	cfg.RCSAirtelBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("RCS_AIRTEL_BASE_URL")), "/")
 	cfg.RCSAirtelAuthToken = strings.TrimSpace(os.Getenv("RCS_AIRTEL_AUTH_TOKEN"))
-	cfg.RCSAirtelAgentID = strings.TrimSpace(os.Getenv("RCS_AIRTEL_AGENT_ID"))
 	cfg.RCSAirtelCustomerID = strings.TrimSpace(os.Getenv("RCS_AIRTEL_CUSTOMER_ID"))
 	cfg.RCSAirtelSubAccountID = strings.TrimSpace(os.Getenv("RCS_AIRTEL_SUBACCOUNT_ID"))
 	cfg.RCSViBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("RCS_VI_BASE_URL")), "/")
 	cfg.RCSViTokenURL = strings.TrimSpace(os.Getenv("RCS_VI_TOKEN_URL"))
 	cfg.RCSViClientID = strings.TrimSpace(os.Getenv("RCS_VI_CLIENT_ID"))
 	cfg.RCSViClientSecret = strings.TrimSpace(os.Getenv("RCS_VI_CLIENT_SECRET"))
-	cfg.RCSViBotID = strings.TrimSpace(os.Getenv("RCS_VI_BOT_ID"))
 	cfg.CarrierWebhookToken = strings.TrimSpace(os.Getenv("RCS_WEBHOOK_TOKEN"))
 	cfg.CarrierWebhookIPAllowlist = strings.TrimSpace(os.Getenv("RCS_WEBHOOK_IP_ALLOWLIST"))
 	if err := cfg.validateRCS(); err != nil {
@@ -230,7 +226,7 @@ func envOr(name, fallback string) string {
 func (c Config) RCSCarrierName() string {
 	airtel := c.airtelConfigured()
 	vi := c.RCSViBaseURL != "" || c.RCSViTokenURL != "" || c.RCSViClientID != "" ||
-		c.RCSViClientSecret != "" || c.RCSViBotID != ""
+		c.RCSViClientSecret != ""
 
 	switch {
 	case c.RCSVendor != "":
@@ -247,7 +243,7 @@ func (c Config) RCSCarrierName() string {
 func (c Config) validateRCS() error {
 	airtelPresent := c.airtelConfigured()
 	viPresent := c.RCSViBaseURL != "" || c.RCSViTokenURL != "" || c.RCSViClientID != "" ||
-		c.RCSViClientSecret != "" || c.RCSViBotID != ""
+		c.RCSViClientSecret != ""
 
 	switch c.RCSVendor {
 	case "", "airtel", "vi":
@@ -264,13 +260,11 @@ func (c Config) validateRCS() error {
 	}
 
 	if c.RCSCarrierName() == "airtel" || (c.RCSVendor == "" && airtelPresent) {
-		// RCS_AIRTEL_AGENT_ID is deliberately NOT required.
-		//
-		// It used to be a connector credential; it is now the deployment-wide
-		// FALLBACK agent, used only where a caller has no agent of its own to
-		// name. Requiring it would refuse to start exactly the deployment this
-		// work is aiming at — one where every tenant owns its agent and no
-		// shared identity is left.
+		// No agent id among these, and none is read at all. The agent belongs to
+		// a customer and travels with each call; RCS_AIRTEL_AGENT_ID was the
+		// deployment-wide agent every tenant used to send under, and it was
+		// removed rather than left optional so that a value lingering in an env
+		// file cannot quietly become somebody's brand again.
 		missing := missingFields(map[string]string{
 			"RCS_AIRTEL_BASE_URL":      c.RCSAirtelBaseURL,
 			"RCS_AIRTEL_AUTH_TOKEN":    c.RCSAirtelAuthToken,
@@ -283,7 +277,7 @@ func (c Config) validateRCS() error {
 		}
 	}
 	if c.RCSCarrierName() == "vi" || (c.RCSVendor == "" && viPresent) {
-		// RCS_VI_BOT_ID is not required, for the reason given above Airtel's.
+		// No bot id either, for the reason given above Airtel's.
 		missing := missingFields(map[string]string{
 			"RCS_VI_BASE_URL":      c.RCSViBaseURL,
 			"RCS_VI_TOKEN_URL":     c.RCSViTokenURL,
@@ -315,6 +309,6 @@ func missingFields(fields map[string]string) []string {
 // a half-configured carrier detectable at boot rather than at first send.
 func (c Config) airtelConfigured() bool {
 	return c.RCSAirtelBaseURL != "" || c.RCSAirtelAuthToken != "" ||
-		c.RCSAirtelAgentID != "" || c.RCSAirtelCustomerID != "" ||
+		c.RCSAirtelCustomerID != "" ||
 		c.RCSAirtelSubAccountID != ""
 }

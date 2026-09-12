@@ -286,22 +286,55 @@ func UpdateRcsAgent(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	agentID uuid.UUID, update RcsAgentUpdate) (RcsAgent, error) {
 
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// updated_at moves only when a stored value does. "Last edited" is what a
+		// reader uses to decide whether someone else has touched a record, and a
+		// form that re-saves every field unchanged is the ordinary case, not an
+		// edge: stamping it would report an edit that never happened. The next
+		// values are computed once in the CTE so the comparison and the write
+		// cannot drift apart; in the outer UPDATE, the bare column names are the
+		// row as it was.
 		tag, err := tx.Exec(ctx, `
-			UPDATE rcs_agents SET
-			    display_name         = coalesce($2,  display_name),
-			    use_case             = coalesce($3,  use_case),
-			    description          = CASE WHEN $14 THEN NULL ELSE coalesce($4,  description)          END,
-			    logo_asset_id        = CASE WHEN $15 THEN NULL ELSE coalesce($5,  logo_asset_id)        END,
-			    hero_asset_id        = CASE WHEN $16 THEN NULL ELSE coalesce($6,  hero_asset_id)        END,
-			    primary_color        = CASE WHEN $17 THEN NULL ELSE coalesce($7,  primary_color)        END,
-			    phone_number         = CASE WHEN $18 THEN NULL ELSE coalesce($8,  phone_number)         END,
-			    email                = CASE WHEN $19 THEN NULL ELSE coalesce($9,  email)                END,
-			    website              = CASE WHEN $20 THEN NULL ELSE coalesce($10, website)              END,
-			    privacy_policy_url   = CASE WHEN $21 THEN NULL ELSE coalesce($11, privacy_policy_url)   END,
-			    terms_of_service_url = CASE WHEN $22 THEN NULL ELSE coalesce($12, terms_of_service_url) END,
-			    registration_id      = CASE WHEN $23 THEN NULL ELSE coalesce($13, registration_id)      END,
-			    updated_at           = now()
-			WHERE id = $1`,
+			WITH next AS (
+			    SELECT id,
+			        coalesce($2, display_name) AS display_name,
+			        coalesce($3, use_case)     AS use_case,
+			        CASE WHEN $14 THEN NULL ELSE coalesce($4,  description)          END AS description,
+			        CASE WHEN $15 THEN NULL ELSE coalesce($5,  logo_asset_id)        END AS logo_asset_id,
+			        CASE WHEN $16 THEN NULL ELSE coalesce($6,  hero_asset_id)        END AS hero_asset_id,
+			        CASE WHEN $17 THEN NULL ELSE coalesce($7,  primary_color)        END AS primary_color,
+			        CASE WHEN $18 THEN NULL ELSE coalesce($8,  phone_number)         END AS phone_number,
+			        CASE WHEN $19 THEN NULL ELSE coalesce($9,  email)                END AS email,
+			        CASE WHEN $20 THEN NULL ELSE coalesce($10, website)              END AS website,
+			        CASE WHEN $21 THEN NULL ELSE coalesce($11, privacy_policy_url)   END AS privacy_policy_url,
+			        CASE WHEN $22 THEN NULL ELSE coalesce($12, terms_of_service_url) END AS terms_of_service_url,
+			        CASE WHEN $23 THEN NULL ELSE coalesce($13, registration_id)      END AS registration_id
+			      FROM rcs_agents WHERE id = $1
+			)
+			UPDATE rcs_agents a SET
+			    display_name         = next.display_name,
+			    use_case             = next.use_case,
+			    description          = next.description,
+			    logo_asset_id        = next.logo_asset_id,
+			    hero_asset_id        = next.hero_asset_id,
+			    primary_color        = next.primary_color,
+			    phone_number         = next.phone_number,
+			    email                = next.email,
+			    website              = next.website,
+			    privacy_policy_url   = next.privacy_policy_url,
+			    terms_of_service_url = next.terms_of_service_url,
+			    registration_id      = next.registration_id,
+			    updated_at = CASE WHEN
+			        (a.display_name, a.use_case, a.description, a.logo_asset_id,
+			         a.hero_asset_id, a.primary_color, a.phone_number, a.email, a.website,
+			         a.privacy_policy_url, a.terms_of_service_url, a.registration_id)
+			        IS DISTINCT FROM
+			        (next.display_name, next.use_case, next.description, next.logo_asset_id,
+			         next.hero_asset_id, next.primary_color, next.phone_number, next.email,
+			         next.website, next.privacy_policy_url, next.terms_of_service_url,
+			         next.registration_id)
+			        THEN now() ELSE a.updated_at END
+			  FROM next
+			 WHERE a.id = next.id`,
 			agentID, update.DisplayName, update.UseCase, update.Description,
 			update.LogoAssetID, update.HeroAssetID, update.PrimaryColor,
 			update.PhoneNumber, update.Email, update.Website,
@@ -509,6 +542,32 @@ func CarriersForCountry(ctx context.Context, pool *pgxpool.Pool, country string)
 			return nil, err
 		}
 		out = append(out, carrier)
+	}
+	return out, rows.Err()
+}
+
+// RCSCountries lists the countries with at least one RCS route over a carrier
+// in integrated — the countries where an agent could ever launch.
+//
+// Read from routes for the same reason CarriersForCountry is, and with the same
+// filter, so "which carriers does this agent list" and "may this agent exist
+// here" cannot disagree about a corridor.
+func RCSCountries(ctx context.Context, pool *pgxpool.Pool, integrated []string) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT country FROM routes
+		WHERE channel = 'RCS' AND carrier = ANY($1)
+		ORDER BY country`, integrated)
+	if err != nil {
+		return nil, fmt.Errorf("store: rcs countries: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var country string
+		if err := rows.Scan(&country); err != nil {
+			return nil, err
+		}
+		out = append(out, country)
 	}
 	return out, rows.Err()
 }

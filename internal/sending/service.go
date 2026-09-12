@@ -538,8 +538,20 @@ func (s *Service) carrierTemplateStatusFor(channel string, template store.Templa
 	if template.ID == uuid.Nil {
 		return ""
 	}
-	if _, dedicated := s.Carriers.Dedicated(channel); !dedicated {
+	carrier, dedicated := s.Carriers.Dedicated(channel)
+	if !dedicated {
 		return ""
+	}
+	// A registration with one carrier is no registration with another. The
+	// vendor used to be guessed from this same gateway, so the two always
+	// matched and this check had nothing to catch. It is stated by the customer
+	// now, and a code pasted from Vi's portal on a deployment that sends through
+	// Airtel would quote Vi's template id to Airtel on every message — refused
+	// at the gateway as "Template not found", after the hold, with nothing
+	// connecting the two events. Reported as not submitted, because as far as
+	// the carrier carrying this message is concerned, that is exactly true.
+	if template.CarrierVendor == nil || *template.CarrierVendor != carrier.Name() {
+		return "not_submitted"
 	}
 	return template.CarrierStatus
 }

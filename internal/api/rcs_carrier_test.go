@@ -113,6 +113,18 @@ func (h *harness) rcsTemplate(tenant account, name string, variables []string, c
 		h.t.Fatalf("seed rcs sender: %v", err)
 	}
 
+	// Every RCS sender needs an agent: a send resolves its identity from the
+	// sender, and a carrier registration is scoped to that same agent, so a
+	// sender without one can neither register a template nor send. Launched on
+	// both carriers because the helper does not know which vendor the stub in
+	// a particular test is pretending to be.
+	h.approveRegistration(tenant, "IN")
+	agentID := uuid.MustParse(h.createAgent(tenant, name+" agent").Id)
+	suffix := uuid.NewString()[:8]
+	h.launchAgentOnCarrier(tenant, agentID, "AIRTEL", "airtel-agent-"+suffix)
+	h.launchAgentOnCarrier(tenant, agentID, "VI", "vi-agent-"+suffix)
+	h.attachAgentToSender(senderID, agentID)
+
 	content, err := json.Marshal(map[string]any{
 		"kind":        "text",
 		"text":        "Hi {{first_name}}, your order {{order_id}} shipped.",
@@ -163,7 +175,8 @@ func TestSubmittingAnRCSTemplateToTheCarrierLeavesItPending(t *testing.T) {
 		[]string{"first_name", "order_id"}, "UTILITY")
 
 	res := h.do(http.MethodPost,
-		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token, nil)
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", res.Code, res.Body)
 	}
@@ -210,7 +223,8 @@ func TestACarrierWithNoTemplateAPISendsTheCustomerToItsPortal(t *testing.T) {
 	templateID := h.rcsTemplate(tenant, "Vi promo", []string{"first_name"}, "MARKETING")
 
 	res := h.do(http.MethodPost,
-		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token, nil)
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor})
 	if res.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body = %s", res.Code, res.Body)
 	}
@@ -235,7 +249,7 @@ func TestAttachingACodeFromTheCarriersPortalUnblocksSending(t *testing.T) {
 
 	res := h.do(http.MethodPost,
 		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
-		map[string]any{"carrierTemplateId": "vi_template_code_9"})
+		map[string]any{"vendor": "vi", "carrierTemplateId": "vi_template_code_9"})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", res.Code, res.Body)
 	}
@@ -265,7 +279,7 @@ func TestTheSameCarrierCodeCannotBeAttachedTwice(t *testing.T) {
 	firstTemplate := h.rcsTemplate(first, "Shared one", []string{"a"}, "MARKETING")
 	secondTemplate := h.rcsTemplate(second, "Shared two", []string{"a"}, "MARKETING")
 
-	body := map[string]any{"carrierTemplateId": "collision"}
+	body := map[string]any{"vendor": "vi", "carrierTemplateId": "collision"}
 	if res := h.do(http.MethodPost,
 		"/v1/templates/"+firstTemplate.String()+"/carrier-registration", first.Token, body); res.Code != http.StatusOK {
 		t.Fatalf("first attach: status = %d; body = %s", res.Code, res.Body)
@@ -290,7 +304,8 @@ func TestOnlyApprovedRCSTextTemplatesCanBeRegistered(t *testing.T) {
 	var smsTemplate gen.Template
 	smsRes.decode(t, &smsTemplate)
 	res := h.do(http.MethodPost,
-		"/v1/templates/"+smsTemplate.Id.String()+"/carrier-registration", tenant.Token, nil)
+		"/v1/templates/"+smsTemplate.Id.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": "airtel"})
 	if res.Code != http.StatusUnprocessableEntity {
 		t.Errorf("an SMS template: status = %d, want 422", res.Code)
 	}
@@ -303,7 +318,8 @@ func TestOnlyApprovedRCSTextTemplatesCanBeRegistered(t *testing.T) {
 		t.Fatalf("demote template: %v", err)
 	}
 	res = h.do(http.MethodPost,
-		"/v1/templates/"+pending.String()+"/carrier-registration", tenant.Token, nil)
+		"/v1/templates/"+pending.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": "airtel"})
 	if res.Code != http.StatusUnprocessableEntity {
 		t.Errorf("an unapproved template: status = %d, want 422", res.Code)
 	}
@@ -312,7 +328,8 @@ func TestOnlyApprovedRCSTextTemplatesCanBeRegistered(t *testing.T) {
 	// transactional agent is auto-rejected, so there is no safe default.
 	uncategorised := h.rcsTemplate(tenant, "No category", []string{"a"}, "")
 	res = h.do(http.MethodPost,
-		"/v1/templates/"+uncategorised.String()+"/carrier-registration", tenant.Token, nil)
+		"/v1/templates/"+uncategorised.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": "airtel"})
 	if res.Code != http.StatusUnprocessableEntity {
 		t.Errorf("an uncategorised template: status = %d, want 422; body = %s", res.Code, res.Body)
 	}
@@ -328,7 +345,8 @@ func TestATemplateCarriesItsCarrierRegistrationOnRead(t *testing.T) {
 	templateID := h.rcsTemplate(tenant, "Readback", []string{"first_name"}, "UTILITY")
 
 	if res := h.do(http.MethodPost,
-		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token, nil); res.Code != http.StatusOK {
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor}); res.Code != http.StatusOK {
 		t.Fatalf("register: status = %d; body = %s", res.Code, res.Body)
 	}
 
@@ -418,7 +436,8 @@ func TestATemplateApprovalWebhookUnblocksTheTemplate(t *testing.T) {
 	templateID := h.rcsTemplate(tenant, "Webhook approve", []string{"first_name"}, "UTILITY")
 
 	if res := h.do(http.MethodPost,
-		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token, nil); res.Code != http.StatusOK {
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor}); res.Code != http.StatusOK {
 		t.Fatalf("register: %s", res.Body)
 	}
 
@@ -448,7 +467,8 @@ func TestATemplateRejectionWebhookKeepsTheCarriersReason(t *testing.T) {
 	templateID := h.rcsTemplate(tenant, "Webhook reject", []string{"first_name"}, "MARKETING")
 
 	if res := h.do(http.MethodPost,
-		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token, nil); res.Code != http.StatusOK {
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor}); res.Code != http.StatusOK {
 		t.Fatalf("register: %s", res.Body)
 	}
 

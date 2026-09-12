@@ -55,7 +55,6 @@ func setAirtelEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("RCS_AIRTEL_BASE_URL", "https://iqconversation.airtel.in/gateway/airtel-xchange")
 	t.Setenv("RCS_AIRTEL_AUTH_TOKEN", "dGVzdDp0ZXN0")
-	t.Setenv("RCS_AIRTEL_AGENT_ID", "relay_agent")
 	// Airtel's account identifiers. Capability discovery does not need them,
 	// but template registration and send both refuse without them, so a
 	// deployment missing them can check reachability and never send.
@@ -69,7 +68,6 @@ func setViEnv(t *testing.T) {
 	t.Setenv("RCS_VI_TOKEN_URL", "https://auth.virbm.in/auth/oauth/token")
 	t.Setenv("RCS_VI_CLIENT_ID", "cid")
 	t.Setenv("RCS_VI_CLIENT_SECRET", "secret")
-	t.Setenv("RCS_VI_BOT_ID", "OsQ0GwNvUdLTV9Bd")
 }
 
 func TestNoRCSCredentialsIsAValidDeployment(t *testing.T) {
@@ -110,26 +108,6 @@ func TestHalfConfiguredCarrierRefusesToStart(t *testing.T) {
 	// reading three env files instead of one line.
 	if !contains(err.Error(), "RCS_AIRTEL_CUSTOMER_ID") {
 		t.Errorf("error = %q, want it to name the missing field", err)
-	}
-}
-
-// The agent id is NOT a credential any more and must not be required.
-//
-// It was one while a single RBM agent served the whole deployment. It is now
-// the fallback used only where a caller has no agent of its own to name, and
-// requiring it would refuse to start precisely the deployment this work exists
-// to reach: one where every tenant owns its agent and nothing shared is left.
-func TestACarrierStartsWithoutADeploymentWideAgent(t *testing.T) {
-	setValidEnv(t)
-	setAirtelEnv(t)
-	t.Setenv("RCS_AIRTEL_AGENT_ID", "")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load refused a carrier with no shared agent: %v", err)
-	}
-	if cfg.RCSCarrierName() != "airtel" {
-		t.Errorf("RCSCarrierName = %q, want airtel", cfg.RCSCarrierName())
 	}
 }
 

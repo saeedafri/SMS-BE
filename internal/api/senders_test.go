@@ -64,6 +64,7 @@ func TestCreateSenderRejectsDuplicatesButAllowsOtherChannels(t *testing.T) {
 	// The same header on a different channel is a different registration.
 	other := h.do(http.MethodPost, "/v1/sender-ids", acct.Token, map[string]string{
 		"header": "DUPHDR", "channel": "RCS", "country": "IN",
+		"rcsAgentId": h.verifiedAgent(acct).String(),
 	})
 	if other.Code != http.StatusCreated {
 		t.Fatalf("same header on another channel: status = %d, want 201; body = %s",
