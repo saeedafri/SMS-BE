@@ -74,7 +74,6 @@ func (h *harness) agentForSend(acct account, name, carrierAgentID string) (
 func TestASendResolvesTheSendersOwnAgent(t *testing.T) {
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
-	h.server.RCSFallbackAgentID = "relay_shared_agent"
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)
 	senderID, templateID, _ := h.agentForSend(tenant, "Acme Orders", "acme_airtel_agent")
@@ -134,7 +133,6 @@ func TestATenantWithAnAgentNeverFallsBackToTheSharedOne(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			carrier := &stubRegistrar{vendor: "airtel"}
 			h := newRCSSendHarness(t, carrier)
-			h.server.RCSFallbackAgentID = "relay_shared_agent"
 			tenant := h.newAccount("owner")
 			h.fundWallet(tenant)
 
@@ -340,6 +338,15 @@ func TestASenderCannotTakeAnAgentItIsNotEntitledTo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// verifiedAgent is an agent this tenant owns that a sender may name.
+func (h *harness) verifiedAgent(acct account) uuid.UUID {
+	h.t.Helper()
+	h.approveRegistration(acct, "IN")
+	agentID := uuid.MustParse(h.createAgent(acct, "Agent "+uuid.NewString()[:6]).Id)
+	approveAgentVerification(h, agentID)
+	return agentID
 }
 
 // approveAgentVerification moves an agent to the state a sender may name it

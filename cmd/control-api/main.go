@@ -188,10 +188,10 @@ func run() error {
 
 	// The agent identity is deliberately absent from both literals. It belongs
 	// to a customer now, travels with the call, and a connector holding one
-	// would make every tenant's handsets show the same brand — the arrangement
-	// rcsFallbackAgentID exists only to retire.
+	// would make every tenant's handsets show the same brand. There is no
+	// deployment-wide agent to fall back to, anywhere: an RCS_AIRTEL_AGENT_ID or
+	// RCS_VI_BOT_ID left in an env file is not read.
 	var rcsCarrier connector.RCSCapabilityChecker
-	rcsFallbackAgentID := ""
 	switch cfg.RCSCarrierName() {
 	case "airtel":
 		rcsCarrier = &connector.AirtelRCS{
@@ -200,7 +200,6 @@ func run() error {
 			CustomerID:   cfg.RCSAirtelCustomerID,
 			SubAccountID: cfg.RCSAirtelSubAccountID,
 		}
-		rcsFallbackAgentID = cfg.RCSAirtelAgentID
 	case "vi":
 		rcsCarrier = &connector.ViRCS{
 			BaseURL:      cfg.RCSViBaseURL,
@@ -208,7 +207,6 @@ func run() error {
 			ClientID:     cfg.RCSViClientID,
 			ClientSecret: cfg.RCSViClientSecret,
 		}
-		rcsFallbackAgentID = cfg.RCSViBotID
 	}
 	// The same carrier serves capability discovery, template registration and
 	// sending. Registering it per channel is what keeps an SMS from being handed
@@ -271,7 +269,6 @@ func run() error {
 		OperatorAllowlist: operatorAllowlist,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
 		RCSCarrier:              rcsCarrier,
-		RCSFallbackAgentID:      rcsFallbackAgentID,
 		Carriers:                carriers,
 		CarrierWebhookToken:     cfg.CarrierWebhookToken,
 		CarrierWebhookAllowlist: carrierWebhookAllowlist,

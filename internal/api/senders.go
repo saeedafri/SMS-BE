@@ -337,7 +337,14 @@ func senderIdentityProblem(regime compliance.Regime, channel, header string,
 // rcsAgentProblem validates the agent a sender will send under, and returns
 // the customer-facing reason it cannot.
 //
-// Two rules, both from the contract:
+// Three rules, all from the contract:
+//
+//   - required on RCS. There is no deployment-wide agent to fall back to, a
+//     send resolves its identity from the sender, and a carrier registration
+//     is scoped to that same agent — so an RCS sender with none can register
+//     no template with any carrier and every template against it can never
+//     send. Refusing it here is the difference between a 422 while the form is
+//     on screen and a dead sender nothing ever explains.
 //
 //   - accepted only on RCS. No other channel reaches a handset through an
 //     agent, and the sender_ids_agent_is_rcs constraint would refuse the write
@@ -351,6 +358,11 @@ func (s *Server) rcsAgentProblem(ctx context.Context, identity store.Identity,
 	channel string, agentID *openapi_types.UUID) string {
 
 	if agentID == nil {
+		if channel == "RCS" {
+			return "An RCS sender needs an RCS agent: the agent is the brand the " +
+				"handset shows, and without one no template can be registered with " +
+				"a carrier or sent. Create and verify an agent, then name it here."
+		}
 		return ""
 	}
 	if channel != "RCS" {

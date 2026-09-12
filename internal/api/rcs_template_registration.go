@@ -88,6 +88,14 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 		return gen.RegisterTemplateWithCarrier403JSONResponse(
 			errorBody(codeForbidden, "Your role doesn't include template management.")), nil
 	}
+	// Required, and checked by hand. The field is a non-pointer string, so a
+	// body that omits it decodes to "" and reaches here looking like a request
+	// that named nothing — which is exactly the guess this field retires.
+	if request.Body == nil || !request.Body.Vendor.Valid() {
+		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeValidation,
+			"Name the carrier this registration belongs to: vendor must be airtel or vi.")), nil
+	}
+	vendor := string(request.Body.Vendor)
 
 	template, err := store.GetTemplate(ctx, s.DB, identity, request.Id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -109,11 +117,20 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 			"This template is not approved in Relay yet. The carrier's review comes after ours.")), nil
 	}
 
+	carrierAgentID, problem, err := s.registrationAgent(ctx, identity, template, vendor)
+	if err != nil {
+		return nil, err
+	}
+	if problem != "" {
+		return gen.RegisterTemplateWithCarrier422JSONResponse(
+			errorBody(codeValidation, problem)), nil
+	}
+
 	// A code from the carrier's portal. This is the ONLY route for Vi, which
 	// has no template API at all.
 	if request.Body != nil && request.Body.CarrierTemplateId != nil &&
 		strings.TrimSpace(*request.Body.CarrierTemplateId) != "" {
-		return s.attachCarrierTemplate(ctx, identity, template,
+		return s.attachCarrierTemplate(ctx, identity, template, vendor,
 			strings.TrimSpace(*request.Body.CarrierTemplateId))
 	}
 
@@ -127,6 +144,14 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 	if !configured || registrar == nil {
 		return gen.RegisterTemplateWithCarrier503JSONResponse(errorBody(codeValidation,
 			"This deployment has no RCS carrier configured.")), nil
+	}
+	// The named carrier, not whichever one is configured. Submitting to the
+	// wrong one would come back approved under a template id the named carrier
+	// has never seen — the "Template not found" this whole change removes.
+	if registrar.Vendor() != vendor {
+		return gen.RegisterTemplateWithCarrier503JSONResponse(errorBody(codeValidation,
+			"This deployment has no "+vendor+" integration configured, so it cannot submit "+
+				"a template to "+vendor+". Attach a template code from "+vendor+"'s portal instead.")), nil
 	}
 
 	text, isText := rcsTemplateText(template)
@@ -142,12 +167,7 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 				"match the one your RCS agent was approved under.")), nil
 	}
 
-	// The deployment agent, for the same reason as the capability check: a
-	// carrier scopes a template to one agent, this request names none, and a
-	// tenant may hold several. Guessing would register the template under an
-	// agent the customer did not choose and the send would fail later with
-	// "Template not found" — the exact failure their own §6 just described.
-	registration, err := registrar.RegisterTemplate(ctx, s.RCSFallbackAgentID, connector.RCSTemplateSpec{
+	registration, err := registrar.RegisterTemplate(ctx, carrierAgentID, connector.RCSTemplateSpec{
 		Name:        template.Name,
 		UseCase:     useCase,
 		Text:        text,
@@ -212,17 +232,22 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 // reason, which is recoverable — whereas leaving it pending forever would block
 // every Vi tenant from sending at all.
 func (s *Server) attachCarrierTemplate(ctx context.Context, identity store.Identity,
-	template store.Template, carrierTemplateID string) (gen.RegisterTemplateWithCarrierResponseObject, error) {
+	template store.Template, vendor, carrierTemplateID string) (gen.RegisterTemplateWithCarrierResponseObject, error) {
 
-	vendor := ""
-	if s.RCSCarrier != nil {
-		vendor = s.RCSCarrier.Vendor()
-	}
-	if vendor == "" {
-		return gen.RegisterTemplateWithCarrier503JSONResponse(errorBody(codeValidation,
-			"This deployment has no RCS carrier configured, so there is nothing to attach this code to.")), nil
-	}
-
+	// The vendor is the caller's statement of which portal the code came from,
+	// and it replaces a guess from the deployment's own carrier that labelled a
+	// code pasted from the OTHER carrier's portal with ours.
+	//
+	// It is never null here, and that matters more than it looks. The column is
+	// half of templates_carrier_identity, UNIQUE (carrier_vendor,
+	// carrier_template_id), and Postgres treats NULLs as distinct — so a null
+	// vendor would let two tenants hold the same code and each receive the
+	// other's approval webhooks. The guess was wrong but it was holding that
+	// index shut; the required field now does the same job honestly.
+	//
+	// No carrier needs to be configured to record one. The code already exists
+	// at the carrier; nothing is sent until a send, and the send checks that
+	// this vendor is the carrier the message actually goes through.
 	saved, err := store.SaveCarrierTemplateRegistration(ctx, s.DB, identity, template.ID,
 		vendor, carrierTemplateID, connector.RCSTemplateApproved, "")
 	if errors.Is(err, store.ErrConflict) {
@@ -235,6 +260,44 @@ func (s *Server) attachCarrierTemplate(ctx context.Context, identity store.Ident
 	return gen.RegisterTemplateWithCarrier200JSONResponse(carrierRegistrationBody(saved)), nil
 }
 
+// registrationAgent is the carrier's own id for the agent a template must be
+// registered under, or the customer-facing reason there is none.
+//
+// Derived, never chosen. A registration is not free to name any of the tenant's
+// agents: a send resolves its agent from the sender, and the gate refuses a
+// template that belongs to a different sender. So the only agent a registration
+// can usefully name is the agent of the template's OWN sender — any other
+// produces a registration no send can ever use, and it arrives hours later as
+// "Template not found". There is nothing to pick between, which is why the
+// request carries no agent at all.
+//
+// The launch is read under the same conditions a send uses (store.CarrierAgentID),
+// so a template cannot be registered under an agent that could not send it.
+func (s *Server) registrationAgent(ctx context.Context, identity store.Identity,
+	template store.Template, vendor string) (string, string, error) {
+
+	sender, err := store.GetSenderID(ctx, s.DB, identity, template.SenderID)
+	if err != nil {
+		return "", "", err
+	}
+	if sender.RcsAgentID == nil {
+		return "", "This template's sender has no RCS agent. A carrier registration " +
+			"belongs to one agent, and the agent comes from the sender, so there is " +
+			"nothing to register it under.", nil
+	}
+	carrier := connector.RCSIntegrations[vendor]
+	carrierAgentID, err := store.CarrierAgentID(ctx, s.DB, identity, *sender.RcsAgentID, carrier)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", "The agent behind this template's sender has no approved launch on " +
+			carrier + ", so a template registered there could never send. Launch the " +
+			"agent on " + carrier + " first.", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return carrierAgentID, "", nil
+}
+
 func carrierRegistrationBody(t store.Template) gen.CarrierTemplateRegistration {
 	body := gen.CarrierTemplateRegistration{
 		CarrierTemplateId: t.CarrierTemplateID,
@@ -244,7 +307,7 @@ func carrierRegistrationBody(t store.Template) gen.CarrierTemplateRegistration {
 		Status:            gen.CarrierTemplateRegistrationStatus(t.CarrierStatus),
 	}
 	if t.CarrierVendor != nil {
-		vendor := gen.CarrierTemplateRegistrationVendor(*t.CarrierVendor)
+		vendor := gen.RcsVendor(*t.CarrierVendor)
 		body.Vendor = &vendor
 	}
 	return body

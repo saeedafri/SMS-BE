@@ -113,15 +113,6 @@ type Server struct {
 	// identical to a country with no RCS and quietly disable the channel.
 	RCSCarrier connector.RCSCapabilityChecker
 
-	// RCSFallbackAgentID is the deployment-wide RBM agent, RCS_AIRTEL_AGENT_ID
-	// or RCS_VI_BOT_ID, from before customers owned their own.
-	//
-	// It is a FALLBACK and nothing else: it is used where the caller has no
-	// agent of its own to name, and every such place is a gap being closed
-	// rather than a design. Empty is a legitimate value on a deployment that
-	// never had a shared agent.
-	RCSFallbackAgentID string
-
 	// Gateway captures payments. Nil means the manual gateway, which records a
 	// capture without contacting anyone — correct for bank-transfer and
 	// invoice-paid customers, and the seam a real provider slots into.
@@ -209,6 +200,15 @@ func NewRouter(s *Server) http.Handler {
 		// and the two are the same nil pointer in the generated struct, so the
 		// presence map is the only place the difference survives.
 		"PATCH /v1/rcs/agents/{id}": rcsAgentBodyFields,
+		// The create sibling of the route above. It used to decode straight into
+		// the struct, so a primaryColor sent on create vanished while the same
+		// key on PATCH was refused — one mistake caught on one path and
+		// swallowed on the other.
+		"POST /v1/rcs/agents": {"displayName", "country", "useCase", "description", "registrationId"},
+		// A body naming a carrier plus anything else is a body that meant
+		// something we are not doing — an agent id, most likely, which this
+		// route derives from the template's sender and never takes.
+		"POST /v1/templates/{id}/carrier-registration": {"vendor", "carrierTemplateId"},
 	}))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

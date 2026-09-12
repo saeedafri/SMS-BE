@@ -55,3 +55,14 @@ func (r Registry) Dedicated(channel string) (Connector, bool) {
 	carrier, ok := r.ByChannel[strings.ToUpper(channel)]
 	return carrier, ok && carrier != nil
 }
+
+// RCSIntegrations is every RCS carrier this codebase can talk to, keyed by the
+// vendor name a connector reports and valued by the network it reaches, in the
+// upper-case vocabulary the routes and launch tables use.
+//
+// A fact about the CODE, not about a deployment. Airtel and Vi are here because
+// rcs_airtel.go and rcs_vi.go exist, whether or not either has credentials on a
+// given box; Jio is absent because no adapter does. Agent creation is gated on
+// this rather than on configured credentials, so a customer can do the days of
+// brand verification before a deployment's carrier contract is signed.
+var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI"}

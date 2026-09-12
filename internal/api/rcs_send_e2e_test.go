@@ -52,17 +52,6 @@ func (h *harness) approvedRCSTemplate(tenant account, name, carrierTemplateID st
 		h.t.Fatalf("read sender: %v", err)
 	}
 
-	// Every RCS sender needs an agent now: there is no shared identity left to
-	// fall back to, so a sender without one is refused at the gate. Launched on
-	// both carriers because the helper does not know which vendor the stub in
-	// this particular test is pretending to be.
-	h.approveRegistration(tenant, "IN")
-	agentID := uuid.MustParse(h.createAgent(tenant, name+" agent").Id)
-	suffix := uuid.NewString()[:8]
-	h.launchAgentOnCarrier(tenant, agentID, "AIRTEL", "airtel-agent-"+suffix)
-	h.launchAgentOnCarrier(tenant, agentID, "VI", "vi-agent-"+suffix)
-	h.attachAgentToSender(senderID, agentID)
-
 	return senderID, templateID, carrierTemplateID
 }
 

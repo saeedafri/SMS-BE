@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -54,22 +55,39 @@ func TestClearingAnAgentFieldIsDistinctFromOmittingIt(t *testing.T) {
 	}
 }
 
-// The two fields a null must NOT clear. Neither is nullable in the table, and
-// an agent with no display name is not an agent — so a null there is a caller
-// mistake, and silently emptying the name the handset draws would be the worst
-// possible reading of it.
-func TestANullCannotEmptyAnAgentsNameOrUseCase(t *testing.T) {
+// The two fields a null must NOT clear, and must not pretend to.
+//
+// Neither is nullable — an agent with no name shows nothing on a handset, and
+// carriers review an agent by its use case. The refusal used to be silent: the
+// null was dropped and the PATCH answered 200, so a caller believed it had
+// cleared the field while the record still held it. That is a success report
+// for something that did not happen, and it is a 422 now.
+func TestANullNameOrUseCaseIsRefusedRatherThanIgnored(t *testing.T) {
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	h.approveRegistration(acct, "IN")
 	agent := h.createAgent(acct, "Acme Orders")
 
-	after := h.patchAgent(acct, agent.Id, `{"displayName":null,"useCase":null}`)
-	if after["displayName"] != "Acme Orders" {
-		t.Errorf("displayName = %v, want it untouched", after["displayName"])
+	for _, field := range []string{"displayName", "useCase"} {
+		t.Run(field, func(t *testing.T) {
+			res := h.doRaw(http.MethodPatch, "/v1/rcs/agents/"+agent.Id, acct.Token,
+				"application/json", []byte(`{"`+field+`":null}`))
+			if res.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("PATCH {%q: null} = %d, want 422: %s", field, res.Code, res.Body)
+			}
+			if !strings.Contains(string(res.Body), field) {
+				t.Errorf("refusal does not name %s: %s", field, res.Body)
+			}
+		})
 	}
-	if after["useCase"] != "TRANSACTIONAL" {
-		t.Errorf("useCase = %v, want it untouched", after["useCase"])
+
+	// And the record really is untouched — the refusal is not a 422 wrapped
+	// around a write that happened anyway.
+	after := h.do(http.MethodGet, "/v1/rcs/agents/"+agent.Id, acct.Token, nil)
+	var stored map[string]any
+	after.decode(t, &stored)
+	if stored["displayName"] != "Acme Orders" || stored["useCase"] != "TRANSACTIONAL" {
+		t.Errorf("stored = %v / %v, want both untouched", stored["displayName"], stored["useCase"])
 	}
 }
 
