@@ -211,7 +211,10 @@ func run() error {
 	// The same carrier serves capability discovery, template registration and
 	// sending. Registering it per channel is what keeps an SMS from being handed
 	// to an RCS gateway that would 400 every message.
-	carriers := connector.Registry{Default: sandbox}
+	// SMS goes over the operator bind its route chose; with no binds it falls
+	// through to the sandbox exactly as before.
+	smpp := &connector.SMPPRouter{Fallback: sandbox}
+	carriers := connector.Registry{Default: smpp}
 	if rcsCarrier != nil {
 		logger.Info("rcs carrier enabled", "vendor", rcsCarrier.Vendor())
 		if sender, ok := rcsCarrier.(connector.Connector); ok {
@@ -264,6 +267,9 @@ func run() error {
 		EnableDevEndpoints: cfg.EnableDevEndpoints,
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
 		Secrets:           connectionSecrets,
+		SMPP:              smpp,
+		DLTChain:          cfg.DLTTelemarketerChain,
+		SMPPEnvironment:   cfg.SMPPEnvironment,
 		Media:             mediaStore,
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
@@ -292,6 +298,13 @@ func run() error {
 		Handler:           api.NewRouter(apiServer),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// Binds every active operator connection, then keeps them in step with the
+	// console once a minute: a new connection goes live within a minute and a
+	// failed dial is retried without a restart.
+	go resilience.Supervise(ctx, "smpp-binds", time.Minute, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.ReloadSMPPBinds)
 
 	errs := make(chan error, 1)
 	go func() {

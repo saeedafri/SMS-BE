@@ -174,6 +174,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	rollups := make([]store.RollupRow, 0, len(plans))
 	submissions := make([]connector.Submission, 0, len(plans))
 
+	// Once per batch: every message in it shares a tenant, sender and template.
+	entityID, dltTemplateID := s.dltIDs(ctx, identity, context.sender.Channel,
+		context.sender.Country, context.template)
 	for _, plan := range plans {
 		state := messaging.StateQueued
 		cost := plan.cost
@@ -189,6 +192,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
 				Sender: context.sender.Header, Body: plan.body,
 				Channel: context.sender.Channel, Country: context.sender.Country,
+				Carrier:           context.carrier,
+				DLTEntityID:       entityID,
+				DLTTemplateID:     dltTemplateID,
 				CarrierTemplateID: context.carrierTemplateID(),
 				AgentID:           context.agentID,
 				// The SAME contact fields that personalised the body above.

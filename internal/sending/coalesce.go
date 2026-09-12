@@ -609,11 +609,16 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 		if plan.template.CarrierTemplateID != nil {
 			carrierTemplateID = *plan.template.CarrierTemplateID
 		}
+		entityID, dltTemplateID := s.dltIDs(ctx, plan.pending.identity,
+			plan.sender.Channel, plan.sender.Country, plan.template)
 		byChannel[plan.sender.Channel] = append(byChannel[plan.sender.Channel],
 			connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
 				Sender: plan.sender.Header, Body: plan.pending.request.Body,
 				Channel: plan.sender.Channel, Country: plan.sender.Country,
+				Carrier:           plan.carrier,
+				DLTEntityID:       entityID,
+				DLTTemplateID:     dltTemplateID,
 				CarrierTemplateID: carrierTemplateID,
 				AgentID:           plan.agentID,
 				TemplateVariables: TemplateVariables(plan.template,

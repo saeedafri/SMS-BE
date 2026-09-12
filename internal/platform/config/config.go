@@ -118,6 +118,17 @@ type Config struct {
 	// development and wrong on the public internet — an operator account sees
 	// every customer, so that surface should not be reachable from everywhere.
 	OperatorIPAllowlist string
+
+	// DLTTelemarketerChain is every telemarketer DLT id between a customer's
+	// principal entity and the operator, comma separated, ending with Relay's
+	// own. Hashed into TLV 5122 on every SMS; TRAI has rejected messages
+	// without a valid PE-TM chain since 11 December 2024. Empty sends none.
+	DLTTelemarketerChain []string
+
+	// SMPPEnvironment picks which operator connections are bound: "live" or
+	// "test". Test binds are for operator acceptance; they must never carry
+	// customer traffic on a live deployment by accident.
+	SMPPEnvironment string
 }
 
 // ClickHouseURL is deliberately not required: message logs arrive in Stage 5,
@@ -175,6 +186,15 @@ func Load() (Config, error) {
 	}
 
 	cfg.SignupInviteCode = strings.TrimSpace(os.Getenv("SIGNUP_INVITE_CODE"))
+	for _, id := range strings.Split(os.Getenv("DLT_TM_CHAIN"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			cfg.DLTTelemarketerChain = append(cfg.DLTTelemarketerChain, id)
+		}
+	}
+	cfg.SMPPEnvironment = envOr("SMPP_ENVIRONMENT", "live")
+	if cfg.SMPPEnvironment != "live" && cfg.SMPPEnvironment != "test" {
+		return Config{}, fmt.Errorf("config: SMPP_ENVIRONMENT=%q must be live or test", cfg.SMPPEnvironment)
+	}
 	cfg.ConnectionEncryptionKey = strings.TrimSpace(os.Getenv("CONNECTION_ENCRYPTION_KEY"))
 	cfg.OperatorIPAllowlist = strings.TrimSpace(os.Getenv("OPERATOR_IP_ALLOWLIST"))
 

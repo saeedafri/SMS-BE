@@ -70,6 +70,13 @@ type Server struct {
 	// password refuses rather than falling back to plaintext.
 	Secrets *secrets.Box
 
+	// SMPP holds the live operator binds SMS goes out over. Nil in tests that
+	// never bind. DLTChain is the telemarketer chain hashed into every SMS, and
+	// SMPPEnvironment picks which connections — live or test — are bound.
+	SMPP            *connector.SMPPRouter
+	DLTChain        []string
+	SMPPEnvironment string
+
 	// OperatorDB sees across tenants and is used ONLY by operator-console
 	// handlers. Tenant handlers must keep using DB: that split is what stops a
 	// mistake in one handler from becoming a cross-tenant leak.

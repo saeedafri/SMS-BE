@@ -855,3 +855,43 @@ func UpdateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, sender
 	}
 	return updated, nil
 }
+
+// DLTEntityID is the tenant's DLT principal-entity id for a country: the id the
+// operator issued when it approved the tenant's pe_rtm_entity registration.
+// Every SMS to an Indian handset carries it, and an operator's DLT scrubber
+// rejects one without it. Empty with ErrNotFound when the tenant has none.
+func DLTEntityID(ctx context.Context, pool *pgxpool.Pool, id Identity, country string) (string, error) {
+	var entityID string
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT external_id FROM registrations
+			 WHERE country = $1 AND object_key = 'pe_rtm_entity'
+			   AND status = 'approved' AND external_id IS NOT NULL
+			 ORDER BY updated_at DESC LIMIT 1`, country).Scan(&entityID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: dlt entity id: %w", err)
+	}
+	return entityID, nil
+}
+
+// CachedDLTEntityID is DLTEntityID behind the send path's cache: it is read for
+// every SMS and changes only when an operator approves a registration. A miss is
+// cached too, so a tenant with no entity does not pay a query per message.
+func CachedDLTEntityID(ctx context.Context, pool *pgxpool.Pool, cache *HotCache,
+	id Identity, country string) string {
+
+	key := "dltentity:" + id.TenantID.String() + ":" + country
+	if value, found := cache.Get(key); found {
+		return value.(string)
+	}
+	entityID, err := DLTEntityID(ctx, pool, id, country)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return "" // not cached: a transient failure should not stick
+	}
+	cache.Put(key, entityID)
+	return entityID
+}

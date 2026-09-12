@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/connector"
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -465,29 +466,96 @@ func validateConnectionShape(carrier, environment, bindType string, port, maxTps
 	return ""
 }
 
-// probeConnection reports whether the operator's gateway is reachable on the
-// configured host and port.
+// probeConnection binds to the operator with the stored credentials and unbinds.
 //
-// Deliberately a TCP dial and nothing more. The SMPP client does not exist yet,
-// so claiming a successful bind here would be a lie the console would render as
-// a green tick — reachability is what we can actually prove today, and the
-// result says so in its own message.
+// A real bind, not a TCP dial: "bound" in the console means the operator
+// accepted this system id and password, which is the thing that has to be true
+// before live traffic can go over it. It never changes status — proving a bind
+// works and putting traffic on it stay two separate decisions.
 func (s *Server) probeConnection(ctx context.Context, c store.Connection) (
 	gen.ConnectionTestResult, string, *string) {
 
-	address := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	config, err := s.smppConfig(c)
+	if err == nil {
+		err = connector.ProbeSMPP(config)
+	}
 	if err != nil {
 		// The operator reads this, so it names the address and the failure
 		// without leaking anything about the credential.
-		reason := fmt.Sprintf("Could not reach %s: %v", address, err)
+		reason := fmt.Sprintf("Could not bind to %s: %v", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), err)
 		return gen.ConnectionTestResult{Ok: false, Message: reason}, "error", &reason
 	}
-	_ = conn.Close()
-	message := fmt.Sprintf("Reached %s. TCP reachability only — a full SMPP bind is not "+
-		"attempted yet.", address)
+	message := fmt.Sprintf("Bound to %s as %s and unbound again.", config.Addr, c.SystemID)
 	return gen.ConnectionTestResult{Ok: true, Message: message}, "bound", nil
 }
 
-var _ = uuid.Nil
+// smppConfig turns a stored connection into a bind, decrypting the password.
+func (s *Server) smppConfig(c store.Connection) (connector.SMPPConfig, error) {
+	if c.PasswordEncrypted == nil || s.Secrets == nil {
+		return connector.SMPPConfig{}, errors.New("no bind password is stored for this connection")
+	}
+	password, err := s.Secrets.Decrypt(*c.PasswordEncrypted)
+	if err != nil {
+		return connector.SMPPConfig{}, errors.New("the stored bind password could not be decrypted")
+	}
+	systemType := ""
+	if c.SystemType != nil {
+		systemType = *c.SystemType
+	}
+	return connector.SMPPConfig{
+		ConnectionID: c.ID.String(), Carrier: c.Carrier,
+		Addr:     connector.SMPPAddr(c.Host, c.Port),
+		SystemID: c.SystemID, Password: password, SystemType: systemType,
+		MaxTPS: c.MaxTps, WindowSize: c.WindowSize,
+		EnquireLink: time.Duration(c.EnquireLinkSeconds) * time.Second,
+		Rebind:      time.Duration(c.ReconnectBackoffSeconds) * time.Second,
+	}, nil
+}
+
+// ReloadSMPPBinds brings the live operator binds in line with the console:
+// every ACTIVE connection in this deployment's environment is bound, anything
+// else is unbound. Run at startup and then every minute, so enabling a
+// connection puts traffic on it within a minute and a dropped dial is retried.
+func (s *Server) ReloadSMPPBinds(ctx context.Context) error {
+	if s.SMPP == nil {
+		return nil
+	}
+	environment := s.SMPPEnvironment
+	connections, err := store.ListConnections(ctx, s.operatorPool(), nil, &environment)
+	if err != nil {
+		return err
+	}
+	wanted := map[string]connector.SMPPConfig{}
+	for _, c := range connections {
+		if c.Status != "active" {
+			continue
+		}
+		config, err := s.smppConfig(c)
+		if err != nil {
+			reason := err.Error()
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), c.ID, "error", &reason, nil)
+			continue
+		}
+		wanted[c.ID.String()] = config
+	}
+
+	settle := func(report connector.DeliveryReport) {
+		settleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.sendingService(settleCtx).SettleCarrierReport(settleCtx, report); err != nil && s.Logger != nil {
+			s.Logger.Error("delivery receipt not settled", "carrier_ref", report.CarrierRef, "error", err)
+		}
+	}
+	for id, dialErr := range s.SMPP.Sync(wanted, s.DLTChain, settle) {
+		connectionID, _ := uuid.Parse(id)
+		if dialErr != nil {
+			reason := dialErr.Error()
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), connectionID, "error", &reason, nil)
+			continue
+		}
+		now := time.Now().UTC()
+		_ = store.RecordConnectionHealth(ctx, s.operatorPool(), connectionID, "bound", nil, &now)
+	}
+	return nil
+}
+
