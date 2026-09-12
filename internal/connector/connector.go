@@ -50,6 +50,18 @@ type Submission struct {
 	// Empty on every channel but RCS, and a refusal on RCS — see ErrRCSNoAgent.
 	AgentID string
 
+	// Carrier is the operator the routes table chose for this message, in its
+	// upper-case vocabulary. SMS goes over that operator's own bind; a channel
+	// with a dedicated gateway ignores it.
+	Carrier string
+
+	// DLTEntityID and DLTTemplateID are India's DLT identity for an SMS: the
+	// customer's principal-entity id and the registered content-template id.
+	// Operators scrub every message against them and reject one that lacks
+	// either. Empty outside India.
+	DLTEntityID   string
+	DLTTemplateID string
+
 	// TTLSeconds stops delivery attempts after a while and revokes the message.
 	// Zero means the template's own TTL applies, or none. A send-time value
 	// overrides the template's on both carriers.

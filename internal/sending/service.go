@@ -325,9 +325,11 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		carrierTemplateID = *template.CarrierTemplateID
 	}
 
+	entityID, dltTemplateID := s.dltIDs(ctx, identity, sender.Channel, sender.Country, template)
 	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
 		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
+		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
 		CarrierTemplateID: carrierTemplateID,
 		AgentID:           agentID,
 		TemplateVariables: TemplateVariables(template, request.Variables),
@@ -579,6 +581,22 @@ func TemplateVariables(template store.Template, values map[string]string) []conn
 		})
 	}
 	return filled
+}
+
+// dltIDs is India's DLT identity for one SMS: the tenant's principal-entity id
+// and the template's registered content-template id. Empty for every other
+// channel and country, where no operator asks for them.
+func (s *Service) dltIDs(ctx context.Context, identity store.Identity, channel, country string,
+	template store.Template) (string, string) {
+
+	if channel != "SMS" || country != "IN" {
+		return "", ""
+	}
+	templateID := ""
+	if template.ExternalID != nil {
+		templateID = *template.ExternalID
+	}
+	return store.CachedDLTEntityID(ctx, s.DB, s.Hot, identity, country), templateID
 }
 
 // resolvePath records which carrier is about to carry this message, and over

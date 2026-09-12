@@ -2,6 +2,9 @@ package sending
 
 import (
 	"context"
+	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -47,4 +50,39 @@ func (s *Service) DrainSandboxReports(ctx context.Context) (int, error) {
 		applied++
 	}
 	return applied, nil
+}
+
+// SettleCarrierReport applies a delivery receipt a real operator sent over an
+// SMPP bind. The receipt names only the operator's own message id, so the
+// message — and the tenant it belongs to — is found from the reference stored
+// when the operator accepted the submit.
+//
+// The same id arrives in two spellings from some operators: hexadecimal in the
+// submit_sm_resp and decimal in the receipt, or the reverse. A receipt that
+// matches nothing is tried in the other base before it is given up on, because
+// an unmatched receipt leaves a delivered message looking unsent and its hold
+// never settles.
+func (s *Service) SettleCarrierReport(ctx context.Context, report connector.DeliveryReport) error {
+	for _, ref := range carrierRefSpellings(report.CarrierRef) {
+		tenantID, messageID, err := store.FindMessageByCarrierRef(ctx, s.ClickHouse, ref)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		report.CarrierRef, report.MessageID = ref, messageID.String()
+		return s.ApplyDeliveryReport(ctx, store.Identity{TenantID: tenantID}, report)
+	}
+	return nil // a receipt for a message this deployment never sent
+}
+
+func carrierRefSpellings(ref string) []string {
+	spellings := []string{ref}
+	if n, err := strconv.ParseUint(ref, 10, 64); err == nil {
+		spellings = append(spellings, strconv.FormatUint(n, 16), strings.ToUpper(strconv.FormatUint(n, 16)))
+	} else if n, err := strconv.ParseUint(ref, 16, 64); err == nil {
+		spellings = append(spellings, strconv.FormatUint(n, 10))
+	}
+	return spellings
 }
