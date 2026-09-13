@@ -136,6 +136,10 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 		})
 	}
 	for _, row := range deliverability {
+		// Same reason as the agent's launch list: GOOGLE is not a contract carrier.
+		if row.Carrier != "" && !gen.CarrierId(row.Carrier).Valid() {
+			continue
+		}
 		rate := 0.0
 		if row.Sent > 0 {
 			rate = float64(row.Delivered) / float64(row.Sent)

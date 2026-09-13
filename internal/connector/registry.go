@@ -65,4 +65,7 @@ func (r Registry) Dedicated(channel string) (Connector, bool) {
 // given box; Jio is absent because no adapter does. Agent creation is gated on
 // this rather than on configured credentials, so a customer can do the days of
 // brand verification before a deployment's carrier contract is signed.
-var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI"}
+//
+// Google is the RBM platform itself rather than a network, used to test on
+// invited handsets; its launches are recorded under GOOGLE.
+var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI", "google": "GOOGLE"}

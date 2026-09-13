@@ -20,6 +20,7 @@
 //	operator-admin set-password ops@company.com
 //	operator-admin disable ops@company.com
 //	operator-admin credit-wallet owner@customer.com INR 500000.00 UTR123456789
+//	operator-admin rcs-launch <agent-uuid> GOOGLE relay-test_abc_agent@rbm.goog
 //
 // The password is never taken as an argument. It is read from the terminal
 // without echo, because an argument is visible in `ps`, in shell history, and
@@ -31,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -62,6 +64,7 @@ func usage() error {
   operator-admin disable <email>
   operator-admin enable <email>
   operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
+  operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|GOOGLE> <carrier-agent-id>
 
 The password is prompted for, never passed as an argument.
 `)
@@ -113,6 +116,11 @@ func run() error {
 			return usage()
 		}
 		return setEnabled(ctx, pool, os.Args[2], true)
+	case "rcs-launch":
+		if len(os.Args) < 5 {
+			return usage()
+		}
+		return launchRCSAgent(ctx, pool, os.Args[2], os.Args[3], os.Args[4])
 	case "credit-wallet":
 		if len(os.Args) < 6 {
 			return usage()
@@ -177,6 +185,69 @@ func creditWallet(ctx context.Context, pool *pgxpool.Pool,
 	}
 	fmt.Printf("credited; %s balance is now %d minor units (entry %s)\n",
 		currency, entry.BalanceAfterMinor, entry.ID)
+	return nil
+}
+
+// launchRCSAgent records that a carrier admitted a customer's agent, with the
+// id that carrier issued for it — what every RCS send on that carrier goes out
+// under. Nothing else writes an approved launch: a carrier's approval arrives
+// by email or in its portal, and for a Google RBM test agent the id is shown
+// in Google's console.
+func launchRCSAgent(ctx context.Context, pool *pgxpool.Pool,
+	agent, carrier, carrierAgentID string) error {
+
+	agentID, err := uuid.Parse(strings.TrimSpace(agent))
+	if err != nil {
+		return errors.New("agent must be the Relay agent's uuid")
+	}
+	carrier = strings.ToUpper(strings.TrimSpace(carrier))
+	if !slices.Contains([]string{"AIRTEL", "VI", "GOOGLE"}, carrier) {
+		return errors.New("carrier must be AIRTEL, VI or GOOGLE")
+	}
+	carrierAgentID = strings.TrimSpace(carrierAgentID)
+	if carrierAgentID == "" {
+		return errors.New("give the id the carrier issued for this agent")
+	}
+
+	var tenantID uuid.UUID
+	var name, status, verification string
+	if err := pool.QueryRow(ctx, `SELECT tenant_id, display_name, status, verification_status
+		FROM rcs_agents WHERE id = $1`, agentID).Scan(&tenantID, &name, &status, &verification); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("no agent %s", agentID)
+		}
+		return err
+	}
+	if verification != "approved" || status == "suspended" || status == "archived" {
+		return fmt.Errorf("%q cannot launch: verification is %s and status is %s", name, verification, status)
+	}
+	if !confirm(fmt.Sprintf("Mark %q (%s) live on %s as %s?", name, agentID, carrier, carrierAgentID)) {
+		return errors.New("not confirmed; nothing changed")
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO rcs_agent_carrier_launches
+		    (agent_id, tenant_id, carrier, status, carrier_agent_id, submitted_at, updated_at)
+		VALUES ($1, $2, $3, 'approved', $4, now(), now())
+		ON CONFLICT (agent_id, carrier) DO UPDATE
+		    SET status = 'approved', carrier_agent_id = EXCLUDED.carrier_agent_id,
+		        rejection_reason = NULL, updated_at = now()`,
+		agentID, tenantID, carrier, carrierAgentID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE rcs_agents SET status = 'live', updated_at = now()
+		WHERE id = $1`, agentID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	fmt.Printf("%q is live on %s as %s (sends pick it up within seconds)\n", name, carrier, carrierAgentID)
 	return nil
 }
 

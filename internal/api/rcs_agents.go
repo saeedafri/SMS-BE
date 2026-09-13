@@ -95,6 +95,12 @@ func (s *Server) rcsAgentResponse(ctx context.Context, agent store.RcsAgent) gen
 
 	out.CarrierLaunches = make([]gen.RcsCarrierLaunch, 0, len(carriers))
 	for _, carrier := range carriers {
+		// A launch on a platform the contract has no carrier value for — Google
+		// RBM test agents — is used for sending but not listed, so the screen
+		// never receives a carrier it cannot render.
+		if !gen.CarrierId(carrier).Valid() {
+			continue
+		}
 		launch, ok := recorded[carrier]
 		if !ok {
 			launch = store.RcsCarrierLaunch{Carrier: carrier, Status: "not_submitted"}

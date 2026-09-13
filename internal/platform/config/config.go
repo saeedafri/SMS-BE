@@ -103,6 +103,14 @@ type Config struct {
 	RCSViClientID     string
 	RCSViClientSecret string
 
+	// Google RBM, for testing on invited handsets before an operator launch.
+	// RCSGoogleServiceAccountFile is the path to the key file Google issues;
+	// RCSGoogleWebhookClientToken is the client token set beside the webhook URL
+	// in Google's console, which signs every callback.
+	RCSGoogleBaseURL            string
+	RCSGoogleServiceAccountFile string
+	RCSGoogleWebhookClientToken string
+
 	// CarrierWebhookToken authenticates the RCS delivery and template
 	// callbacks. Empty leaves those routes unmounted, which is right for any
 	// deployment no carrier is calling. See internal/api/carrier_webhooks.go
@@ -179,6 +187,12 @@ func Load() (Config, error) {
 	cfg.RCSViTokenURL = strings.TrimSpace(os.Getenv("RCS_VI_TOKEN_URL"))
 	cfg.RCSViClientID = strings.TrimSpace(os.Getenv("RCS_VI_CLIENT_ID"))
 	cfg.RCSViClientSecret = strings.TrimSpace(os.Getenv("RCS_VI_CLIENT_SECRET"))
+	cfg.RCSGoogleBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("RCS_GOOGLE_BASE_URL")), "/")
+	if cfg.RCSGoogleBaseURL == "" {
+		cfg.RCSGoogleBaseURL = "https://asia-rcsbusinessmessaging.googleapis.com"
+	}
+	cfg.RCSGoogleServiceAccountFile = strings.TrimSpace(os.Getenv("RCS_GOOGLE_SERVICE_ACCOUNT_FILE"))
+	cfg.RCSGoogleWebhookClientToken = strings.TrimSpace(os.Getenv("RCS_GOOGLE_WEBHOOK_CLIENT_TOKEN"))
 	cfg.CarrierWebhookToken = strings.TrimSpace(os.Getenv("RCS_WEBHOOK_TOKEN"))
 	cfg.CarrierWebhookIPAllowlist = strings.TrimSpace(os.Getenv("RCS_WEBHOOK_IP_ALLOWLIST"))
 	if err := cfg.validateRCS(); err != nil {
@@ -266,9 +280,21 @@ func (c Config) validateRCS() error {
 		c.RCSViClientSecret != ""
 
 	switch c.RCSVendor {
-	case "", "airtel", "vi":
+	case "", "airtel", "vi", "google":
 	default:
-		return fmt.Errorf("config: RCS_VENDOR=%q is not a carrier; use airtel or vi", c.RCSVendor)
+		return fmt.Errorf("config: RCS_VENDOR=%q is not a carrier; use airtel, vi or google", c.RCSVendor)
+	}
+	// Google is chosen explicitly and never inferred: it is a test route, and a
+	// deployment should not start sending through it because a key file exists.
+	if c.RCSVendor == "google" {
+		missing := missingFields(map[string]string{
+			"RCS_GOOGLE_SERVICE_ACCOUNT_FILE": c.RCSGoogleServiceAccountFile,
+			"RCS_GOOGLE_WEBHOOK_CLIENT_TOKEN": c.RCSGoogleWebhookClientToken,
+		})
+		if len(missing) > 0 {
+			return fmt.Errorf("config: Google RBM is selected but %s missing",
+				strings.Join(missing, ", ")+" is")
+		}
 	}
 	// Both sets of credentials with nothing to choose between them is not a
 	// default worth guessing: the two carriers answer the same question

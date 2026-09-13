@@ -207,6 +207,21 @@ func run() error {
 			ClientID:     cfg.RCSViClientID,
 			ClientSecret: cfg.RCSViClientSecret,
 		}
+	case "google":
+		// A key that cannot be read stops the process: RCS_VENDOR=google says
+		// this deployment is meant to be testing RCS, and starting without it
+		// would refuse every RCS message with nothing in the log to say why.
+		key, err := os.ReadFile(cfg.RCSGoogleServiceAccountFile)
+		if err != nil {
+			logger.Error("RCS_GOOGLE_SERVICE_ACCOUNT_FILE cannot be read", "error", err)
+			os.Exit(1)
+		}
+		google := &connector.GoogleRBM{BaseURL: cfg.RCSGoogleBaseURL, ServiceAccountJSON: key}
+		if health := google.Health(ctx); !health.Healthy {
+			logger.Error("Google RBM service account is not usable", "detail", health.Detail)
+			os.Exit(1)
+		}
+		rcsCarrier = google
 	}
 	// The same carrier serves capability discovery, template registration and
 	// sending. Registering it per channel is what keeps an SMS from being handed
@@ -274,10 +289,11 @@ func run() error {
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
-		RCSCarrier:              rcsCarrier,
-		Carriers:                carriers,
-		CarrierWebhookToken:     cfg.CarrierWebhookToken,
-		CarrierWebhookAllowlist: carrierWebhookAllowlist,
+		RCSCarrier:               rcsCarrier,
+		Carriers:                 carriers,
+		CarrierWebhookToken:      cfg.CarrierWebhookToken,
+		GoogleWebhookClientToken: cfg.RCSGoogleWebhookClientToken,
+		CarrierWebhookAllowlist:  carrierWebhookAllowlist,
 		Mail: &mailer.Mailer{
 			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 		}}

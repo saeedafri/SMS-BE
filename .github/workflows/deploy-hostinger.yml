@@ -102,7 +102,8 @@ jobs:
           # Relay's OWN database only. ems-postgres hosts both; naming the
           # database is what keeps this from dumping the neighbour's data.
           mkdir -p /opt/relay/backups
-          docker exec ems-postgres pg_dump -U ems_user -d sms \
+          # ems-postgres on Hostinger, relay-postgres on AWS (set in .env).
+          docker exec "${BACKUP_PG_CONTAINER:-ems-postgres}" pg_dump -U "${BACKUP_PG_USER:-ems_user}" -d sms \
             | gzip > "/opt/relay/backups/sms_predeploy_$(date +%Y%m%d_%H%M%S).sql.gz"
           ls -t /opt/relay/backups/sms_predeploy_*.sql.gz | tail -n +15 | xargs -r rm -f
           echo "::endgroup::"

@@ -1,0 +1,92 @@
+# Relay's datastores on the AWS server (ap-south-1, relay-prod).
+#
+# Unlike the shared Hostinger VPS this machine runs nothing else, so Postgres
+# lives here too instead of borrowing a neighbour's container. Every port is
+# published on loopback only, on the SAME port numbers Hostinger used, so the
+# API's URLs and the local SSH tunnel stay identical.
+#
+#   docker compose --env-file /opt/relay/.secrets -f /opt/relay/deploy/aws/docker-compose.yml up -d
+
+name: relay
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD}
+    command: >
+      postgres -c shared_buffers=512MB -c effective_cache_size=1536MB
+               -c max_connections=200 -c log_min_duration_statement=500
+               -c log_line_prefix='%m [%p] %q%u@%d '
+    volumes:
+      - relay_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits: {memory: 2G}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: relay-clickhouse-1
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: sms
+      CLICKHOUSE_USER: relay
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - relay_chdata:/var/lib/clickhouse
+      - ../clickhouse-limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    deploy:
+      resources:
+        limits: {memory: 2G, cpus: "1.5"}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  redis:
+    image: redis:7-alpine
+    container_name: relay-redis-1
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    ports:
+      - "127.0.0.1:6380:6379"
+    deploy:
+      resources:
+        limits: {memory: 192M, cpus: "0.5"}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  relay_pgdata:
+  relay_chdata:

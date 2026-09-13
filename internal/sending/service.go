@@ -550,6 +550,11 @@ func (s *Service) carrierTemplateStatusFor(channel string, template store.Templa
 	if !dedicated {
 		return ""
 	}
+	// A gateway that reviews agents rather than messages (Google RBM) has no
+	// template approval to wait for.
+	if reviewer, ok := carrier.(interface{ TemplatesReviewed() bool }); ok && !reviewer.TemplatesReviewed() {
+		return ""
+	}
 	// A registration with one carrier is no registration with another. The
 	// vendor used to be guessed from this same gateway, so the two always
 	// matched and this check had nothing to catch. It is stated by the customer

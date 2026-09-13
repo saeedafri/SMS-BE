@@ -65,6 +65,29 @@ func (s *Server) receiveRCSWebhook(w http.ResponseWriter, r *http.Request) {
 		event, err = connector.ParseAirtelWebhook(payload)
 	case "vi":
 		event, err = connector.ParseViWebhook(payload)
+	case "google":
+		if s.GoogleWebhookClientToken == "" {
+			writeError(w, http.StatusNotFound, codeNotFound, "no such endpoint")
+			return
+		}
+		// Saving the webhook in Google's console sends this first: answering
+		// with the secret proves we hold the client token they issued.
+		if handshake, ok := connector.ParseGoogleWebhookVerification(payload); ok {
+			if subtle.ConstantTimeCompare([]byte(handshake.ClientToken),
+				[]byte(s.GoogleWebhookClientToken)) != 1 {
+				writeError(w, http.StatusNotFound, codeNotFound, "no such endpoint")
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, handshake.Secret)
+			return
+		}
+		if !connector.VerifyGoogleWebhookSignature(payload, r.Header.Get("X-Goog-Signature"),
+			s.GoogleWebhookClientToken) {
+			writeError(w, http.StatusNotFound, codeNotFound, "no such endpoint")
+			return
+		}
+		event, err = connector.ParseGoogleWebhook(payload)
 	default:
 		writeError(w, http.StatusNotFound, codeNotFound, "no such endpoint")
 		return

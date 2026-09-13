@@ -113,6 +113,9 @@ type Server struct {
 	// variable. Empty means the webhook routes are not mounted at all.
 	CarrierWebhookToken string
 
+	// GoogleWebhookClientToken verifies the signature on Google RBM callbacks.
+	GoogleWebhookClientToken string
+
 	// CarrierWebhookAllowlist restricts who may post a carrier webhook. Airtel
 	// documents IP whitelisting in both directions and this is our half of it.
 	// Nil means no restriction.
