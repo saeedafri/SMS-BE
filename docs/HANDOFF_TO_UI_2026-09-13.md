@@ -117,7 +117,7 @@ works exactly as before; that test is untouched.
 ### 2.1 Re-pointing a sender to a different agent — **refuse**. It already was; now it is proven.
 
 `PATCH /v1/sender-ids/{id}` never declared `rcsAgentId`, and that route has been
-behind the unknown-fields guard since it was added on 4 September (`c38d0dc`). So a re-point has always been a 422,
+behind the unknown-fields guard since it was added on 4 September (`f40d938`). So a re-point has always been a 422,
 not a silent drop — but nothing asserted it, and a refused-by-accident guarantee is
 one refactor from vanishing. There is a test now, and it reads the stored agent back
 after the refusal.
