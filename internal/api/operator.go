@@ -66,6 +66,17 @@ func (s *Server) OperatorLogin(ctx context.Context, request gen.OperatorLoginReq
 	email := strings.ToLower(strings.TrimSpace(string(request.Body.Email)))
 	unauthorized := gen.OperatorLogin401JSONResponse(
 		errorBody(codeUnauthenticated, "Incorrect email address or password."))
+	ip := requestIP(ctx)
+	if blocked, wait := s.loginBlocked(ctx, "operator", email, ip); blocked {
+		s.Logger.Warn("login refused: too many attempts", "scope", "operator",
+			"email_hash", loginKey("id", "operator", email), "client_ip", ip)
+		return gen.OperatorLogin401JSONResponse(errorBody(codeTooManyAttempts, tooManyAttemptsMessage(wait))), nil
+	}
+	failed := func(reason string) {
+		locked := s.loginFailed(ctx, "operator", email, ip)
+		s.Logger.Warn("login failed", "scope", "operator", "reason", reason,
+			"email_hash", loginKey("id", "operator", email), "client_ip", ip, "locked", locked)
+	}
 
 	operator, hash, err := store.FindOperatorByEmail(ctx, s.DB, email)
 	if errors.Is(err, store.ErrNotFound) {
@@ -73,14 +84,17 @@ func (s *Server) OperatorLogin(ctx context.Context, request gen.OperatorLoginReq
 		// must cost the same as a known one with the wrong password, or the
 		// timing difference enumerates staff accounts.
 		auth.VerifyPassword(auth.DummyHash, request.Body.Password)
+		failed("unknown_address")
 		return unauthorized, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	if !auth.VerifyPassword(hash, request.Body.Password) {
+		failed("wrong_password")
 		return unauthorized, nil
 	}
+	s.loginSucceeded(ctx, "operator", email)
 
 	var result gen.OperatorLoginResult
 

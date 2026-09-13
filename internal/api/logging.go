@@ -39,7 +39,7 @@ func requestLogger(logger *slog.Logger, metrics *Metrics) func(http.Handler) htt
 
 			// Authentication runs after this middleware on a derived context,
 			// so it reports the caller back through this holder.
-			fields := &callerFields{}
+			fields := &callerFields{clientIP: clientIP(r)}
 			r = r.WithContext(context.WithValue(r.Context(), callerKey{}, fields))
 
 			next.ServeHTTP(wrapped, r)
@@ -132,7 +132,7 @@ func chiRoutePattern(r *http.Request) string {
 // callerFields is what authentication and error handling learn about a request
 // after the logger has already started it.
 type callerFields struct {
-	auth, tenantID, userID, operator, internalError string
+	auth, tenantID, userID, operator, internalError, clientIP string
 }
 
 type callerKey struct{}

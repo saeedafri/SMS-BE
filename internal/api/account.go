@@ -74,6 +74,10 @@ func (s *Server) appBaseURL() string {
 // link. Shared by signup and the resend endpoint so the two cannot drift —
 // notably over which addresses get the fixed dev token.
 func (s *Server) sendVerificationEmail(ctx context.Context, userID uuid.UUID, email string) error {
+	if !s.allowAccountEmail(ctx, "verify", email) {
+		s.Logger.Warn("verification email skipped: hourly cap reached", "email", email)
+		return nil
+	}
 	raw, hash, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -178,6 +182,12 @@ const devPasswordResetToken = "dev-reset-token"
 func (s *Server) RequestPasswordReset(ctx context.Context, request gen.RequestPasswordResetRequestObject) (gen.RequestPasswordResetResponseObject, error) {
 	email := strings.ToLower(strings.TrimSpace(string(request.Body.Email)))
 
+	// Capped before the lookup, so the cap behaves the same for addresses that
+	// do not exist and the 204 still reveals nothing.
+	if !s.allowAccountEmail(ctx, "reset", email) {
+		s.Logger.Warn("password reset skipped: hourly cap reached", "email", email)
+		return gen.RequestPasswordReset204Response{}, nil
+	}
 	userID, err := store.FindUserIDByEmail(ctx, s.DB, email)
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.RequestPasswordReset204Response{}, nil

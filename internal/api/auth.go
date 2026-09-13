@@ -168,20 +168,34 @@ func (s *Server) Login(ctx context.Context, request gen.LoginRequestObject) (gen
 	email := strings.ToLower(strings.TrimSpace(string(request.Body.Email)))
 	unauthorized := gen.Login401JSONResponse(
 		errorBody(codeUnauthenticated, "Incorrect email address or password."))
+	ip := requestIP(ctx)
+	if blocked, wait := s.loginBlocked(ctx, "tenant", email, ip); blocked {
+		s.Logger.Warn("login refused: too many attempts", "scope", "tenant",
+			"email_hash", loginKey("id", "tenant", email), "client_ip", ip)
+		return gen.Login401JSONResponse(errorBody(codeTooManyAttempts, tooManyAttemptsMessage(wait))), nil
+	}
+	failed := func(reason string) {
+		locked := s.loginFailed(ctx, "tenant", email, ip)
+		s.Logger.Warn("login failed", "scope", "tenant", "reason", reason,
+			"email_hash", loginKey("id", "tenant", email), "client_ip", ip, "locked", locked)
+	}
 
 	credentials, err := store.FindCredentialsByEmail(ctx, s.DB, email)
 	if errors.Is(err, store.ErrNotFound) {
 		// Hash against a dummy value so an unknown address costs the same time
 		// as a known one with a wrong password.
 		auth.VerifyPassword(auth.DummyHash, request.Body.Password)
+		failed("unknown_address")
 		return unauthorized, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	if !auth.VerifyPassword(credentials.PasswordHash, request.Body.Password) {
+		failed("wrong_password")
 		return unauthorized, nil
 	}
+	s.loginSucceeded(ctx, "tenant", email)
 
 	membership, err := store.FindMembership(ctx, s.DB, credentials.UserID)
 	if errors.Is(err, store.ErrNotFound) {
