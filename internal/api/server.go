@@ -354,7 +354,7 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 // writeOperationError renders every error leaving an operation as the
 // contract's Error schema. The frontend's error states read error.code, so the
 // envelope is part of the contract even for failures we consider internal.
-func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
+func writeOperationError(w http.ResponseWriter, r *http.Request, err error) {
 	var notImpl notImplementedError
 	var dependency dependencyUnmetError
 	switch {
@@ -391,7 +391,9 @@ func writeOperationError(w http.ResponseWriter, _ *http.Request, err error) {
 	// in logs, not in a response a tenant can read. It must still reach the
 	// logs though — an unexplained 500 is unactionable, and this envelope was
 	// hiding the cause of every internal failure.
-	slog.Error("unhandled operation error", "error", err)
+	noteInternalError(r.Context(), err)
+	slog.Error("unhandled operation error", "error", err,
+		"request_id", middleware.GetReqID(r.Context()))
 	writeError(w, http.StatusInternalServerError, "internal_error",
 		"an unexpected error occurred")
 }

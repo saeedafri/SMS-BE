@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-chi/chi/v5/middleware"
 	"strings"
 
 	"github.com/google/uuid"
@@ -275,6 +276,15 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	// failure of the send path itself is a 500 — a refusal is an answer.
 	if err != nil && !messaging.IsRefusal(err) {
 		return nil, err
+	}
+
+	// The HTTP status is 202 either way, so a refused or carrier-rejected send
+	// would look like success in the request log. Said explicitly instead.
+	if result.Status == "rejected" || result.Status == "failed" {
+		s.Logger.Warn("message not sent", "request_id", middleware.GetReqID(ctx),
+			"tenant_id", identity.TenantID.String(), "message_id", result.MessageID.String(),
+			"status", result.Status, "failure_code", result.FailureCode,
+			"sender_id", request.Body.SenderId.String())
 	}
 
 	// 202 whatever the verdict, including a rejection. The request was

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -27,7 +30,17 @@ func requestLogger(logger *slog.Logger, metrics *Metrics) func(http.Handler) htt
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			wrapped := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			// The first bytes of every response are kept so a refusal's own
+			// error code and message land on its log line: "422" alone says a
+			// request failed, not why.
+			body := &cappedBuffer{limit: 2048}
+			wrapped.Tee(body)
 			started := time.Now()
+
+			// Authentication runs after this middleware on a derived context,
+			// so it reports the caller back through this holder.
+			fields := &callerFields{}
+			r = r.WithContext(context.WithValue(r.Context(), callerKey{}, fields))
 
 			next.ServeHTTP(wrapped, r)
 
@@ -56,12 +69,41 @@ func requestLogger(logger *slog.Logger, metrics *Metrics) func(http.Handler) htt
 				"bytes", wrapped.BytesWritten(),
 				"duration_ms", float64(duration.Microseconds()) / 1000,
 				"request_id", requestID,
+				"client_ip", clientIP(r),
+				"user_agent", truncate(r.UserAgent(), 200),
+			}
+			if r.URL.RawQuery != "" {
+				attrs = append(attrs, "query", truncate(r.URL.RawQuery, 500))
 			}
 			// Tenant on every line. During an incident the first question is
 			// almost always "is this one customer or everyone", and without
 			// this it cannot be answered from the logs at all.
-			if identity, ok := identityFrom(r.Context()); ok {
-				attrs = append(attrs, "tenant_id", identity.TenantID.String())
+			if fields.auth != "" {
+				attrs = append(attrs, "auth", fields.auth)
+			}
+			if fields.tenantID != "" {
+				attrs = append(attrs, "tenant_id", fields.tenantID)
+			}
+			if fields.userID != "" {
+				attrs = append(attrs, "user_id", fields.userID)
+			}
+			if fields.operator != "" {
+				attrs = append(attrs, "operator", fields.operator)
+			}
+			if status >= 400 {
+				var envelope struct {
+					Error struct {
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				if json.Unmarshal(body.Bytes(), &envelope) == nil && envelope.Error.Code != "" {
+					attrs = append(attrs, "error_code", envelope.Error.Code,
+						"error_message", truncate(envelope.Error.Message, 500))
+				}
+			}
+			if fields.internalError != "" {
+				attrs = append(attrs, "internal_error", truncate(fields.internalError, 1000))
 			}
 			if duration >= slowRequestThreshold {
 				attrs = append(attrs, "slow", true)
@@ -85,4 +127,48 @@ func chiRoutePattern(r *http.Request) string {
 		return rctx.RoutePattern()
 	}
 	return ""
+}
+
+// callerFields is what authentication and error handling learn about a request
+// after the logger has already started it.
+type callerFields struct {
+	auth, tenantID, userID, operator, internalError string
+}
+
+type callerKey struct{}
+
+func noteCaller(ctx context.Context, auth, tenantID, userID, operator string) {
+	if fields, ok := ctx.Value(callerKey{}).(*callerFields); ok {
+		fields.auth, fields.tenantID, fields.userID, fields.operator = auth, tenantID, userID, operator
+	}
+}
+
+func noteInternalError(ctx context.Context, err error) {
+	if fields, ok := ctx.Value(callerKey{}).(*callerFields); ok && err != nil {
+		fields.internalError = err.Error()
+	}
+}
+
+// cappedBuffer keeps the first limit bytes written to it and discards the rest.
+type cappedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.Len(); room > 0 {
+		if len(p) > room {
+			b.Buffer.Write(p[:room])
+		} else {
+			b.Buffer.Write(p)
+		}
+	}
+	return len(p), nil
+}
+
+func truncate(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }

@@ -35,6 +35,9 @@ type Mailer struct {
 
 func (m *Mailer) enabled() bool { return m != nil && m.APIKey != "" }
 
+// Enabled reports whether Send really delivers mail.
+func (m *Mailer) Enabled() bool { return m.enabled() }
+
 func (m *Mailer) client() *http.Client {
 	if m.Client != nil {
 		return m.Client

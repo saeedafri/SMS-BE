@@ -19,7 +19,11 @@ const (
 	passwordResetLifetime     = time.Hour
 )
 
-// deliverToken emails the link, and logs the token either way.
+// deliverToken emails the link. The token itself is logged only when no mail
+// provider is configured — local development and the test suite, where the log
+// is the only way to follow the link. With real mail the log shows that a token
+// was issued and never the token: logs are shipped to CloudWatch, and a reset
+// token there would let anyone with log access take over any account.
 //
 // The token is deliberately NOT returned in the response, even behind a
 // development flag. These endpoints answer 204 by contract, and a reset token
@@ -39,7 +43,11 @@ const (
 // when the client hangs up would silently drop the mail.
 func (s *Server) deliverToken(kind, email, token string) {
 	if s.Logger != nil {
-		s.Logger.Info("account token issued", "kind", kind, "email", email, "token", token)
+		if s.Mail.Enabled() {
+			s.Logger.Info("account token issued", "kind", kind, "email", email)
+		} else {
+			s.Logger.Info("account token issued", "kind", kind, "email", email, "token", token)
+		}
 	}
 	subject, html, ok := accountEmail(kind, s.appBaseURL(), token)
 	if !ok {

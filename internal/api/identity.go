@@ -66,6 +66,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/v1/operator") {
 			operator, operatorErr := store.ResolveOperatorSession(r.Context(), s.DB, hash)
 			if operatorErr == nil {
+				noteCaller(r.Context(), "operator", "", "", operator.Email)
 				ctx := context.WithValue(r.Context(), operatorKey{}, operator)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -121,6 +122,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 						"Add it to the IP allowlist for this environment.")
 				return
 			}
+			noteCaller(r.Context(), "api_key", keyIdentity.TenantID.String(), "", "")
 			ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
 			ctx = context.WithValue(ctx, scopesKey{}, scopes)
 			ctx = context.WithValue(ctx, environmentKey{}, environment)
@@ -138,6 +140,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		noteCaller(r.Context(), "session", identity.TenantID.String(), identity.UserID.String(), "")
 		ctx := context.WithValue(r.Context(), identityKey{}, identity)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
