@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/go-chi/chi/v5"
@@ -87,6 +88,10 @@ type Server struct {
 	// tenants and briefly disable the ledger's append-only trigger. Nil unless
 	// dev endpoints are enabled, so no request path can reach it in production.
 	AdminDB *pgxpool.Pool
+
+	// invoicedPeriod is the last month IssueMonthlyInvoices billed in full, so
+	// its hourly tick scans the warehouse once a month rather than every hour.
+	invoicedPeriod time.Time
 
 	// Connector is the carrier the send path submits to. Nil means no data
 	// plane, so campaign and send endpoints refuse rather than silently

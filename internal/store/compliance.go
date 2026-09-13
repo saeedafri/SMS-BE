@@ -684,7 +684,8 @@ func ClearSenderVoiceCode(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // Scoped to the tenant like every other template write. The webhook path, which
 // arrives with no tenant at all, uses ApplyCarrierTemplateStatus instead.
 func SaveCarrierTemplateRegistration(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	templateID uuid.UUID, vendor, carrierTemplateID, status, rejectionReason string) (Template, error) {
+	templateID uuid.UUID, vendor, carrierTemplateID, status, rejectionReason string,
+	submitted bool) (Template, error) {
 
 	var updated Template
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
@@ -695,11 +696,14 @@ func SaveCarrierTemplateRegistration(ctx context.Context, pool *pgxpool.Pool, id
 			       carrier_template_id      = $3,
 			       carrier_status           = $4,
 			       carrier_rejection_reason = NULLIF($5, ''),
-			       carrier_submitted_at     = COALESCE(carrier_submitted_at, now()),
+			       -- A fresh submission restarts the clock. Kept on attach, where
+			       -- nothing was sent to the carrier by us.
+			       carrier_submitted_at     = CASE WHEN $6 THEN now()
+			                                       ELSE COALESCE(carrier_submitted_at, now()) END,
 			       carrier_updated_at       = now()
 			 WHERE id = $1
 			RETURNING `+templateColumns,
-			templateID, vendor, carrierTemplateID, status, rejectionReason))
+			templateID, vendor, carrierTemplateID, status, rejectionReason, submitted))
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -1,0 +1,8 @@
+[Unit]
+Description=Relay nightly Postgres backup
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/relay/relay-backup.sh
+SyslogIdentifier=relay-backup

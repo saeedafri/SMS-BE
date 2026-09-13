@@ -128,6 +128,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// dispatch path, and a campaign that somehow sent text unrelated to
 			// its own template would be refused here too.
 			RegisteredTemplateRequired: registeredTemplateRequired(context.sender.Country),
+			OutsidePromotionalWindow:   outsidePromotionalWindow(context.sender.Country, context.template),
 			TemplateBody:               templateBody(context.template),
 			Body:                       body,
 			// The balance check uses the running total for this batch, so a

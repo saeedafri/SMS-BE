@@ -110,6 +110,17 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 				forbiddenScope(w, scope)
 				return
 			}
+			// The tenant's IP allowlist for this key's environment. Saved and
+			// shown on the developer screen and, until this, never consulted:
+			// a key leaked from a customer's server worked from anywhere.
+			// Unreadable counts as refused, never as allowed.
+			allowed, err := s.keyNetworkAllowed(r.Context(), keyIdentity, environment, clientIP(r))
+			if err != nil || !allowed {
+				writeError(w, http.StatusForbidden, codeForbidden,
+					"This API key cannot be used from this IP address. "+
+						"Add it to the IP allowlist for this environment.")
+				return
+			}
 			ctx := context.WithValue(r.Context(), identityKey{}, keyIdentity)
 			ctx = context.WithValue(ctx, scopesKey{}, scopes)
 			ctx = context.WithValue(ctx, environmentKey{}, environment)

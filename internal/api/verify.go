@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/domain/verify"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -177,13 +182,20 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 			"Too many codes requested for this number. Try again later.")), nil
 	}
 
+	sendService := s.sendingService(ctx)
+	if sendService == nil {
+		return gen.CreateVerification422JSONResponse(errorBody(codeValidation,
+			"Sending is not available on this deployment.")), nil
+	}
+
 	code, err := verify.GenerateCode(service.CodeLength, s.EnableDevEndpoints)
 	if err != nil {
 		return nil, err
 	}
+	channels := verifyChannelOrder(service)
 	channel := "SMS"
-	if len(service.Channels) > 0 {
-		channel = service.Channels[0].Channel
+	if len(channels) > 0 {
+		channel = channels[0].Channel
 	}
 
 	created, err := store.CreateVerification(ctx, s.DB, identity, store.Verification{
@@ -198,18 +210,108 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 		return nil, err
 	}
 
-	// The code is logged, never returned. Returning it would let anyone who can
-	// call the API verify any number without seeing the handset — which is the
-	// entire security property an OTP provides. A local operator can read it
-	// from the log to exercise the flow.
-	s.Logger.Info("verification code issued (sandbox)",
-		"verificationId", created.ID, "msisdn", request.Body.Msisdn, "code", code)
+	// The code goes to the handset and nowhere else: not in the response, which
+	// would let any API caller verify any number, and not in the log, where
+	// everyone with log access could read every customer's live OTPs.
+	//
+	// The row exists before the send so a user who types the code the moment it
+	// lands never races a verification that is not there yet. Channels are tried
+	// in the service's fallback order, moving on only when one refuses outright.
+	var refusal string
+	delivered := false
+	for _, config := range channels {
+		senderID, valid := parsePathID(config.SenderID)
+		if !valid {
+			refusal = "sender_not_found"
+			continue
+		}
+		body := strings.Replace(config.Body, "{{code}}", code, 1)
+		result, err := sendService.Send(ctx, identity, sending.SendRequest{
+			SenderID: senderID, TemplateID: s.otpTemplate(ctx, identity, senderID, body),
+			Msisdn: request.Body.Msisdn, Body: body, Priority: true,
+		})
+		if err != nil && !messaging.IsRefusal(err) && result.FailureCode == "" {
+			return nil, err
+		}
+		if err == nil && result.Status != "rejected" && result.Status != "failed" {
+			channel, delivered = config.Channel, true
+			created.CostMinor = result.CostMinor
+			break
+		}
+		refusal = result.FailureCode
+		if refusal == "" {
+			refusal = "carrier_rejected"
+		}
+	}
+	if !delivered {
+		// Dead on arrival: nobody received a code, so nobody may verify with one.
+		if err := store.ExpireVerification(ctx, s.DB, identity, created.ID); err != nil {
+			return nil, err
+		}
+		s.Logger.Warn("verification code not sent",
+			"verificationId", created.ID, "reason", refusal)
+		return gen.CreateVerification422JSONResponse(errorBody(codeValidation,
+			"The code could not be sent ("+refusal+"). Check this service's sender, "+
+				"its registered OTP template and the wallet balance.")), nil
+	}
+	if err := store.SetVerificationDelivery(ctx, s.DB, identity, created.ID,
+		channel, created.CostMinor); err != nil {
+		return nil, err
+	}
 
 	return gen.CreateVerification201JSONResponse(gen.Verification{
 		Id: created.ID, ServiceId: serviceID, Msisdn: request.Body.Msisdn,
 		Channel: gen.ChannelId(channel), Status: gen.VerificationStatus("pending"),
 		AttemptsRemaining: service.MaxAttempts, ExpiresAt: created.ExpiresAt,
 	}), nil
+}
+
+// verifyChannelOrder is the service's channels in the order a code should be
+// attempted: the fallback order where one is set, then any channel it left out.
+func verifyChannelOrder(service store.VerifyService) []store.VerifyChannelConfig {
+	ordered := make([]store.VerifyChannelConfig, 0, len(service.Channels))
+	used := make(map[int]bool)
+	for _, name := range service.FallbackOrder {
+		for i, config := range service.Channels {
+			if !used[i] && config.Channel == name {
+				ordered, used[i] = append(ordered, config), true
+				break
+			}
+		}
+	}
+	for i, config := range service.Channels {
+		if !used[i] {
+			ordered = append(ordered, config)
+		}
+	}
+	return ordered
+}
+
+// otpTemplate finds the approved template this OTP body instantiates.
+//
+// A verify service stores its copy, not a template id, yet India refuses any
+// send that names no registered template. The customer registers the OTP text
+// on DLT like any other template; matching the rendered body against their
+// approved ones for this sender is what binds the two without asking them to
+// configure the same thing twice. Nil when none matches, which the gate then
+// refuses with its own reason.
+func (s *Server) otpTemplate(ctx context.Context, identity store.Identity,
+	senderID uuid.UUID, body string) *uuid.UUID {
+
+	approved := "approved"
+	templates, _, err := store.ListTemplates(ctx, s.DB, identity,
+		store.CatalogueFilter{Status: &approved, Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for _, template := range templates {
+		if template.SenderID == senderID && template.Body != nil &&
+			messaging.MatchesTemplate(*template.Body, body) {
+			id := template.ID
+			return &id
+		}
+	}
+	return nil
 }
 
 // CheckVerification applies one guess.

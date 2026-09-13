@@ -525,3 +525,52 @@ func ListCancelledRecipients(ctx context.Context, pool *pgxpool.Pool, id Identit
 	}
 	return out, total, nil
 }
+
+// DueCampaign names a scheduled campaign whose send time has passed.
+type DueCampaign struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+}
+
+// DueScheduledCampaigns finds due campaigns across every tenant, oldest first.
+// operator must be the operator pool: this is a cross-tenant read.
+func DueScheduledCampaigns(ctx context.Context, operator *pgxpool.Pool,
+	now time.Time, limit int) ([]DueCampaign, error) {
+
+	rows, err := operator.Query(ctx, `SELECT id, tenant_id FROM campaigns
+		WHERE status = 'scheduled' AND scheduled_at <= $1
+		ORDER BY scheduled_at LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: due scheduled campaigns: %w", err)
+	}
+	defer rows.Close()
+	var due []DueCampaign
+	for rows.Next() {
+		var campaign DueCampaign
+		if err := rows.Scan(&campaign.ID, &campaign.TenantID); err != nil {
+			return nil, err
+		}
+		due = append(due, campaign)
+	}
+	return due, rows.Err()
+}
+
+// ClaimScheduledCampaign moves a scheduled campaign to queued, reporting false
+// when it is no longer scheduled: paused, cancelled, or claimed by another
+// instance a moment earlier. The conditional update is what stops two
+// schedulers sending the same campaign twice.
+func ClaimScheduledCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID) (bool, error) {
+
+	claimed := false
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE campaigns SET status = 'queued', updated_at = now()
+			WHERE id = $1 AND status = 'scheduled'`, campaignID)
+		claimed = tag.RowsAffected() == 1
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: claim scheduled campaign: %w", err)
+	}
+	return claimed, nil
+}

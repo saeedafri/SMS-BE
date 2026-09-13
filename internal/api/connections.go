@@ -411,11 +411,8 @@ func (s *Server) TestConnection(ctx context.Context, request gen.TestConnectionR
 		return nil, err
 	}
 
-	// Reachability only. The SMPP client does not exist yet, so this reports
-	// whether the operator's gateway accepts a TCP connection on the configured
-	// host and port — honestly labelled as that rather than claiming a bind it
-	// did not perform. It must never change status: proving a bind works and
-	// putting live traffic on it stay two separate decisions.
+	// A real bind and unbind. It must never change status: proving a bind works
+	// and putting live traffic on it stay two separate decisions.
 	result, health, lastError := s.probeConnection(ctx, current)
 	boundAt := (*time.Time)(nil)
 	if health == "bound" {
@@ -483,10 +480,12 @@ func (s *Server) probeConnection(ctx context.Context, c store.Connection) (
 		// The operator reads this, so it names the address and the failure
 		// without leaking anything about the credential.
 		reason := fmt.Sprintf("Could not bind to %s: %v", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)), err)
-		return gen.ConnectionTestResult{Ok: false, Message: reason}, "error", &reason
+		return gen.ConnectionTestResult{Ok: false, Message: reason,
+			Status: gen.ConnectionHealthStatus("error"), TestedAt: time.Now().UTC()}, "error", &reason
 	}
 	message := fmt.Sprintf("Bound to %s as %s and unbound again.", config.Addr, c.SystemID)
-	return gen.ConnectionTestResult{Ok: true, Message: message}, "bound", nil
+	return gen.ConnectionTestResult{Ok: true, Message: message,
+		Status: gen.ConnectionHealthStatus("bound"), TestedAt: time.Now().UTC()}, "bound", nil
 }
 
 // smppConfig turns a stored connection into a bind, decrypting the password.
@@ -506,7 +505,8 @@ func (s *Server) smppConfig(c store.Connection) (connector.SMPPConfig, error) {
 		ConnectionID: c.ID.String(), Carrier: c.Carrier,
 		Addr:     connector.SMPPAddr(c.Host, c.Port),
 		SystemID: c.SystemID, Password: password, SystemType: systemType,
-		MaxTPS: c.MaxTps, WindowSize: c.WindowSize,
+		BindType: c.BindType,
+		MaxTPS:   c.MaxTps, WindowSize: c.WindowSize,
 		EnquireLink: time.Duration(c.EnquireLinkSeconds) * time.Second,
 		Rebind:      time.Duration(c.ReconnectBackoffSeconds) * time.Second,
 	}, nil
@@ -558,4 +558,3 @@ func (s *Server) ReloadSMPPBinds(ctx context.Context) error {
 	}
 	return nil
 }
-

@@ -3,6 +3,7 @@ package compliance
 import (
 	"regexp"
 	"strings"
+	"time"
 )
 
 // shortenerHosts is not exhaustive and is not meant to be a complete defence —
@@ -119,4 +120,34 @@ func findObject(objects []RegistrationObject, key string) (RegistrationObject, b
 		}
 	}
 	return RegistrationObject{}, false
+}
+
+// indiaTime is IST. A fixed zone rather than LoadLocation, so a server without
+// tzdata cannot silently fall back to UTC and move the window by five and a
+// half hours.
+var indiaTime = time.FixedZone("IST", 5*3600+1800)
+
+// PromotionalAllowedAt reports whether promotional traffic to country may be
+// sent at t. India permits it only 10:00–21:00 IST; operators drop anything
+// outside that. Countries without the rule always allow it.
+func PromotionalAllowedAt(country string, t time.Time) bool {
+	if country != "IN" {
+		return true
+	}
+	hour := t.In(indiaTime).Hour()
+	return hour >= 10 && hour < 21
+}
+
+// NextPromotionalOpening is when promotional traffic to country may next be
+// sent, t itself when it already may.
+func NextPromotionalOpening(country string, t time.Time) time.Time {
+	if PromotionalAllowedAt(country, t) {
+		return t
+	}
+	local := t.In(indiaTime)
+	opening := time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, indiaTime)
+	if !opening.After(local) {
+		opening = opening.AddDate(0, 0, 1)
+	}
+	return opening.UTC()
 }

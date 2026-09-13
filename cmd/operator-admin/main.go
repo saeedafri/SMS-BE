@@ -19,6 +19,7 @@
 //	operator-admin create ops@company.com "Ops Team" [--role admin]
 //	operator-admin set-password ops@company.com
 //	operator-admin disable ops@company.com
+//	operator-admin credit-wallet owner@customer.com INR 500000.00 UTR123456789
 //
 // The password is never taken as an argument. It is read from the terminal
 // without echo, because an argument is visible in `ps`, in shell history, and
@@ -40,6 +41,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/platform/config"
+	"github.com/saeedafri/sms-be/internal/store"
 )
 
 const minOperatorPassword = 12
@@ -59,6 +61,7 @@ func usage() error {
   operator-admin set-password <email>
   operator-admin disable <email>
   operator-admin enable <email>
+  operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
 
 The password is prompted for, never passed as an argument.
 `)
@@ -110,9 +113,105 @@ func run() error {
 			return usage()
 		}
 		return setEnabled(ctx, pool, os.Args[2], true)
+	case "credit-wallet":
+		if len(os.Args) < 6 {
+			return usage()
+		}
+		return creditWallet(ctx, pool, os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	default:
 		return usage()
 	}
+}
+
+// creditWallet books a bank transfer into a customer's wallet.
+//
+// The only way money enters a wallet until a payment provider is configured.
+// The bank reference is written into the ledger entry and a reference already
+// booked is refused, so a transfer run twice by mistake cannot be credited
+// twice. The operator confirms the tenant and amount on a terminal first.
+func creditWallet(ctx context.Context, pool *pgxpool.Pool,
+	email, currency, amount, reference string) error {
+
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	reference = strings.TrimSpace(reference)
+	minor, err := parseAmount(amount)
+	if err != nil {
+		return err
+	}
+	if len(reference) < 6 {
+		return errors.New("give the bank's transfer reference (UTR), at least 6 characters")
+	}
+
+	var tenantID uuid.UUID
+	var tenantName string
+	if err := pool.QueryRow(ctx, `
+		SELECT t.id, t.name FROM users u
+		JOIN tenant_users tu ON tu.user_id = u.id AND tu.role = 'owner'
+		JOIN tenants t ON t.id = tu.tenant_id
+		WHERE u.email = $1`, strings.TrimSpace(email)).Scan(&tenantID, &tenantName); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%s owns no account", email)
+		}
+		return err
+	}
+
+	description := "Bank transfer " + reference
+	var booked bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM wallet_ledger
+		WHERE tenant_id = $1 AND description = $2)`, tenantID, description).Scan(&booked); err != nil {
+		return err
+	}
+	if booked {
+		return fmt.Errorf("reference %s is already credited to %s", reference, tenantName)
+	}
+
+	if !confirm(fmt.Sprintf("Credit %s %s to %q (%s), reference %s?",
+		currency, amount, tenantName, tenantID, reference)) {
+		return errors.New("not confirmed; nothing credited")
+	}
+	entry, err := store.AppendLedgerEntry(ctx, pool, store.Identity{TenantID: tenantID},
+		store.LedgerEntry{Currency: currency, Type: "topup", AmountMinor: minor,
+			Description: description})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("credited; %s balance is now %d minor units (entry %s)\n",
+		currency, entry.BalanceAfterMinor, entry.ID)
+	return nil
+}
+
+// parseAmount reads "5000" or "5000.50" into minor units, refusing anything
+// that would round.
+func parseAmount(amount string) (int64, error) {
+	whole, fraction, _ := strings.Cut(strings.TrimSpace(amount), ".")
+	if len(fraction) > 2 {
+		return 0, errors.New("amount has more than two decimal places")
+	}
+	fraction += strings.Repeat("0", 2-len(fraction))
+	var minor int64
+	for _, r := range whole + fraction {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("amount %q is not a number", amount)
+		}
+		minor = minor*10 + int64(r-'0')
+		if minor > 1_000_000_000_00 {
+			return 0, errors.New("amount is implausibly large")
+		}
+	}
+	if minor <= 0 {
+		return 0, errors.New("amount must be positive")
+	}
+	return minor, nil
+}
+
+func confirm(question string) bool {
+	if !term.IsTerminal(int(syscall.Stdin)) {
+		return false
+	}
+	fmt.Fprint(os.Stderr, question+" Type yes: ")
+	var answer string
+	_, _ = fmt.Scanln(&answer)
+	return answer == "yes"
 }
 
 func roleFlag(args []string) string {

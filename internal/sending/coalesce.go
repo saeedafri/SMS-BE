@@ -291,6 +291,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			// the batched path. A gate that is weaker when messages arrive in
 			// company is not a gate.
 			RegisteredTemplateRequired: registeredTemplateRequired(plan.sender.Country),
+			OutsidePromotionalWindow:   outsidePromotionalWindow(plan.sender.Country, plan.template),
 			TemplateBody:               templateBody(plan.template),
 			Body:                       plan.pending.request.Body,
 			// The balance already committed to earlier messages in this batch is
@@ -619,6 +620,7 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 				Carrier:           plan.carrier,
 				DLTEntityID:       entityID,
 				DLTTemplateID:     dltTemplateID,
+				Priority:          plan.pending.request.Priority,
 				CarrierTemplateID: carrierTemplateID,
 				AgentID:           plan.agentID,
 				TemplateVariables: TemplateVariables(plan.template,

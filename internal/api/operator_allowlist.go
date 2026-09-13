@@ -1,9 +1,14 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
+
+	"github.com/saeedafri/sms-be/internal/store"
 )
 
 // ipAllowlist restricts the operator console to known networks.
@@ -99,4 +104,35 @@ func (s *Server) restrictOperatorNetwork(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// keyNetworkAllowed reports whether an API key for this tenant and environment
+// may be used from address. An environment with no entries is unrestricted,
+// which is what the developer screen promises.
+func (s *Server) keyNetworkAllowed(ctx context.Context, identity store.Identity,
+	environment, address string) (bool, error) {
+
+	key := ipAllowlistKey(identity.TenantID, environment)
+	list, cached := s.Hot.Get(key)
+	if !cached {
+		entries, err := store.ListIPAllowlist(ctx, s.DB, identity, environment)
+		if err != nil {
+			return false, err
+		}
+		cidrs := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			cidrs = append(cidrs, entry.CIDR)
+		}
+		parsed, err := ParseIPAllowlist(strings.Join(cidrs, ","))
+		if err != nil {
+			return false, err
+		}
+		list = parsed
+		s.Hot.Put(key, parsed)
+	}
+	return list.(*ipAllowlist).permits(address), nil
+}
+
+func ipAllowlistKey(tenantID uuid.UUID, environment string) string {
+	return "ip-allowlist:" + tenantID.String() + ":" + environment
 }

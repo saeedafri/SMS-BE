@@ -306,6 +306,18 @@ func run() error {
 		func(name string) { metrics.RecordIncident("worker_panic", name) },
 		apiServer.ReloadSMPPBinds)
 
+	// Launches scheduled campaigns when their time comes. Without it a campaign
+	// with a send time was saved as scheduled and never sent.
+	go resilience.Supervise(ctx, "campaign-scheduler", 30*time.Second, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.LaunchDueCampaigns)
+
+	// Issues last month's GST invoices early in each new month. Before this,
+	// invoices existed only in the demo seed.
+	go resilience.Supervise(ctx, "invoicing", time.Hour, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.IssueMonthlyInvoices)
+
 	errs := make(chan error, 1)
 	go func() {
 		logger.Info("control-api listening", "addr", cfg.ControlAPIAddr)

@@ -80,6 +80,8 @@ jobs:
           $SCP out/goose       "$USER@$HOST:/usr/local/bin/goose.new"
           $SCP -r db scripts   "$USER@$HOST:/opt/relay/"
           $SCP deploy/relay-api.service "$USER@$HOST:/etc/systemd/system/relay-api.service"
+          $SCP deploy/relay-backup.service deploy/relay-backup.timer "$USER@$HOST:/etc/systemd/system/"
+          $SCP deploy/relay-backup.sh "$USER@$HOST:/opt/relay/relay-backup.sh"
 
       - name: Migrate, swap, verify, roll back on failure
         env:
@@ -125,6 +127,8 @@ jobs:
           mv /opt/relay/seed-demo.new  /opt/relay/seed-demo
           mv /opt/relay/operator-admin.new /opt/relay/operator-admin
           systemctl daemon-reload
+          chmod 755 /opt/relay/relay-backup.sh
+          systemctl enable --now relay-backup.timer
           systemctl restart relay-api
           echo "::endgroup::"
 

@@ -122,6 +122,10 @@ type SendRequest struct {
 	// plain body; required on RCS, where the carrier holds the template and we
 	// send it nothing but the id and these values.
 	Variables map[string]string
+
+	// Priority puts the message ahead of bulk traffic on a shared operator bind.
+	// Set for OTPs, which are useless if they arrive after the user gives up.
+	Priority bool
 }
 
 // SendResult is what happened.
@@ -257,6 +261,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
 		RegisteredTemplateRequired: registeredTemplateRequired(sender.Country),
+		OutsidePromotionalWindow:   outsidePromotionalWindow(sender.Country, template),
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
 		// Required only where a real RCS gateway is configured. With none, the
@@ -330,6 +335,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
 		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
 		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
+		Priority:          request.Priority,
 		CarrierTemplateID: carrierTemplateID,
 		AgentID:           agentID,
 		TemplateVariables: TemplateVariables(template, request.Variables),
@@ -666,6 +672,14 @@ func refusalCurrency(identity store.Identity, country string) string {
 func registeredTemplateRequired(country string) bool {
 	regime, known := compliance.For(country)
 	return known && regime.RequiresRegisteredTemplate()
+}
+
+// outsidePromotionalWindow is a template DLT registered as promotional, sent to
+// a country at an hour its regulator forbids promotional traffic. Transactional,
+// service and OTP traffic are exempt, so only the template's DLT category counts.
+func outsidePromotionalWindow(country string, template store.Template) bool {
+	return template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL" &&
+		!compliance.PromotionalAllowedAt(country, time.Now())
 }
 
 // templateBody is the registered text a submitted body must instantiate.

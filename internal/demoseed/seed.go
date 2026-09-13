@@ -35,11 +35,14 @@ const (
 	tenantID = TenantID
 	// UserID is exported for the same reason as TenantID: the role hook needs a
 	// subject when a spec calls it without a session.
-	UserID       = "99999999-9999-9999-9999-999999999999"
-	userID       = UserID
-	operatorID   = "0b0e7a10-0000-4000-8000-00000000000b"
-	smsID        = "11111111-1111-1111-1111-111111111111"
-	rcsID        = "22222222-2222-2222-2222-222222222222"
+	UserID     = "99999999-9999-9999-9999-999999999999"
+	userID     = UserID
+	operatorID = "0b0e7a10-0000-4000-8000-00000000000b"
+	smsID      = "11111111-1111-1111-1111-111111111111"
+	rcsID      = "22222222-2222-2222-2222-222222222222"
+	// acmeAgentID matches the mock's Acme Orders agent in
+	// ../SMS-UI/src/mocks/rcs-agents-state.ts.
+	acmeAgentID  = "a0000000-0000-4000-8000-000000000001"
 	pendingSMSID = "33333333-4444-4444-4444-444444444444"
 	whatsappID   = "55555555-5555-5555-5555-555555555555"
 	emailID      = "66666666-6666-6666-6666-666666666666"
@@ -425,6 +428,38 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		   NULL, NULL, NULL, '2026-08-02T09:00:00Z')`,
 		smsID, rcsID, pendingSMSID, whatsappID, emailID, voiceID, tenantID); err != nil {
 		return fmt.Errorf("seed senders: %w", err)
+	}
+
+	// ACMERT's RCS header sends under Acme Orders. Without an agent it could
+	// never register a template with a carrier, and an agent cannot be given to
+	// a sender after registration, so the seed has to set it here.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rcs_agents (id, tenant_id, display_name, description, primary_color,
+		                        phone_number, email, website, privacy_policy_url,
+		                        terms_of_service_url, use_case, country, registration_id,
+		                        status, verification_status, verification_contact_name,
+		                        verification_contact_email, verification_contact_phone,
+		                        verification_submitted_at, verification_reviewed_at)
+		VALUES ($1, $2, 'Acme Orders', 'Order confirmations, dispatch and delivery updates.',
+		        '#1F6FEB', '+919876543210', 'orders@acme.example.com',
+		        'https://acme.example.com', 'https://acme.example.com/privacy',
+		        'https://acme.example.com/terms', 'TRANSACTIONAL', 'IN',
+		        '1707161234567890123', 'live', 'approved', 'Priya Nair',
+		        'priya@acme.example.com', '+919876543211',
+		        '2026-06-20T09:00:00Z', '2026-06-24T11:30:00Z')`,
+		acmeAgentID, tenantID); err != nil {
+		return fmt.Errorf("seed acme agent: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rcs_agent_carrier_launches
+		    (agent_id, tenant_id, carrier, status, carrier_agent_id, submitted_at)
+		VALUES ($1, $2, 'AIRTEL', 'approved', 'airtel-agent-acme-orders', '2026-06-25T09:00:00Z')`,
+		acmeAgentID, tenantID); err != nil {
+		return fmt.Errorf("seed acme agent launch: %w", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE sender_ids SET rcs_agent_id = $1 WHERE id = $2`, acmeAgentID, rcsID); err != nil {
+		return fmt.Errorf("attach acme agent: %w", err)
 	}
 
 	// The wallet is funded through the ledger rather than by setting a balance

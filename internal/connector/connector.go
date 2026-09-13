@@ -62,6 +62,10 @@ type Submission struct {
 	DLTEntityID   string
 	DLTTemplateID string
 
+	// Priority marks traffic that must not wait behind bulk sends: OTPs. A
+	// connector that shares capacity between messages serves these first.
+	Priority bool
+
 	// TTLSeconds stops delivery attempts after a while and revokes the message.
 	// Zero means the template's own TTL applies, or none. A send-time value
 	// overrides the template's on both carriers.

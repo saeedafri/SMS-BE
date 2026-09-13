@@ -47,6 +47,9 @@ func TestGateRefusesEachViolation(t *testing.T) {
 			i.RCSAgentRequired = true
 			i.RCSAgentResolved = false
 		}, messaging.ErrRCSAgentNotResolved},
+		{"promotional outside the permitted hours", func(i *messaging.GateInput) {
+			i.OutsidePromotionalWindow = true
+		}, messaging.ErrOutsidePromotionalWindow},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

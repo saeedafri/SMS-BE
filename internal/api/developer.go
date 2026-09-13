@@ -566,6 +566,7 @@ func (s *Server) AddIpAllowlistEntry(ctx context.Context, request gen.AddIpAllow
 	if err != nil {
 		return nil, err
 	}
+	s.Hot.Forget(ipAllowlistKey(identity.TenantID, entry.Environment))
 	return gen.AddIpAllowlistEntry201JSONResponse(gen.IpAllowlistEntry{
 		Id: entry.ID, Environment: gen.Environment(entry.Environment),
 		Cidr: entry.CIDR, Label: entry.Label, CreatedAt: entry.CreatedAt,
@@ -593,6 +594,9 @@ func (s *Server) RemoveIpAllowlistEntry(ctx context.Context, request gen.RemoveI
 			errorBody(codeNotFound, "No such allowlist entry.")), nil
 	}
 	err := store.DeleteIPAllowEntry(ctx, s.DB, identity, entryID)
+	for _, environment := range validEnvironments {
+		s.Hot.Forget(ipAllowlistKey(identity.TenantID, environment))
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.RemoveIpAllowlistEntry404JSONResponse(
 			errorBody(codeNotFound, "No such allowlist entry.")), nil

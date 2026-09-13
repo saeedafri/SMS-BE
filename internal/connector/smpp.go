@@ -40,10 +40,14 @@ type SMPPConfig struct {
 	SystemID     string
 	Password     string
 	SystemType   string
-	MaxTPS       int
-	WindowSize   int
-	EnquireLink  time.Duration
-	Rebind       time.Duration
+	// BindType is transmitter, receiver or transceiver; empty means
+	// transceiver. A receiver only takes delivery receipts and is never handed
+	// a message to submit.
+	BindType    string
+	MaxTPS      int
+	WindowSize  int
+	EnquireLink time.Duration
+	Rebind      time.Duration
 }
 
 // DLTChainHash is the value TLV 5122 carries: SHA-256 over the principal
@@ -64,8 +68,18 @@ type SMPPBind struct {
 	chain    []string
 	session  *gosmpp.Session
 	ticker   *time.Ticker
+	stop     chan struct{}
+	stopOnce sync.Once
 	window   chan struct{}
-	onReport func(DeliveryReport)
+	// bulkWindow holds one fewer slot than window, so non-priority traffic can
+	// never occupy every in-flight slot and an OTP always has one to use.
+	bulkWindow chan struct{}
+	// priorityTokens and bulkTokens split the operator's TPS. Each tick goes to
+	// a waiting priority submit first, so a campaign filling the bind delays an
+	// OTP by at most one tick.
+	priorityTokens chan struct{}
+	bulkTokens     chan struct{}
+	onReport       func(DeliveryReport)
 
 	pending sync.Map // sequence number -> chan pdu.PDU
 	bound   atomic.Bool
@@ -88,16 +102,20 @@ func DialSMPP(config SMPPConfig, chain []string, onReport func(DeliveryReport)) 
 	}
 	b := &SMPPBind{
 		config: config, chain: chain, onReport: onReport,
-		ticker: time.NewTicker(time.Second / time.Duration(config.MaxTPS)),
-		window: make(chan struct{}, config.WindowSize),
+		ticker:         time.NewTicker(time.Second / time.Duration(config.MaxTPS)),
+		stop:           make(chan struct{}),
+		window:         make(chan struct{}, config.WindowSize),
+		bulkWindow:     make(chan struct{}, max(config.WindowSize-1, 1)),
+		priorityTokens: make(chan struct{}),
+		bulkTokens:     make(chan struct{}),
 	}
 	auth := gosmpp.Auth{SMSC: config.Addr, SystemID: config.SystemID,
 		Password: config.Password, SystemType: config.SystemType}
-	session, err := gosmpp.NewSession(gosmpp.TRXConnector(gosmpp.NonTLSDialer, auth),
+	session, err := gosmpp.NewSession(smppConnector(config.BindType, auth),
 		gosmpp.Settings{
-			EnquireLink: config.EnquireLink,
-			ReadTimeout: 3*config.EnquireLink + 10*time.Second,
-			OnAllPDU:    b.handle,
+			EnquireLink:      config.EnquireLink,
+			ReadTimeout:      3*config.EnquireLink + 10*time.Second,
+			OnAllPDU:         b.handle,
 			OnReceivingError: func(err error) { b.lastErr.Store(err.Error()) },
 			OnRebindingError: func(err error) { b.lastErr.Store(err.Error()) },
 			OnClosed:         func(gosmpp.State) { b.bound.Store(false) },
@@ -105,11 +123,50 @@ func DialSMPP(config SMPPConfig, chain []string, onReport func(DeliveryReport)) 
 		}, config.Rebind)
 	if err != nil {
 		b.ticker.Stop()
+		b.stopOnce.Do(func() { close(b.stop) })
 		return nil, fmt.Errorf("smpp %s bind %s: %w", config.Carrier, config.Addr, err)
 	}
 	b.session = session
 	b.bound.Store(true)
+	go b.issueTokens()
 	return b, nil
+}
+
+// issueTokens turns each TPS tick into one permission to submit, offered to a
+// waiting priority submit before anyone else.
+func (b *SMPPBind) issueTokens() {
+	for {
+		select {
+		case <-b.ticker.C:
+		case <-b.stop:
+			return
+		}
+		select {
+		case b.priorityTokens <- struct{}{}:
+			continue
+		default:
+		}
+		select {
+		case b.priorityTokens <- struct{}{}:
+		case b.bulkTokens <- struct{}{}:
+		case <-b.stop:
+			return
+		}
+	}
+}
+
+// smppConnector opens the session the connection is configured for. Some
+// operators issue a transmitter and a receiver as separate binds rather than
+// one transceiver, and a bind of the wrong kind is refused at login.
+func smppConnector(bindType string, auth gosmpp.Auth) gosmpp.Connector {
+	switch bindType {
+	case "transmitter":
+		return gosmpp.TXConnector(gosmpp.NonTLSDialer, auth)
+	case "receiver":
+		return gosmpp.RXConnector(gosmpp.NonTLSDialer, auth)
+	default:
+		return gosmpp.TRXConnector(gosmpp.NonTLSDialer, auth)
+	}
 }
 
 // ProbeSMPP proves a bind is accepted — credentials included — and unbinds.
@@ -128,6 +185,7 @@ func ProbeSMPP(config SMPPConfig) error {
 
 func (b *SMPPBind) Close() error {
 	b.ticker.Stop()
+	b.stopOnce.Do(func() { close(b.stop) })
 	b.bound.Store(false)
 	return b.session.Close()
 }
@@ -198,7 +256,7 @@ func (b *SMPPBind) submitOne(ctx context.Context, s Submission) Receipt {
 		return receipt
 	}
 	for i, part := range parts {
-		resp, err := b.exchange(ctx, part)
+		resp, err := b.exchange(ctx, part, s.Priority)
 		if err != nil {
 			receipt.ErrorCode = "SUBMIT_TIMEOUT"
 			return receipt
@@ -216,7 +274,17 @@ func (b *SMPPBind) submitOne(ctx context.Context, s Submission) Receipt {
 	return receipt
 }
 
-func (b *SMPPBind) exchange(ctx context.Context, part *pdu.SubmitSM) (pdu.PDU, error) {
+func (b *SMPPBind) exchange(ctx context.Context, part *pdu.SubmitSM, priority bool) (pdu.PDU, error) {
+	tokens := b.priorityTokens
+	if !priority {
+		tokens = b.bulkTokens
+		select {
+		case b.bulkWindow <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		defer func() { <-b.bulkWindow }()
+	}
 	select {
 	case b.window <- struct{}{}:
 	case <-ctx.Done():
@@ -224,7 +292,7 @@ func (b *SMPPBind) exchange(ctx context.Context, part *pdu.SubmitSM) (pdu.PDU, e
 	}
 	defer func() { <-b.window }()
 	select {
-	case <-b.ticker.C:
+	case <-tokens:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -361,13 +429,15 @@ func (r *SMPPRouter) Health(ctx context.Context) Health {
 
 func (r *SMPPRouter) Submit(ctx context.Context, submissions []Submission) ([]Receipt, error) {
 	r.mu.RLock()
-	binds := r.binds
+	binds, operators := r.binds, len(r.byID)
 	r.mu.RUnlock()
 
 	grouped := map[Connector][]Submission{}
 	var refused []Receipt
 	for _, s := range submissions {
-		if s.Channel != "SMS" || len(binds) == 0 {
+		// Any operator bound, receivers included, means a real deployment: an
+		// SMS with no bind that can submit it is refused, never faked.
+		if s.Channel != "SMS" || operators == 0 {
 			grouped[r.Fallback] = append(grouped[r.Fallback], s)
 			continue
 		}
@@ -427,6 +497,10 @@ func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig, chain []string,
 
 	byCarrier := map[string]*SMPPBind{}
 	for _, bind := range next {
+		// A receiver delivers receipts through its session and cannot submit.
+		if bind.config.BindType == "receiver" {
+			continue
+		}
 		byCarrier[bind.config.Carrier] = bind
 	}
 	r.mu.Lock()

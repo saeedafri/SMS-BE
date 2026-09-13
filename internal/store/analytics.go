@@ -630,3 +630,53 @@ func SetScheduledReportPaused(ctx context.Context, pool *pgxpool.Pool, id Identi
 	}
 	return report, nil
 }
+
+// BilledUsage is one tenant's delivered traffic on one channel and country in
+// a billing period.
+type BilledUsage struct {
+	TenantID     uuid.UUID
+	Channel      string
+	Country      string
+	Currency     string
+	MessageCount int64
+	AmountMinor  int64
+}
+
+// BilledUsageBetween totals what every tenant was charged for in [from, to),
+// in one pass. Delivered or read only, the same rule as UsageByChannel: an
+// undelivered message is refunded and must not appear on an invoice.
+func BilledUsageBetween(ctx context.Context, conn driver.Conn,
+	from, to time.Time) ([]BilledUsage, error) {
+
+	rows, err := conn.Query(ctx, `
+		SELECT tenant_id, channel, country, currency,
+		       countIf(final_status IN ('delivered', 'read')) AS message_count,
+		       sumIf(cost, final_status IN ('delivered', 'read')) AS amount
+		FROM (
+			SELECT tenant_id, channel, country, currency, id,
+			       argMax(status, version) AS final_status,
+			       argMax(cost_minor, version) AS cost
+			FROM messages
+			WHERE created_at >= ? AND created_at < ?
+			GROUP BY tenant_id, channel, country, currency, id
+		)
+		GROUP BY tenant_id, channel, country, currency
+		HAVING message_count > 0
+		ORDER BY tenant_id, channel, country`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("store: billed usage: %w", err)
+	}
+	defer rows.Close()
+	var out []BilledUsage
+	for rows.Next() {
+		var usage BilledUsage
+		var count uint64
+		if err := rows.Scan(&usage.TenantID, &usage.Channel, &usage.Country,
+			&usage.Currency, &count, &usage.AmountMinor); err != nil {
+			return nil, fmt.Errorf("store: scan billed usage: %w", err)
+		}
+		usage.MessageCount = int64(count)
+		out = append(out, usage)
+	}
+	return out, rows.Err()
+}

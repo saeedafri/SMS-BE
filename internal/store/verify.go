@@ -193,6 +193,39 @@ func CreateVerification(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	return verification, nil
 }
 
+// SetVerificationDelivery records the channel the code actually went out on and
+// what it cost, which differ from the first configured channel after a fallback.
+func SetVerificationDelivery(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	verificationID uuid.UUID, channel string, costMinor int64) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE verifications SET channel = $2, cost_minor = $3 WHERE id = $1`,
+			verificationID, channel, costMinor)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: set verification delivery: %w", err)
+	}
+	return nil
+}
+
+// ExpireVerification kills a challenge whose code never reached anyone.
+func ExpireVerification(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	verificationID uuid.UUID) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE verifications SET status = 'expired', expires_at = now() WHERE id = $1`,
+			verificationID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: expire verification: %w", err)
+	}
+	return nil
+}
+
 // GetVerificationForUpdate locks the row so two simultaneous check requests
 // cannot each read the same attempt count and both be allowed. Without the
 // lock the attempt limit is advisory, and an attacker who fires guesses in

@@ -134,7 +134,12 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 			strings.TrimSpace(*request.Body.CarrierTemplateId))
 	}
 
-	if template.CarrierTemplateID != nil {
+	// Refused while the carrier is reviewing or has approved it. A rejection
+	// is different: the customer fixes the template and sends it back, and the
+	// new submission replaces the rejected registration. There is no portal
+	// code to attach instead, because the carrier issued its only code through
+	// the API and that is the one it rejected.
+	if template.CarrierTemplateID != nil && template.CarrierStatus != "rejected" {
 		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeValidation,
 			"This template is already registered with a carrier ("+template.CarrierStatus+
 				"). Attach a different code to replace it.")), nil
@@ -197,7 +202,7 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 
 	saved, err := store.SaveCarrierTemplateRegistration(ctx, s.DB, identity, template.ID,
 		registrar.Vendor(), registration.CarrierTemplateID, registration.Status,
-		registration.RejectionReason)
+		registration.RejectionReason, true)
 	if errors.Is(err, store.ErrConflict) {
 		// The carrier now holds a template we could not record, same as the
 		// error path below — logged for the same reason: the id is recoverable
@@ -249,7 +254,7 @@ func (s *Server) attachCarrierTemplate(ctx context.Context, identity store.Ident
 	// at the carrier; nothing is sent until a send, and the send checks that
 	// this vendor is the carrier the message actually goes through.
 	saved, err := store.SaveCarrierTemplateRegistration(ctx, s.DB, identity, template.ID,
-		vendor, carrierTemplateID, connector.RCSTemplateApproved, "")
+		vendor, carrierTemplateID, connector.RCSTemplateApproved, "", false)
 	if errors.Is(err, store.ErrConflict) {
 		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeConflict,
 			"That carrier template code is already attached to another template.")), nil

@@ -810,3 +810,61 @@ func applyAutoRecharge(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID,
 		fmt.Sprintf("Auto-recharge triggered (balance fell below %d minor units)", threshold))
 	return err
 }
+
+// IssueInvoice records a tenant's invoice for one currency and period with its
+// lines, unless one already exists for that period, in which case it reports
+// false and writes nothing. That check is what makes the monthly run safe to
+// repeat: a restart or a second tick never bills a month twice.
+func IssueInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	invoice Invoice, lines []InvoiceLine) (bool, error) {
+
+	issued := false
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		// Serialises two runs for the same tenant, so the existence check and
+		// the insert cannot interleave.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('invoice:' || $1::text))`,
+			id.TenantID); err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices
+			WHERE currency = $1 AND period_start = $2)`,
+			invoice.Currency, invoice.PeriodStart).Scan(&exists); err != nil || exists {
+			return err
+		}
+		var invoiceID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO invoices (tenant_id, currency, period_start, period_end, status,
+			    subtotal_minor, tax_rate_percent, tax_minor, total_minor)
+			VALUES ($1,$2,$3,$4,'issued',$5,$6,$7,$8) RETURNING id`,
+			id.TenantID, invoice.Currency, invoice.PeriodStart, invoice.PeriodEnd,
+			invoice.SubtotalMinor, invoice.TaxRatePercent, invoice.TaxMinor,
+			invoice.TotalMinor).Scan(&invoiceID); err != nil {
+			return err
+		}
+		for _, line := range lines {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO invoice_line_items (invoice_id, tenant_id, description,
+				    quantity, unit_minor, amount_minor)
+				VALUES ($1,$2,$3,$4,$5,$6)`,
+				invoiceID, id.TenantID, line.Description, line.Quantity,
+				line.UnitMinor, line.AmountMinor); err != nil {
+				return err
+			}
+		}
+		issued = true
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: issue invoice: %w", err)
+	}
+	return issued, nil
+}
+
+// InvoiceLine is one row written to an invoice.
+type InvoiceLine struct {
+	Description string
+	Quantity    int64
+	UnitMinor   int64
+	AmountMinor int64
+}

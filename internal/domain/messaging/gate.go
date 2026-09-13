@@ -54,6 +54,12 @@ var (
 	// carrier's name is the mistake ErrCarrierTemplateNotApproved exists to
 	// avoid, one field over: it sends the customer to argue with Airtel about
 	// an agent Airtel has never been asked to review.
+	// ErrOutsidePromotionalWindow is promotional traffic outside the hours the
+	// regulator allows it. Operators drop it rather than queue it, so refusing
+	// here is the only way the customer hears why.
+	ErrOutsidePromotionalWindow = errors.New(
+		"messaging: promotional messages may only be sent during the permitted hours")
+
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
 )
@@ -99,6 +105,10 @@ type GateInput struct {
 	// between two messages when a carrier suspends an agent.
 	RCSAgentRequired bool
 	RCSAgentResolved bool
+
+	// OutsidePromotionalWindow is a promotional message sent when its
+	// destination forbids promotional traffic.
+	OutsidePromotionalWindow bool
 }
 
 // Check runs the gate. Order matters and is deliberate: compliance failures
@@ -162,6 +172,9 @@ func Check(input GateInput) error {
 	if input.RCSAgentRequired && !input.RCSAgentResolved {
 		return ErrRCSAgentNotResolved
 	}
+	if input.OutsidePromotionalWindow {
+		return ErrOutsidePromotionalWindow
+	}
 	// Suppression is checked before balance so an opted-out recipient is never
 	// billed for, not even momentarily.
 	if input.Suppressed {
@@ -190,7 +203,7 @@ func IsRefusal(err error) bool {
 		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
 		ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 		ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
-		ErrRCSAgentNotResolved,
+		ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
 	} {
 		if errors.Is(err, refusal) {
 			return true
@@ -219,6 +232,8 @@ func GateFailureCode(err error) string {
 		return "rcs_agent_not_resolved"
 	case errors.Is(err, ErrTemplateBodyMismatch):
 		return "template_body_mismatch"
+	case errors.Is(err, ErrOutsidePromotionalWindow):
+		return "outside_promotional_window"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
 	case errors.Is(err, ErrInsufficientFunds):

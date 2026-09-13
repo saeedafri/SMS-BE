@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Relay Postgres backup nightly
+
+[Timer]
+# 02:30 server time, away from the day's traffic. Persistent catches up a run
+# missed while the machine was off.
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

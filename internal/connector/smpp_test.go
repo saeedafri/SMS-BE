@@ -24,6 +24,7 @@ type fakeSMSC struct {
 
 	mu      sync.Mutex
 	submits [][]byte
+	binds   []uint32 // command_id of every bind, in arrival order
 	nextID  int
 	refuse  bool
 }
@@ -70,7 +71,12 @@ func (f *fakeSMSC) serve(conn net.Conn) {
 			return
 		}
 		switch v := p.(type) {
-		case *pdu.BindRequest, *pdu.EnquireLink:
+		case *pdu.BindRequest:
+			f.mu.Lock()
+			f.binds = append(f.binds, binary.BigEndian.Uint32(raw[4:8]))
+			f.mu.Unlock()
+			write(v.GetResponse())
+		case *pdu.EnquireLink:
 			write(v.GetResponse())
 		case *pdu.Unbind:
 			write(v.GetResponse())
@@ -262,5 +268,83 @@ func TestTheRouterNeverHandsARealSMSToTheSandbox(t *testing.T) {
 	}
 	if n := len(smsc.sent()); n != 1 {
 		t.Errorf("operator saw %d submit_sm, want exactly the one routable message", n)
+	}
+}
+
+// An OTP submitted while a campaign has the bind saturated goes next, not after
+// the campaign: at 5 TPS twenty bulk messages take four seconds, and the OTP
+// must not wait for them.
+func TestAnOTPIsNotQueuedBehindACampaignOnTheSameBind(t *testing.T) {
+	smsc := startFakeSMSC(t)
+	bind, err := DialSMPP(SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
+		Password: "secret", MaxTPS: 5, WindowSize: 2,
+		EnquireLink: 30 * time.Second, Rebind: time.Second},
+		nil, func(DeliveryReport) {})
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	t.Cleanup(func() { _ = bind.Close() })
+
+	bulk := make([]Submission, 20)
+	for i := range bulk {
+		bulk[i] = Submission{MessageID: fmt.Sprint("bulk-", i), Msisdn: "+919820000009",
+			Sender: "ACMERT", Channel: "SMS", Body: "sale"}
+	}
+	go func() { _, _ = bind.Submit(context.Background(), bulk) }()
+	time.Sleep(300 * time.Millisecond)
+
+	started := time.Now()
+	receipts, _ := bind.Submit(context.Background(), []Submission{{MessageID: "otp",
+		Msisdn: "+919820000010", Sender: "ACMERT", Channel: "SMS",
+		Body: "123456 is your code", Priority: true}})
+	if !receipts[0].Accepted {
+		t.Fatalf("otp receipt = %+v", receipts[0])
+	}
+	if waited := time.Since(started); waited > time.Second {
+		t.Errorf("OTP waited %s behind bulk traffic, want under a second", waited)
+	}
+}
+
+// Ask 34 A2. The bind type configured on the connection is the bind that is
+// opened, and a receiver bind is never used to submit.
+func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
+	const (
+		bindReceiver    = 0x00000001
+		bindTransmitter = 0x00000002
+		bindTransceiver = 0x00000009
+	)
+	config := func(smsc *fakeSMSC, bindType string) SMPPConfig {
+		return SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
+			Password: "secret", BindType: bindType, MaxTPS: 100, WindowSize: 4,
+			EnquireLink: 30 * time.Second, Rebind: time.Second}
+	}
+	for bindType, want := range map[string]uint32{
+		"transmitter": bindTransmitter, "receiver": bindReceiver,
+		"transceiver": bindTransceiver, "": bindTransceiver,
+	} {
+		smsc := startFakeSMSC(t)
+		router := &SMPPRouter{Fallback: NewSandbox(0)}
+		if err := router.Sync(map[string]SMPPConfig{"c": config(smsc, bindType)}, nil,
+			func(DeliveryReport) {})["c"]; err != nil {
+			t.Fatalf("%q: bind: %v", bindType, err)
+		}
+		smsc.mu.Lock()
+		binds := append([]uint32(nil), smsc.binds...)
+		smsc.mu.Unlock()
+		if len(binds) != 1 || binds[0] != want {
+			t.Errorf("%q opened %#x, want %#x", bindType, binds, want)
+		}
+
+		got, _ := router.Submit(context.Background(), []Submission{{MessageID: "m",
+			Channel: "SMS", Carrier: "AIRTEL", Country: "IN", Msisdn: "+919820000011",
+			Sender: "ACMERT", Body: "hi", DLTEntityID: "PE", DLTTemplateID: "TPL"}})
+		if bindType == "receiver" {
+			if got[0].Accepted || got[0].ErrorCode != "NO_OPERATOR_BIND" {
+				t.Errorf("receiver-only operator took a submit: %+v", got[0])
+			}
+		} else if !got[0].Accepted {
+			t.Errorf("%q bind refused a submit: %+v", bindType, got[0])
+		}
+		router.Sync(nil, nil, nil)
 	}
 }

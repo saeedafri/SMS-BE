@@ -45,16 +45,22 @@ func TestCodesKeepLeadingZeros(t *testing.T) {
 }
 
 func TestCodesAreNotRepeated(t *testing.T) {
+	// 500 draws from 10^8 codes repeat once by chance about 1 run in 800, so a
+	// single repeat is luck; a source that is not random repeats far more.
 	seen := make(map[string]bool)
+	repeats := 0
 	for i := 0; i < 500; i++ {
 		code, err := verify.GenerateCode(8, false)
 		if err != nil {
 			t.Fatalf("generate: %v", err)
 		}
 		if seen[code] {
-			t.Fatalf("code %q repeated within 500 draws — the source is not random enough", code)
+			repeats++
 		}
 		seen[code] = true
+	}
+	if repeats > 2 {
+		t.Fatalf("%d repeated codes within 500 draws — the source is not random enough", repeats)
 	}
 }
 
