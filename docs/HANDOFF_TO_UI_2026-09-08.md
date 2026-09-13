@@ -215,11 +215,11 @@ On a real campaign the two agree and the shape holds: we launched a 2,500-recipi
 on production, and `cancelled + dispatched == total` with every dispatched row carrying a real
 `messageId` and every cancelled row carrying `null`.
 
-### 7.2 Campaign fan-out did not check per-channel consent — FIXED, `15e1917`
+### 7.2 Campaign fan-out did not check per-channel consent — FIXED, `ba1e2c2`
 
 > **Amended 8 September, after this document was sent.** This section was
 > written as an open defect we were not going to fix without asking. We fixed it
-> twenty-five minutes later, in `15e1917`, and the section stayed as written —
+> twenty-five minutes later, in `ba1e2c2`, and the section stayed as written —
 > so for a day it read as a live compliance hole on an India A2P product. The
 > frontend caught it. **The defect below is closed**; the account of it is kept
 > because the measurement is worth having and because a document that quietly
@@ -244,7 +244,7 @@ mixed list quotes 2 and sends exactly 2, where it had sent 4.
 **Two things it cost, both worth recording.** It introduced a `500` on
 `/v1/campaigns/{id}/recipients` — the reshaped query named two placeholders it
 did not supply — which the full suite missed because every campaign in it had no
-list and returned before building any SQL. Fixed in `de2f306`. And putting the
+list and returned before building any SQL. Fixed in `7ffeba2`. And putting the
 audience rule into that endpoint's `WHERE` put it upstream of where `state` is
 decided, so the endpoint began omitting recipients that demonstrably received a
 message. That is the frontend's ask 28, and it is fixed in the 9 September

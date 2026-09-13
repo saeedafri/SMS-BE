@@ -113,7 +113,7 @@ what is left behind is not.
 recipients query pages the *audience list*, and the message log only decides
 each row's label. Drop the consent predicate and the candidate set becomes every
 list member, while the rows returned are still only those with a message row.
-For a campaign that ran **after** `15e1917` on a mixed list — the ordinary case
+For a campaign that ran **after** `ba1e2c2` on a mixed list — the ordinary case
 from now on — that is `total: 4` beside two rows.
 
 That is the defect you have objected to three times in this exchange, and you
@@ -162,7 +162,7 @@ compliance question asks about.
 
 ### 2.3 The consequence you named, confirmed
 
-A campaign that ran before `15e1917` now reports its real dispatched set,
+A campaign that ran before `ba1e2c2` now reports its real dispatched set,
 including contacts it should never have sent to. We agree that is right, for the
 reason you gave, and we would add one: those are exactly the rows a regulator
 would ask about, and an endpoint that hides them because today's rule would have

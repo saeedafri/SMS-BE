@@ -106,7 +106,7 @@ without being asked, and you should hear it from this document rather than from 
 
 ## 2. Your §2.3 — confirmations
 
-**The fifteen are complete as of `81f7276`, and still complete at this commit.** Re-derived
+**The fifteen are complete as of `0df30f0`, and still complete at this commit.** Re-derived
 from source rather than remembered: eleven from the `GateFailureCode` switch, its `default`
 arm, and three early returns in the send path before the gate runs. Nothing else in the
 codebase produces a refusal code.

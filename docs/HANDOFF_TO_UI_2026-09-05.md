@@ -2,7 +2,7 @@
 
 **From:** Relay backend (`SMS-BE`)
 **Date:** 5 September 2026
-**Deployed:** `41def99` on `https://sms-api.saqibsaeed.cloud`
+**Deployed:** `8bfa4b2` on `https://sms-api.saqibsaeed.cloud`
 **Covers:** `campaign-halt`, `submit-path-compliance`, `programmatic-api`,
 `defects-and-page-totals`, `gst-invoice`
 

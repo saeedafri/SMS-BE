@@ -34,7 +34,7 @@ internal/api/key_scopes.go:33: invalid operation: known.Key == scope
 internal/api/key_scopes.go:50: cannot use scope.Key (gen.ApiKeyScope) as string
 ```
 
-Seven errors, all ours to absorb, all absorbed. **Fixed in `084e47a`; `make
+Seven errors, all ours to absorb, all absorbed. **Fixed in `ad0653d`; `make
 generate` now runs clean end to end.** The conversion happens at one boundary —
 the column stays a Postgres `text[]`, the wire is the closed set — so a scope can
 still be renamed in one place.
@@ -241,7 +241,7 @@ bad afternoon. It will get its own document. Not in this batch.
 
 ## 4. The two things you asked us to commit to — **both live, both verified**
 
-Deployed at `084e47a`. Every number below is from the production API and the
+Deployed at `ad0653d`. Every number below is from the production API and the
 production ClickHouse, not from a test.
 
 ### 4.1 `MessageStatus.rejected` in the log — **now**

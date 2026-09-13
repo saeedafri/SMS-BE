@@ -198,7 +198,7 @@ inside the send path.
 
 ### Measured on the deployed API, 30s per point, live-tier key
 
-| workers | before (`d89a958`) | after (`972972d`) |
+| workers | before (`2ca0bce`) | after (`89449b4`) |
 |---|---|---|
 | 4 | 15.6/s · p50 208ms | 15.6/s · p50 260ms |
 | 24 | 26.9/s | **50.6/s** · p50 410ms |
