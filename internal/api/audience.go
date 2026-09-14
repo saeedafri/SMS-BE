@@ -182,13 +182,15 @@ func (s *Server) RemoveContactListMember(ctx context.Context, request gen.Remove
 
 func contactResponse(c store.Contact) gen.Contact {
 	contact := gen.Contact{
-		Id:        c.ID,
-		Msisdn:    c.Msisdn,
-		Email:     c.Email,
-		Country:   gen.CountryCode(c.Country),
-		CreatedAt: c.CreatedAt,
-		UpdatedAt: c.UpdatedAt,
-		Consent:   map[string]gen.ConsentState{},
+		Id:              c.ID,
+		Msisdn:          c.Msisdn,
+		Email:           c.Email,
+		Country:         gen.CountryCode(c.Country),
+		CreatedAt:       c.CreatedAt,
+		UpdatedAt:       c.UpdatedAt,
+		Consent:         map[string]gen.ConsentState{},
+		PhoneSuppressed: &c.PhoneSuppressed,
+		EmailSuppressed: &c.EmailSuppressed,
 	}
 	for channel, state := range c.Consent {
 		contact.Consent[channel] = gen.ConsentState(state)

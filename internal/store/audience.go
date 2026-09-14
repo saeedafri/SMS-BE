@@ -241,13 +241,18 @@ type Contact struct {
 	ConsentedAt map[string]time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// PhoneSuppressed and EmailSuppressed are read from the suppression list,
+	// so they are always as current as the list the send gate checks.
+	PhoneSuppressed bool
+	EmailSuppressed bool
 }
 
 func scanContact(row pgx.Row) (Contact, error) {
 	var contact Contact
 	var fields, consent, consentedAt []byte
 	if err := row.Scan(&contact.ID, &contact.Msisdn, &contact.Email, &contact.Country,
-		&fields, &consent, &consentedAt, &contact.CreatedAt, &contact.UpdatedAt); err != nil {
+		&fields, &consent, &consentedAt, &contact.CreatedAt, &contact.UpdatedAt,
+		&contact.PhoneSuppressed, &contact.EmailSuppressed); err != nil {
 		return Contact{}, err
 	}
 	contact.Fields = map[string]string{}
@@ -262,7 +267,9 @@ func scanContact(row pgx.Row) (Contact, error) {
 }
 
 const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
-	c.consented_at, c.created_at, c.updated_at`
+	c.consented_at, c.created_at, c.updated_at,
+	EXISTS (SELECT 1 FROM suppressions s WHERE s.identity = c.msisdn),
+	c.email IS NOT NULL AND EXISTS (SELECT 1 FROM suppressions s WHERE s.identity = c.email)`
 
 // ListContacts pages contacts, optionally restricted to one list. Total is
 // returned alongside because the audience screen shows "1–50 of 12,480".
