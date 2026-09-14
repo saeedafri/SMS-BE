@@ -198,18 +198,23 @@ func Check(input GateInput) error {
 // sender got "an unexpected error occurred" and a 500 — found on production the
 // day the send API shipped.
 func IsRefusal(err error) bool {
-	for _, refusal := range []error{
-		ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
-		ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
-		ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
-		ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
-		ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
-	} {
+	for _, refusal := range refusals {
 		if errors.Is(err, refusal) {
 			return true
 		}
 	}
 	return false
+}
+
+// refusals is every error the gate refuses a send with. One list: IsRefusal
+// reads it, and a test checks that each maps to a code the contract declares,
+// so a new refusal cannot reach a customer as "Refused" with no reason.
+var refusals = []error{
+	ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
+	ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
+	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
+	ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
+	ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
 }
 
 func GateFailureCode(err error) string {
