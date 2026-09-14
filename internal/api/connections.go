@@ -594,6 +594,9 @@ func (s *Server) ReloadSMPPBinds(ctx context.Context) error {
 				s.Logger.Error("late submit outcome not applied", "message", late.MessageID, "error", err)
 			}
 		},
+		// Off the read loop: filing a reply is several queries, and receipts
+		// queue behind whatever runs here.
+		Inbound: func(in connector.InboundSMS) { go s.receiveInboundSMS(in) },
 	}
 	previous := s.SMPP.BoundIDs()
 	// Configured means this environment has connection rows at all, in any

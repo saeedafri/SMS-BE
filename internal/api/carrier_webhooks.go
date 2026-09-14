@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -190,23 +191,23 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 		// launch row at all: that is a true statement about the migration, and
 		// silence would make it look like the carrier had stopped calling.
 		tenantID, agentID, err := s.attributeToAgent(ctx, event)
-		switch {
-		case err != nil:
+		if err != nil {
 			log.Info("inbound RCS could not be attributed to a tenant",
 				"carrier_agent", event.AgentID, "msisdn", event.Msisdn)
-		default:
-			log = log.With("tenant", tenantID, "agent", agentID)
+			return
 		}
-
-		// Not wired. Inbound RCS belongs in the inbox alongside SMS replies,
-		// and threading a suggestion tap back to the campaign that offered it
-		// needs the conversation model this send path does not touch. Logged
-		// rather than dropped so the traffic is visible while that is built —
-		// and so nobody concludes from silence that the carrier is not sending
-		// them.
-		log.Info("inbound RCS received but not yet threaded into the inbox",
-			"msisdn", event.Msisdn, "postback", event.PostbackData,
-			"context_ref", event.ContextRef)
+		msisdn, ok := audience.NormaliseE164(event.Msisdn)
+		if !ok {
+			log.Warn("inbound RCS dropped: unreadable msisdn", "tenant", tenantID, "agent", agentID)
+			return
+		}
+		// ponytail: both RCS carriers here are Indian, so the contact is IN;
+		// derive it from the number once a foreign RCS carrier exists.
+		text := event.Text
+		if text == "" {
+			text = event.PostbackData
+		}
+		s.fileReply(ctx, store.Identity{TenantID: tenantID}, msisdn, "IN", "RCS", text)
 
 	default:
 		log.Debug("carrier event with no consequence")

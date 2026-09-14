@@ -557,3 +557,46 @@ func ReceiveInboundMessage(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	}
 	return message, nil
 }
+
+// InboundAddressHolder is a tenant holding an approved SMS header, and the
+// country it is registered in.
+type InboundAddressHolder struct {
+	TenantID uuid.UUID
+	Country  string
+}
+
+// HoldersOfSMSHeader finds every tenant with an approved SMS sender whose header
+// is the address a handset replied to. Cross-tenant, so it takes the operator
+// pool: a reply carries no tenant, only the header it was sent to.
+func HoldersOfSMSHeader(ctx context.Context, operatorPool *pgxpool.Pool, header string) ([]InboundAddressHolder, error) {
+	rows, err := operatorPool.Query(ctx, `
+		SELECT DISTINCT tenant_id, country FROM sender_ids
+		 WHERE channel = 'SMS' AND status = 'approved' AND upper(header) = upper($1)`, header)
+	if err != nil {
+		return nil, fmt.Errorf("store: sms header holders: %w", err)
+	}
+	holders, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (InboundAddressHolder, error) {
+		var h InboundAddressHolder
+		return h, row.Scan(&h.TenantID, &h.Country)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: sms header holders: %w", err)
+	}
+	return holders, nil
+}
+
+// EnsureContact returns the tenant's contact for msisdn, creating a bare one
+// when a stranger writes first.
+func EnsureContact(ctx context.Context, pool *pgxpool.Pool, id Identity, msisdn, country string) (uuid.UUID, error) {
+	var contactID uuid.UUID
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO contacts (tenant_id, msisdn, country) VALUES ($1, $2, $3)
+			ON CONFLICT (tenant_id, msisdn) DO UPDATE SET updated_at = now()
+			RETURNING id`, id.TenantID, msisdn, country).Scan(&contactID)
+	})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("store: ensure contact: %w", err)
+	}
+	return contactID, nil
+}

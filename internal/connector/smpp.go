@@ -106,6 +106,9 @@ func DLTChainHash(entityID string, telemarketers []string) string {
 type SMPPEvents struct {
 	Report     func(DeliveryReport)
 	LateSubmit func(LateSubmit)
+	// Inbound receives a handset's reply. It runs on the bind's read loop, so a
+	// slow handler delays every receipt behind it.
+	Inbound func(InboundSMS)
 }
 
 // SMPPBind is one live session to one operator.
@@ -191,6 +194,9 @@ func dialSMPP(ctx context.Context, config SMPPConfig, events SMPPEvents) (*SMPPB
 	}
 	if events.LateSubmit == nil {
 		events.LateSubmit = func(LateSubmit) {}
+	}
+	if events.Inbound == nil {
+		events.Inbound = func(InboundSMS) {}
 	}
 	b := &SMPPBind{
 		config: config, events: events,
@@ -361,6 +367,13 @@ func (b *SMPPBind) handle(p pdu.PDU) (pdu.PDU, bool) {
 		if report, ok := parseDeliveryReceipt(v); ok {
 			report.Carrier = b.config.Carrier
 			b.events.Report(report)
+		} else if v.EsmClass&0x04 == 0 {
+			// Not a receipt: a person replying. Acknowledged either way, because
+			// an unanswered deliver_sm is resent forever.
+			if text, err := v.Message.GetMessage(); err == nil {
+				b.events.Inbound(InboundSMS{Carrier: b.config.Carrier,
+					From: v.SourceAddr.Address(), To: v.DestAddr.Address(), Text: text})
+			}
 		}
 		return v.GetResponse(), false
 	case *pdu.EnquireLink:

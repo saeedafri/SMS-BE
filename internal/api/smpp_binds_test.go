@@ -25,6 +25,10 @@ type operatorSMSC struct {
 	listener net.Listener
 	mu       sync.Mutex
 	conns    []net.Conn
+	// writeMu serialises replies and pushed PDUs on a connection.
+	writeMu sync.Mutex
+	// acks counts deliver_sm_resp, so a test can tell a pushed PDU was answered.
+	acks atomic.Int32
 }
 
 func startOperatorSMSC(t *testing.T) *operatorSMSC {
@@ -44,10 +48,28 @@ func startOperatorSMSC(t *testing.T) *operatorSMSC {
 			s.mu.Lock()
 			s.conns = append(s.conns, conn)
 			s.mu.Unlock()
-			go serveBindsOnly(conn)
+			go s.serve(conn)
 		}
 	}()
 	return s
+}
+
+func (s *operatorSMSC) write(conn net.Conn, p pdu.PDU) {
+	buf := pdu.NewBuffer(make([]byte, 0, 128))
+	p.Marshal(buf)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	_, _ = conn.Write(buf.Bytes())
+}
+
+// push sends a PDU to every bound session, as an operator delivering a reply.
+func (s *operatorSMSC) push(p pdu.PDU) {
+	s.mu.Lock()
+	conns := append([]net.Conn(nil), s.conns...)
+	s.mu.Unlock()
+	for _, conn := range conns {
+		s.write(conn, p)
+	}
 }
 
 func (s *operatorSMSC) port() int { return s.listener.Addr().(*net.TCPAddr).Port }
@@ -61,7 +83,7 @@ func (s *operatorSMSC) stop() {
 	}
 }
 
-func serveBindsOnly(conn net.Conn) {
+func (s *operatorSMSC) serve(conn net.Conn) {
 	defer conn.Close()
 	for {
 		header := make([]byte, 4)
@@ -85,11 +107,11 @@ func serveBindsOnly(conn net.Conn) {
 			reply = v.GetResponse()
 		case *pdu.Unbind:
 			reply = v.GetResponse()
+		case *pdu.DeliverSMResp:
+			s.acks.Add(1)
 		}
 		if reply != nil {
-			buf := pdu.NewBuffer(make([]byte, 0, 64))
-			reply.Marshal(buf)
-			_, _ = conn.Write(buf.Bytes())
+			s.write(conn, reply)
 		}
 	}
 }

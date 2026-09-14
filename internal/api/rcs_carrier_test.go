@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"sync"
 	"testing"
@@ -524,12 +525,12 @@ func TestAnUnparseableWebhookIsRefused(t *testing.T) {
 	}
 }
 
-func TestAnInboundWebhookIsAcknowledgedEvenThoughTheInboxIsNotWiredYet(t *testing.T) {
+func TestAnUnattributedInboundWebhookIsAcknowledgedAndLogged(t *testing.T) {
 	h := newCarrierHarness(t, &stubRegistrar{vendor: "airtel"})
 
 	res := h.postWebhook("airtel", webhookToken, map[string]any{
 		"messageId": "Mxa0", "msisdn": "+919820000002", "msgStream": "INBOUND",
-		"eventType": "RECEIVED",
+		"eventType": "RECEIVED", "agentId": "no-such-agent",
 		"messageContent": map[string]any{
 			"text": "Okay", "postbackData": "user_yes", "type": "REPLY",
 		},
@@ -537,9 +538,44 @@ func TestAnInboundWebhookIsAcknowledgedEvenThoughTheInboxIsNotWiredYet(t *testin
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", res.Code, res.Body)
 	}
-	// Logged rather than dropped, so the traffic is visible while the inbox
-	// integration is built and nobody concludes the carrier is not sending it.
-	if !contains(h.logs.String(), "inbound RCS received but not yet threaded") {
-		t.Error("inbound RCS was dropped without a trace")
+	if !contains(h.logs.String(), "inbound RCS could not be attributed") {
+		t.Error("an unattributed inbound RCS was dropped without a trace")
+	}
+}
+
+// P1-2 §3.4. An RCS reply lands in the owning tenant's inbox, and STOP
+// suppresses the number, exactly as an SMS reply does.
+func TestAnRCSReplyReachesTheInboxAndStopSuppresses(t *testing.T) {
+	h := newCarrierHarness(t, &stubRegistrar{vendor: "airtel"})
+	tenant := h.newAccount("owner")
+	_, ids := h.launchedAgent(tenant)
+	from := fmt.Sprintf("+9198765%05d", rand.Intn(100000))
+
+	for _, text := range []string{"Is this still on?", "STOP"} {
+		if res := h.postWebhook("airtel", webhookToken, map[string]any{
+			"messageId": uuid.NewString(), "msisdn": from, "msgStream": "INBOUND",
+			"eventType": "RECEIVED", "agentId": ids["AIRTEL"],
+			"messageContent": map[string]any{"text": text, "type": "TEXT"},
+		}); res.Code != http.StatusOK {
+			t.Fatalf("webhook %q = %d", text, res.Code)
+		}
+	}
+
+	var page struct {
+		Conversations []struct {
+			Identity string `json:"identity"`
+			Channel  string `json:"channel"`
+		} `json:"conversations"`
+	}
+	h.do(http.MethodGet, "/v1/conversations", tenant.Token, nil).decode(t, &page)
+	found := false
+	for _, c := range page.Conversations {
+		found = found || (c.Identity == from && c.Channel == "RCS")
+	}
+	if !found {
+		t.Errorf("no RCS conversation for %s: %+v", from, page.Conversations)
+	}
+	if res := h.do(http.MethodGet, "/v1/suppressions", tenant.Token, nil); !contains(string(res.Body), from) {
+		t.Errorf("STOP over RCS did not suppress %s: %s", from, res.Body)
 	}
 }

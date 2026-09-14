@@ -124,6 +124,16 @@ type DeliveryReport struct {
 	OccurredAt time.Time
 }
 
+// InboundSMS is a handset's message to one of our addresses: a deliver_sm that
+// is not a delivery receipt. To is the header or number it was sent to, which is
+// the only thing that names the tenant.
+type InboundSMS struct {
+	Carrier string
+	From    string
+	To      string
+	Text    string
+}
+
 // LateSubmit is an operator's answer to a submit the send path stopped waiting
 // for: a submit_sm_resp that arrived after the timeout, or the outcome of a
 // message that waited for the bind and was sent afterwards. The message was
