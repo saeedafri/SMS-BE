@@ -113,6 +113,19 @@ func (s *Server) PauseCampaign(ctx context.Context, request gen.PauseCampaignReq
 func (s *Server) ResumeCampaign(ctx context.Context, request gen.ResumeCampaignRequestObject) (
 	gen.ResumeCampaignResponseObject, error) {
 
+	// Checked before the resume, so a refusal leaves the campaign paused and
+	// dispatches nothing.
+	if identity, ok := identityFrom(ctx); ok {
+		if campaign, err := store.GetCampaign(ctx, s.DB, identity, request.Id); err == nil {
+			if template, err := store.GetTemplate(ctx, s.DB, identity, campaign.TemplateID); err == nil &&
+				isPromotional(template) {
+				if refusal := outsidePromotionalWindow(campaign.Country, s.now()); refusal != nil {
+					return gen.ResumeCampaign422JSONResponse(*refusal), nil
+				}
+			}
+		}
+	}
+
 	outcome, err := s.halt(ctx, request.Id, "resume")
 	if err != nil {
 		return nil, err

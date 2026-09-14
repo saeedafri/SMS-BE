@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/mailer"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -52,6 +54,10 @@ type Server struct {
 	// OperatorAllowlist restricts /v1/operator to known networks. Nil or empty
 	// means no restriction.
 	OperatorAllowlist *ipAllowlist
+
+	// Now is the clock the promotional window is judged by. Nil means the wall
+	// clock; tests fix it, because the window is a question about the hour.
+	Now func() time.Time
 
 	// TrustedProxies are the peers whose X-Real-IP names the caller: nginx on
 	// this host. Nil trusts nobody, so RemoteAddr stays the TCP peer.
@@ -187,6 +193,37 @@ func (s *Server) clickhouse(ctx context.Context) (driver.Conn, error) {
 // stuck-after-restart bug this was written for.
 func (s *Server) clickhouseFailed(err error) error {
 	return err
+}
+
+func (s *Server) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// isPromotional is a template DLT registered as promotional: the only traffic
+// the promotional window governs.
+func isPromotional(template store.Template) bool {
+	return template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL"
+}
+
+// outsidePromotionalWindow is the refusal for launching promotional traffic to
+// country outside its hours, naming the next opening. Empty when the window is
+// open.
+func outsidePromotionalWindow(country string, at time.Time) *gen.Error {
+	if compliance.PromotionalAllowedAt(country, at) {
+		return nil
+	}
+	name := country
+	if country == "IN" {
+		name = "India"
+	}
+	body := errorBody("outside_promotional_window", fmt.Sprintf(
+		"Promotional messages to %s can only be sent between 10:00 and 21:00 IST. "+
+			"Schedule this campaign for %s or later.",
+		name, compliance.NextPromotionalOpening(country, at).In(istZone).Format("2 Jan 15:04 MST")))
+	return &body
 }
 
 func NewRouter(s *Server) http.Handler {

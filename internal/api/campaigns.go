@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -39,6 +40,7 @@ func (s *Server) toCampaign(campaign store.Campaign,
 		Currency:              gen.CurrencyCode(campaign.Currency),
 		CreatedAt:             campaign.CreatedAt,
 		ScheduledAt:           campaign.ScheduledAt,
+		HeldUntil:             campaign.HeldUntil,
 		SendStartedAt:         campaign.SendStartedAt,
 	}
 	if campaign.ListID != nil {
@@ -261,6 +263,23 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 				campaign.FallbackSenderID = &fallbackSender
 				campaign.FallbackTemplateID = &fallbackTemplate
 			}
+		}
+	}
+
+	// The promotional window, decided before anything is created or held.
+	// A scheduled promotional campaign records when it will really launch; a
+	// send-now outside the window is refused whole, because launching it would
+	// have every message refused at the gate and the campaign read sent to nobody.
+	if windowTemplate, err := store.GetTemplate(ctx, s.DB, identity, templateID); err == nil &&
+		isPromotional(windowTemplate) {
+		switch {
+		case campaign.ScheduledAt == nil:
+			if refusal := outsidePromotionalWindow(campaign.Country, s.now()); refusal != nil {
+				return gen.CreateCampaign422JSONResponse(*refusal), nil
+			}
+		case !compliance.PromotionalAllowedAt(campaign.Country, *campaign.ScheduledAt):
+			held := compliance.NextPromotionalOpening(campaign.Country, *campaign.ScheduledAt)
+			campaign.HeldUntil = &held
 		}
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -12,9 +11,8 @@ import (
 
 // LaunchDueCampaigns sends every scheduled campaign whose time has come.
 //
-// A promotional campaign due outside its country's promotional hours stays
-// scheduled and goes at the next opening: launching it would have every message
-// refused at the gate, which honours the rule and wastes the campaign.
+// A promotional campaign scheduled outside its country's promotional hours is
+// held: it is due at held_until, the next opening, and is not selected before.
 //
 // ponytail: a claimed campaign whose process dies before fan-out marks it
 // sending stays queued; add a queued-too-long sweep if that is ever seen.
@@ -23,7 +21,7 @@ func (s *Server) LaunchDueCampaigns(ctx context.Context) error {
 	if service == nil || s.OperatorDB == nil {
 		return nil
 	}
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	due, err := store.DueScheduledCampaigns(ctx, s.OperatorDB, now, 100)
 	if err != nil {
 		return err
@@ -41,9 +39,14 @@ func (s *Server) LaunchDueCampaigns(ctx context.Context) error {
 			failures = append(failures, fmt.Errorf("campaign %s: %w", entry.ID, err))
 			continue
 		}
-		if template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL" &&
-			!compliance.PromotionalAllowedAt(campaign.Country, now) {
-			continue
+		if isPromotional(template) && !compliance.PromotionalAllowedAt(campaign.Country, now) {
+			// held_until was computed wrong: this should not be selectable. Said
+			// loudly, and launched anyway — the gate still refuses each message.
+			s.Logger.Error("promotional campaign selected outside its window",
+				"campaign", entry.ID, "held_until", campaign.HeldUntil)
+			if s.Metrics != nil {
+				s.Metrics.RecordIncident("held_until_wrong", entry.ID.String())
+			}
 		}
 		claimed, err := store.ClaimScheduledCampaign(ctx, s.DB, identity, campaign.ID)
 		if err != nil {

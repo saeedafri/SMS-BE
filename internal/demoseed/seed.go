@@ -55,10 +55,13 @@ const (
 	// than a missing fixture. Keep them in step with src/mocks/*-state.ts.
 	listID      = "11110000-0000-0000-0000-000000000001"
 	smsTemplate = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	otpTemplate = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	rcsTemplate = "cccccccc-cccc-cccc-cccc-cccccccccccc"
-	campaignOne = "ca000001-0000-0000-0000-000000000001"
-	campaignTwo = "ca000002-0000-0000-0000-000000000002"
+	// promoTemplate is an approved PROMOTIONAL SMS template under ACMERT, so a
+	// campaign held by the promotional window can be created against the demo.
+	promoTemplate = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab"
+	otpTemplate   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	rcsTemplate   = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	campaignOne   = "ca000001-0000-0000-0000-000000000001"
+	campaignTwo   = "ca000002-0000-0000-0000-000000000002"
 
 	// historyMessagesPerCampaign is how many messages seedMessageHistory writes
 	// for each of the two campaigns it attributes traffic to.
@@ -707,6 +710,15 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 			rcsContent, waContent, emailContent); err != nil {
 			return fmt.Errorf("seed template %s: %w", template.name, err)
 		}
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO templates (id, tenant_id, sender_id, name, channel, country, body,
+		                       status, external_id, dlt_category)
+		VALUES ($1, $2, $3, 'Weekend sale', 'SMS', 'IN',
+		        'Acme weekend sale: {{discount}} off everything till Sunday.',
+		        'approved', '1207161000000000009', 'PROMOTIONAL')`,
+		promoTemplate, tenantID, smsID); err != nil {
+		return fmt.Errorf("seed promotional template: %w", err)
 	}
 
 	// The DNS records the "Acme Notifications" email sender publishes. They hang

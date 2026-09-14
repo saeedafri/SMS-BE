@@ -336,6 +336,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
 		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
 		Priority:          request.Priority,
+		Promotional:       template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL",
 		CarrierTemplateID: carrierTemplateID,
 		AgentID:           agentID,
 		TemplateVariables: TemplateVariables(template, request.Variables),
@@ -413,8 +414,9 @@ type receiptOutcome struct {
 // the message. The contract calls that a refusal: rejected, a lowercase
 // MessageRefusalCode, cost 0 — never the operator's failure.
 var ourRefusals = map[string]string{
-	"NO_OPERATOR_BIND": "no_operator_bind",
-	"DLT_IDS_MISSING":  "dlt_ids_missing",
+	"NO_OPERATOR_BIND":           "no_operator_bind",
+	"DLT_IDS_MISSING":            "dlt_ids_missing",
+	"OUTSIDE_PROMOTIONAL_WINDOW": "outside_promotional_window",
 }
 
 func outcomeOf(receipt connector.Receipt, found bool) receiptOutcome {

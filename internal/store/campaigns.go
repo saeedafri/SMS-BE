@@ -15,18 +15,21 @@ import (
 // Campaign is a batch send. Its per-message rows live in ClickHouse; the
 // campaign row itself is small, mutable and foreign-keyed, so it stays here.
 type Campaign struct {
-	ID                    uuid.UUID
-	Name                  string
-	Channel               string
-	Country               string
-	ListID                *uuid.UUID
-	SenderID              uuid.UUID
-	TemplateID            uuid.UUID
-	FallbackChannel       *string
-	FallbackSenderID      *uuid.UUID
-	FallbackTemplateID    *uuid.UUID
-	Status                string
-	ScheduledAt           *time.Time
+	ID                 uuid.UUID
+	Name               string
+	Channel            string
+	Country            string
+	ListID             *uuid.UUID
+	SenderID           uuid.UUID
+	TemplateID         uuid.UUID
+	FallbackChannel    *string
+	FallbackSenderID   *uuid.UUID
+	FallbackTemplateID *uuid.UUID
+	Status             string
+	ScheduledAt        *time.Time
+	// HeldUntil is when a promotional campaign scheduled outside its country's
+	// promotional hours will actually launch. Nil for every other campaign.
+	HeldUntil             *time.Time
 	SendStartedAt         *time.Time
 	Recipients            int
 	SegmentsPerMessageMin int
@@ -55,7 +58,7 @@ type Campaign struct {
 const campaignColumns = `
 	c.id, c.name, c.channel, c.country, c.list_id, c.sender_id, c.template_id,
 	c.fallback_channel, c.fallback_sender_id, c.fallback_template_id,
-	c.status, c.scheduled_at, c.send_started_at, c.recipients,
+	c.status, c.scheduled_at, c.held_until, c.send_started_at, c.recipients,
 	c.segments_per_message_min, c.segments_per_message_max, c.cost_minor_min, c.cost_minor_max, c.currency,
 	c.retry_of, (SELECT r.id FROM campaigns r WHERE r.retry_of = c.id LIMIT 1),
 	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, '')`
@@ -65,7 +68,7 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 	err := row.Scan(&campaign.ID, &campaign.Name, &campaign.Channel, &campaign.Country,
 		&campaign.ListID, &campaign.SenderID, &campaign.TemplateID,
 		&campaign.FallbackChannel, &campaign.FallbackSenderID, &campaign.FallbackTemplateID,
-		&campaign.Status, &campaign.ScheduledAt, &campaign.SendStartedAt,
+		&campaign.Status, &campaign.ScheduledAt, &campaign.HeldUntil, &campaign.SendStartedAt,
 		&campaign.Recipients, &campaign.SegmentsPerMessageMin,
 		&campaign.SegmentsPerMessageMax, &campaign.CostMinorMin,
 		&campaign.CostMinorMax, &campaign.Currency, &campaign.RetryOf,
@@ -169,8 +172,8 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    sender_id, template_id, fallback_channel, fallback_sender_id,
 			    fallback_template_id, status, scheduled_at, recipients,
 			    segments_per_message_min, segments_per_message_max,
-			    cost_minor_min, cost_minor_max, currency, retry_of)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			    cost_minor_min, cost_minor_max, currency, retry_of, held_until)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
@@ -178,7 +181,7 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			campaign.Status, campaign.ScheduledAt, campaign.Recipients,
 			campaign.SegmentsPerMessageMin, campaign.SegmentsPerMessageMax,
 			campaign.CostMinorMin, campaign.CostMinorMax,
-			campaign.Currency, campaign.RetryOf,
+			campaign.Currency, campaign.RetryOf, campaign.HeldUntil,
 		).Scan(&newID); err != nil {
 			return err
 		}
@@ -537,9 +540,12 @@ type DueCampaign struct {
 func DueScheduledCampaigns(ctx context.Context, operator *pgxpool.Pool,
 	now time.Time, limit int) ([]DueCampaign, error) {
 
+	// By launch time, not schedule time: a held promotional campaign is not due
+	// until its window opens, so it is never selected and cannot fill a page
+	// ahead of a campaign that is.
 	rows, err := operator.Query(ctx, `SELECT id, tenant_id FROM campaigns
-		WHERE status = 'scheduled' AND scheduled_at <= $1
-		ORDER BY scheduled_at LIMIT $2`, now, limit)
+		WHERE status = 'scheduled' AND COALESCE(held_until, scheduled_at) <= $1
+		ORDER BY COALESCE(held_until, scheduled_at) LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: due scheduled campaigns: %w", err)
 	}

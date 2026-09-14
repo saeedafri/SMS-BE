@@ -201,3 +201,28 @@ func TestAConfiguredDeploymentNeverUsesTheSandbox(t *testing.T) {
 		})
 	}
 }
+
+// Ask 41 §2.5. The window is checked where the message leaves: a promotional
+// submit whose clock reads 21:00:01 IST is refused and nothing reaches the
+// operator, even though the campaign was dispatched while the window was open.
+func TestADispatchAfterTheWindowClosesIsRefused(t *testing.T) {
+	previous := smppClock
+	smppClock = func() time.Time { return time.Date(2026, 10, 1, 21, 0, 1, 0, time.FixedZone("IST", 19800)) }
+	t.Cleanup(func() { smppClock = previous })
+
+	smsc := startFakeSMSC(t)
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4), nil, SMPPEvents{})
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	t.Cleanup(func() { _ = bind.Close() })
+	submission := indianSMS("promo", "AIRTEL")
+	submission.Promotional = true
+	receipts, _ := bind.Submit(context.Background(), []Submission{submission})
+	if len(receipts) != 1 || receipts[0].ErrorCode != "OUTSIDE_PROMOTIONAL_WINDOW" {
+		t.Fatalf("receipts = %+v, want OUTSIDE_PROMOTIONAL_WINDOW", receipts)
+	}
+	if n := len(smsc.sent()); n != 0 {
+		t.Fatalf("the operator saw %d submit_sm, want none", n)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/linxGnu/gosmpp/pdu"
 
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 )
 
 // The TLVs Indian operators read DLT identity from on every submit_sm.
@@ -394,10 +395,21 @@ func (b *SMPPBind) Submit(ctx context.Context, submissions []Submission) ([]Rece
 	return out, nil
 }
 
+// smppClock is the time the promotional window is judged at submit. A variable
+// so a test can fix it.
+var smppClock = time.Now
+
 // submitOne returns nil when the message never reached the operator and has
 // been handed to sendLater.
 func (b *SMPPBind) submitOne(ctx context.Context, s Submission) *Receipt {
 	receipt := &Receipt{MessageID: s.MessageID}
+	// The gate ran at fan-out, while the window was open. A message reaching
+	// the operator after it closed is dropped by DLT scrubbing after we charged
+	// for it, so the window is checked again where the message leaves.
+	if s.Promotional && !compliance.PromotionalAllowedAt(s.Country, smppClock()) {
+		receipt.ErrorCode = "OUTSIDE_PROMOTIONAL_WINDOW"
+		return receipt
+	}
 	parts, err := smppParts(s, b.chain)
 	if err != nil {
 		receipt.ErrorCode = "ENCODING"

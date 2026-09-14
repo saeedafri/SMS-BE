@@ -66,6 +66,10 @@ type Submission struct {
 	// connector that shares capacity between messages serves these first.
 	Priority bool
 
+	// Promotional is a template DLT registered as promotional, checked against
+	// the promotional window again where the message leaves.
+	Promotional bool
+
 	// TTLSeconds stops delivery attempts after a while and revokes the message.
 	// Zero means the template's own TTL applies, or none. A send-time value
 	// overrides the template's on both carriers.

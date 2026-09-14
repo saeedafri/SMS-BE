@@ -621,6 +621,7 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 				DLTEntityID:       entityID,
 				DLTTemplateID:     dltTemplateID,
 				Priority:          plan.pending.request.Priority,
+				Promotional:       plan.template.DltCategory != nil && *plan.template.DltCategory == "PROMOTIONAL",
 				CarrierTemplateID: carrierTemplateID,
 				AgentID:           plan.agentID,
 				TemplateVariables: TemplateVariables(plan.template,
