@@ -353,3 +353,42 @@ func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
 		router.Sync(nil, SMPPEvents{}, false)
 	}
 }
+
+// An operator that moves its SMSC is an edit in the console, not a release: the
+// next reload closes the bind on the old address and opens one on the new, and
+// traffic follows without a restart.
+func TestChangingAConnectionsAddressMovesItsBind(t *testing.T) {
+	oldSMSC, newSMSC := startFakeSMSC(t), startFakeSMSC(t)
+	router := &SMPPRouter{}
+	config := SMPPConfig{Carrier: "VIDEOCON", Addr: oldSMSC.addr, SystemID: "relay",
+		Password: "secret", MaxTPS: 100, WindowSize: 4, EnquireLink: 30 * time.Second,
+		Rebind: time.Second, Protocol: DefaultSMPPProtocol(nil)}
+	t.Cleanup(func() { router.Sync(nil, SMPPEvents{}, false) })
+
+	send := func(id string) Receipt {
+		t.Helper()
+		got, _ := router.Submit(context.Background(), []Submission{{MessageID: id, Channel: "SMS",
+			Carrier: "VIDEOCON", Country: "IN", Msisdn: "+917011073181", Sender: "TEXTFI",
+			Body: "hi", DLTEntityID: "PE", DLTTemplateID: "TPL"}})
+		return got[0]
+	}
+
+	if err := router.Sync(map[string]SMPPConfig{"c1": config}, SMPPEvents{}, true)["c1"]; err != nil {
+		t.Fatalf("bind old address: %v", err)
+	}
+	if r := send("before"); !r.Accepted {
+		t.Fatalf("send on the old address = %+v", r)
+	}
+
+	config.Addr = newSMSC.addr
+	if err := router.Sync(map[string]SMPPConfig{"c1": config}, SMPPEvents{}, true)["c1"]; err != nil {
+		t.Fatalf("bind new address: %v", err)
+	}
+	if r := send("after"); !r.Accepted {
+		t.Fatalf("send after the address changed = %+v", r)
+	}
+	if o, n := len(oldSMSC.sent()), len(newSMSC.sent()); o != 1 || n != 1 {
+		t.Errorf("old SMSC saw %d submits, new saw %d; want 1 and 1 — the edited "+
+			"connection must send on its new address only", o, n)
+	}
+}

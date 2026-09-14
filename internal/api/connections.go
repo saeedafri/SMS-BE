@@ -213,9 +213,9 @@ func (s *Server) UpdateConnection(ctx context.Context, request gen.UpdateConnect
 	}
 	if body.Carrier != nil {
 		value := string(*body.Carrier)
-		if !oneOf(value, validCarriers) {
+		if !operatorName.MatchString(value) {
 			return gen.UpdateConnection422JSONResponse(
-				errorBody(codeValidation, enumMessage("carrier", validCarriers))), nil
+				errorBody(codeValidation, operatorNameMessage)), nil
 		}
 		patch.Carrier = &value
 	}
@@ -474,8 +474,8 @@ func intOrDefault(value *int, fallback int) int {
 
 func validateConnectionShape(carrier, environment, bindType string, port, maxTps int) string {
 	switch {
-	case !oneOf(carrier, validCarriers):
-		return enumMessage("carrier", validCarriers)
+	case !operatorName.MatchString(carrier):
+		return operatorNameMessage
 	case !oneOf(environment, validEnvironments):
 		return enumMessage("environment", validEnvironments)
 	case !oneOf(bindType, validBindTypes):

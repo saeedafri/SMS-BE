@@ -919,7 +919,6 @@ func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequest
 	}{
 		{route.Country, validCountries, "country"},
 		{route.Channel, validChannels, "channel"},
-		{route.Carrier, validCarriers, "carrier"},
 		{route.ComplianceStanding, validStandings, "complianceStanding"},
 		{route.Currency, validCurrencies, "currency"},
 	} {
@@ -927,6 +926,9 @@ func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequest
 			return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
 				enumMessage(check.field, check.allowed))), nil
 		}
+	}
+	if !operatorName.MatchString(route.Carrier) {
+		return gen.CreateRoute422JSONResponse(errorBody(codeValidation, operatorNameMessage)), nil
 	}
 	if route.Label == "" {
 		return gen.CreateRoute422JSONResponse(errorBody(codeValidation,

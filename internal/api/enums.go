@@ -1,6 +1,9 @@
 package api
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Contract enums, enforced at the edge.
 //
@@ -61,9 +64,15 @@ var (
 	// with nothing to catch it.
 	validDltCategories = []string{"PROMOTIONAL", "SERVICE_IMPLICIT",
 		"SERVICE_EXPLICIT", "TRANSACTIONAL"}
-	validCarriers = []string{"JIO", "AIRTEL", "VI", "BSNL", "VERIZON", "ATT",
-		"TMOBILE", "EE", "O2", "VODAFONE_UK", "THREE", "ETISALAT", "DU"}
 )
+
+// operatorName is what a connection or route may call its operator. The name is
+// typed in the console, not chosen from a list this code knows, so a new
+// operator contract needs no release. It is matched exactly against routes and
+// receipts, which is why the case and alphabet are fixed.
+var operatorName = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,19}$`)
+
+const operatorNameMessage = "carrier must be 2-20 characters of A-Z, 0-9 and _, starting with a letter (for example VIDEOCON)."
 
 // oneOf reports whether value is one of allowed, comparing exactly.
 //

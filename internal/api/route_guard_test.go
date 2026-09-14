@@ -157,7 +157,7 @@ func TestCreatingARouteRefusesValuesTheContractDoesNotDefine(t *testing.T) {
 		"complianceStanding": "registered", "costPerSegmentMinor": 4, "currency": "AED",
 	}
 	for field, bad := range map[string]any{
-		"country": "ZZ", "channel": "PIGEON", "carrier": "NOTACARRIER",
+		"country": "ZZ", "channel": "PIGEON", "carrier": "not a carrier",
 		"complianceStanding": "dodgy", "currency": "XXX", "label": "  ",
 	} {
 		body := map[string]any{}
