@@ -40,9 +40,7 @@ var legalTransitions = map[State][]State{
 	// Rejected is reachable only BEFORE submission — it is our own gate saying
 	// no. Once a message has been handed over, a refusal is the carrier's and
 	// lands in CarrierRejected.
-	// Queued can expire: a message that never left a bind's wait, and whose
-	// bind never reported, is released by the reconciler like any other silence.
-	StateQueued:     {StateSubmitting, StateRejected, StateExpired},
+	StateQueued:     {StateSubmitting, StateRejected},
 	StateSubmitting: {StateSubmitted, StateRejected},
 	StateSubmitted:  {StateAccepted, StateCarrierRejected, StateExpired},
 	StateAccepted:   {StateDelivered, StateUndelivered, StateExpired},

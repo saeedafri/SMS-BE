@@ -335,7 +335,7 @@ func FindStaleMessages(ctx context.Context, conn driver.Conn,
 		SELECT tenant_id, id, status, segments, cost_minor, currency, campaign_id,
 		       channel, country, sender_header, msisdn, created_at, version
 		FROM messages FINAL
-		WHERE status IN ('queued', 'submitted', 'accepted') AND updated_at < ?
+		WHERE status IN ('submitted', 'accepted') AND updated_at < ?
 		ORDER BY updated_at ASC
 		LIMIT ?`, olderThan, limit)
 	if err != nil {

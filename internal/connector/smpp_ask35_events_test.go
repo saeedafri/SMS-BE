@@ -226,3 +226,49 @@ func TestADispatchAfterTheWindowClosesIsRefused(t *testing.T) {
 		t.Fatalf("the operator saw %d submit_sm, want none", n)
 	}
 }
+
+// Ask 35 §2.2. A message that waited and can no longer be sent — its bind
+// closed — is reported refused, so its hold is released instead of waiting for
+// a receipt that cannot come.
+func TestAWaitingMessageOnAClosedBindIsReportedNotSent(t *testing.T) {
+	smsc := startFakeSMSC(t)
+	late := make(chan LateSubmit, 64)
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4), nil,
+		lateEvents(make(chan DeliveryReport, 64), late))
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	busy, stop := context.WithCancel(context.Background())
+	defer stop()
+	for i := 0; i < 3; i++ {
+		go func(i int) {
+			for n := 0; busy.Err() == nil; n++ {
+				_, _ = bind.Submit(busy, []Submission{{MessageID: fmt.Sprint("otp-", i, "-", n),
+					Msisdn: "+919820000023", Sender: "ACMERT", Channel: "SMS",
+					Body: "123456 is your code", Priority: true}})
+			}
+		}(i)
+	}
+	time.Sleep(100 * time.Millisecond)
+	short, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, _ = bind.Submit(short, []Submission{{MessageID: "stranded",
+		Msisdn: "+919820000027", Sender: "ACMERT", Channel: "SMS", Body: "sale"}})
+	_ = bind.Close()
+
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case got := <-late:
+			if got.MessageID != "stranded" {
+				continue
+			}
+			if got.Accepted || got.ErrorCode != "NO_OPERATOR_BIND" {
+				t.Fatalf("late submit = %+v, want refused NO_OPERATOR_BIND", got)
+			}
+			return
+		case <-deadline:
+			t.Fatal("a message stranded on a closed bind was never reported")
+		}
+	}
+}

@@ -454,11 +454,17 @@ func (b *SMPPBind) sendLater(s Submission, parts []*pdu.SubmitSM, ref string) {
 		}
 	}()
 	for _, part := range parts {
-		resp, _, err := b.exchange(ctx, part, s.Priority, s.MessageID, ref)
+		resp, sent, err := b.exchange(ctx, part, s.Priority, s.MessageID, ref)
+		if err != nil && sent {
+			// Sent and unanswered: handle reports the late response.
+			return
+		}
 		if err != nil {
-			// Never sent: the bind closed or the window passed, and the
-			// reconciler expires the message. Sent and unanswered: the late
-			// response is reported by handle.
+			// Never sent, and now never will be on this bind: it closed, or the
+			// window passed. Refused at cost 0, so the hold does not wait forever
+			// for a receipt that cannot come.
+			b.events.LateSubmit(LateSubmit{MessageID: s.MessageID, Carrier: b.config.Carrier,
+				ErrorCode: "NO_OPERATOR_BIND"})
 			return
 		}
 		ok, isResp := resp.(*pdu.SubmitSMResp)
