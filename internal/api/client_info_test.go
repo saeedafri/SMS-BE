@@ -100,9 +100,9 @@ func TestParseUserAgentPicksTheMostSpecificBrowser(t *testing.T) {
 	}
 }
 
-// The address must come from RemoteAddr, which chi's RealIP has already
-// rewritten from a proxy header where there was one. Reading the header here as
-// well would let a client on a deployment with no proxy forge its own address.
+// The address must come from RemoteAddr, which trustedProxyRealIP has already
+// rewritten from the local proxy's header where there was one. Reading a header
+// here as well would let a client forge its own address.
 func TestClientIPStripsThePortAndIgnoresForgedHeaders(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.RemoteAddr = "203.0.113.9:54321"
@@ -112,7 +112,7 @@ func TestClientIPStripsThePortAndIgnoresForgedHeaders(t *testing.T) {
 		t.Fatalf("clientIP = %q, want 203.0.113.9 (the header must not win here)", got)
 	}
 
-	// RealIP leaves a bare address behind when it rewrites from a header.
+	// A bare address, with no port to split.
 	request.RemoteAddr = "198.51.100.7"
 	if got := clientIP(request); got != "198.51.100.7" {
 		t.Fatalf("clientIP with no port = %q, want 198.51.100.7", got)

@@ -27,31 +27,27 @@ func TestTheOperatorConsoleIsUnreachableOffTheAllowlist(t *testing.T) {
 
 	// 404 rather than 403: a 403 confirms an operator console lives here, which
 	// is the fact worth withholding from a scan.
-	off := h.doWithHeaders(http.MethodPost, "/v1/operator/login", "", credentials,
-		map[string]string{"X-Forwarded-For": "192.0.2.44"})
+	off := h.doFrom("192.0.2.44:1234", http.MethodPost, "/v1/operator/login", "", credentials, nil)
 	if off.Code != http.StatusNotFound {
 		t.Fatalf("operator login from off-network = %d, want 404\n%s", off.Code, off.Body)
 	}
 
 	// Inside the range, the console behaves normally — the allowlist decides
 	// who may knock, not who gets in.
-	on := h.doWithHeaders(http.MethodPost, "/v1/operator/login", "", credentials,
-		map[string]string{"X-Forwarded-For": "198.51.100.7"})
+	on := h.doFrom("198.51.100.7:1234", http.MethodPost, "/v1/operator/login", "", credentials, nil)
 	if on.Code == http.StatusNotFound {
 		t.Fatalf("operator login from an allowed address 404'd\n%s", on.Body)
 	}
 
 	// A single address in the list, not a range.
-	single := h.doWithHeaders(http.MethodPost, "/v1/operator/login", "", credentials,
-		map[string]string{"X-Forwarded-For": "203.0.113.7"})
+	single := h.doFrom("203.0.113.7:1234", http.MethodPost, "/v1/operator/login", "", credentials, nil)
 	if single.Code == http.StatusNotFound {
 		t.Fatalf("operator login from a listed address 404'd\n%s", single.Body)
 	}
 
 	// Customers reach the rest of the API from wherever they are.
-	customer := h.doWithHeaders(http.MethodPost, "/v1/auth/login", "",
-		map[string]any{"email": "nobody@example.test", "password": "wrong-password"},
-		map[string]string{"X-Forwarded-For": "192.0.2.44"})
+	customer := h.doFrom("192.0.2.44:1234", http.MethodPost, "/v1/auth/login", "",
+		map[string]any{"email": "nobody@example.test", "password": "wrong-password"}, nil)
 	if customer.Code == http.StatusNotFound {
 		t.Fatalf("a customer login was blocked by the operator allowlist\n%s", customer.Body)
 	}
@@ -71,9 +67,8 @@ func TestAnEmptyAllowlistRestrictsNothing(t *testing.T) {
 		OperatorAllowlist: allowlist,
 		Logger:            slog.New(slog.NewJSONHandler(h.logs, nil)),
 	})
-	res := h.doWithHeaders(http.MethodPost, "/v1/operator/login", "",
-		map[string]any{"email": "ops@relay.internal", "password": "relay-ops-dev"},
-		map[string]string{"X-Forwarded-For": "192.0.2.44"})
+	res := h.doFrom("192.0.2.44:1234", http.MethodPost, "/v1/operator/login", "",
+		map[string]any{"email": "ops@relay.internal", "password": "relay-ops-dev"}, nil)
 	if res.Code == http.StatusNotFound {
 		t.Fatalf("an empty allowlist blocked the console\n%s", res.Body)
 	}

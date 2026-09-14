@@ -70,6 +70,15 @@ func ParseIPAllowlist(raw string) (*ipAllowlist, error) {
 	return list, nil
 }
 
+// Networks is the parsed list, for callers that need the ranges themselves
+// rather than a yes or no — the trusted proxy set.
+func (a *ipAllowlist) Networks() []*net.IPNet {
+	if a == nil {
+		return nil
+	}
+	return a.networks
+}
+
 func (a *ipAllowlist) permits(address string) bool {
 	if a == nil || len(a.networks) == 0 {
 		return true

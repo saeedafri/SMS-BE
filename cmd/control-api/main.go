@@ -288,6 +288,7 @@ func run() error {
 		Media:             mediaStore,
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
+		TrustedProxies:    cfg.TrustedProxies,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,

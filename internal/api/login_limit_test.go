@@ -8,8 +8,8 @@ import (
 )
 
 func (h *harness) loginFrom(ip, path, email, password string) response {
-	return h.doWithHeaders(http.MethodPost, path, "", map[string]string{"email": email, "password": password},
-		map[string]string{"X-Forwarded-For": ip})
+	return h.doFrom(ip+":1234", http.MethodPost, path, "",
+		map[string]string{"email": email, "password": password}, nil)
 }
 
 func randomIP() string {

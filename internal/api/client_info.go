@@ -54,22 +54,60 @@ const (
 	maxUserAgent  = 512
 )
 
+// trustedProxyRealIP makes RemoteAddr the caller's address, trusting exactly one
+// header, from exactly one kind of peer.
+//
+// nginx on this host proxies every public request and sets X-Real-IP to the TCP
+// peer it saw. That header is trustworthy ONLY when the request actually came from
+// nginx, i.e. from a trusted proxy address. From anyone else it is text the caller
+// typed. True-Client-IP and X-Forwarded-For are never read: nginx does not set the
+// first (so a client's copy reaches us unchanged), and the second is a list the
+// client can prepend to.
+//
+// All three are deleted before any handler runs, so nothing downstream can read
+// them by accident.
+func trustedProxyRealIP(trusted []*net.IPNet) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				host = r.RemoteAddr
+			}
+			if peer := net.ParseIP(host); peer != nil && inAny(trusted, peer) {
+				if real := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); real != nil {
+					r.RemoteAddr = net.JoinHostPort(real.String(), "0")
+				}
+			}
+			r.Header.Del("True-Client-IP")
+			r.Header.Del("X-Real-IP")
+			r.Header.Del("X-Forwarded-For")
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func inAny(networks []*net.IPNet, ip net.IP) bool {
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // clientIP is the caller's address without its port.
 //
-// chi's middleware.RealIP already runs ahead of this and has rewritten
-// RemoteAddr from X-Forwarded-For where a proxy set one, so this does not need
-// to read those headers itself — and must not, or a client could forge its own
-// address by sending the header directly on a deployment with no proxy.
+// trustedProxyRealIP already runs ahead of this and has rewritten RemoteAddr
+// from the local proxy's X-Real-IP where there was one, so this does not read
+// any header itself — and must not, or a client could forge its own address.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		// No port to split: RealIP leaves a bare address behind when it
-		// rewrites from a header.
+		// No port to split: a bare address, as a test or a unix socket gives.
 		host = strings.TrimSpace(r.RemoteAddr)
 	}
-	// Validated rather than stored as given. RealIP copies X-Forwarded-For into
-	// RemoteAddr without checking it is an address at all, so without this an
-	// arbitrary string from a header ends up rendered on the security screen.
+	// Validated rather than stored as given, so nothing but an address ever
+	// reaches the security screen.
 	if net.ParseIP(host) == nil {
 		return ""
 	}

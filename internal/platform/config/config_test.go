@@ -172,3 +172,13 @@ func TestAirtelWithoutItsAccountIdentifiersRefusesToStart(t *testing.T) {
 		}
 	}
 }
+
+// A typo that trusted nobody would break every allowlist; one that trusted
+// everybody would reopen the spoofed-address hole. Either way, refuse to start.
+func TestAMalformedTrustedProxyListStopsTheServer(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted TRUSTED_PROXY_CIDRS=not-a-cidr")
+	}
+}

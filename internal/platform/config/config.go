@@ -6,9 +6,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/saeedafri/sms-be/internal/api"
 )
 
 type Config struct {
@@ -127,6 +130,12 @@ type Config struct {
 	// every customer, so that surface should not be reachable from everywhere.
 	OperatorIPAllowlist string
 
+	// TrustedProxies are the peers whose X-Real-IP is believed: nginx on this
+	// host. TRUSTED_PROXY_CIDRS, defaulting to loopback. A malformed value stops
+	// the process — trusting nobody would break every allowlist, and trusting
+	// everybody would let any caller choose its own address.
+	TrustedProxies []*net.IPNet
+
 	// DLTTelemarketerChain is every telemarketer DLT id between a customer's
 	// principal entity and the operator, comma separated, ending with Relay's
 	// own. Hashed into TLV 5122 on every SMS; TRAI has rejected messages
@@ -211,6 +220,11 @@ func Load() (Config, error) {
 	}
 	cfg.ConnectionEncryptionKey = strings.TrimSpace(os.Getenv("CONNECTION_ENCRYPTION_KEY"))
 	cfg.OperatorIPAllowlist = strings.TrimSpace(os.Getenv("OPERATOR_IP_ALLOWLIST"))
+	trusted, err := api.ParseIPAllowlist(envOr("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: TRUSTED_PROXY_CIDRS: %w", err)
+	}
+	cfg.TrustedProxies = trusted.Networks()
 
 	return cfg, nil
 }

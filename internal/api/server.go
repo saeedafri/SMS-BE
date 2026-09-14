@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -51,6 +52,10 @@ type Server struct {
 	// OperatorAllowlist restricts /v1/operator to known networks. Nil or empty
 	// means no restriction.
 	OperatorAllowlist *ipAllowlist
+
+	// TrustedProxies are the peers whose X-Real-IP names the caller: nginx on
+	// this host. Nil trusts nobody, so RemoteAddr stays the TCP peer.
+	TrustedProxies []*net.IPNet
 
 	// AllowGreyRoutes permits enabling a route with a grey compliance standing.
 	// Off unless the deployment says otherwise; see the config field for why.
@@ -186,9 +191,9 @@ func (s *Server) clickhouseFailed(err error) error {
 
 func NewRouter(s *Server) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
-	// After RealIP, which is what makes RemoteAddr the caller's address rather
-	// than the proxy's, and before authenticate so a session minted during this
+	r.Use(middleware.RequestID, trustedProxyRealIP(s.TrustedProxies), middleware.Recoverer)
+	// After trustedProxyRealIP, which is what makes RemoteAddr the caller's
+	// address rather than the proxy's, and before authenticate so a session minted during this
 	// request can record the device it was minted on.
 	r.Use(withClientInfo)
 	r.Use(requestLogger(s.Logger, s.Metrics))
