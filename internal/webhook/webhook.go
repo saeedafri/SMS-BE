@@ -17,10 +17,10 @@ import (
 	"time"
 )
 
-// client has a short timeout because a customer's slow endpoint must not hold
+// HTTPClient has a short timeout because a customer's slow endpoint must not hold
 // our worker open. Redirects are refused: following one would send a signed
 // payload somewhere the customer never registered.
-var client = &http.Client{
+var HTTPClient = &http.Client{
 	Timeout: 10 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -61,7 +61,7 @@ func Deliver(ctx context.Context, endpoint, eventType string, payload []byte, se
 	request.Header.Set("X-Relay-Timestamp", strconv.FormatInt(timestamp, 10))
 	request.Header.Set("X-Relay-Signature", "v1="+Sign(secret, timestamp, payload))
 
-	response, err := client.Do(request)
+	response, err := HTTPClient.Do(request)
 	if err != nil {
 		// A network failure is recorded as a failed attempt rather than an
 		// error, because it is the customer's endpoint that failed and they

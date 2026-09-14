@@ -63,6 +63,10 @@ type Server struct {
 	// this host. Nil trusts nobody, so RemoteAddr stays the TCP peer.
 	TrustedProxies []*net.IPNet
 
+	// WebhookRetryDelays space the retries of a failed customer webhook. Nil
+	// uses the production schedule; tests shorten it.
+	WebhookRetryDelays []time.Duration
+
 	// BFFClientIPToken is the secret the dashboard server sends to name its
 	// user's address (ask 42). Empty ignores the dashboard's headers.
 	BFFClientIPToken string

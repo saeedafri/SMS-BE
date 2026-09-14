@@ -216,6 +216,9 @@ type WebhookEndpoint struct {
 	CreatedAt           time.Time
 	// SigningSecret is returned only when minted, like an API key secret.
 	SigningSecret string
+	// SealedSecret is the signing secret encrypted with the server key. Nil for
+	// an endpoint created before it was stored: it cannot be signed for.
+	SealedSecret *string
 }
 
 // ListWebhooks returns the tenant's endpoints for one environment. Scoped for
@@ -227,7 +230,7 @@ type WebhookEndpoint struct {
 // which environment it lives in until it has been read.
 const webhookColumns = `
 	SELECT id, environment, url, subscribed_events, signing_secret_prefix,
-	       status, created_at
+	       status, created_at, signing_secret_sealed
 	FROM webhook_endpoints
 	WHERE ($1::text IS NULL OR environment = $1)`
 
@@ -296,7 +299,7 @@ func scanWebhooks(rows pgx.Rows) ([]WebhookEndpoint, error) {
 		var hook WebhookEndpoint
 		if err := rows.Scan(&hook.ID, &hook.Environment, &hook.URL,
 			&hook.SubscribedEvents, &hook.SigningSecretPrefix, &hook.Status,
-			&hook.CreatedAt); err != nil {
+			&hook.CreatedAt, &hook.SealedSecret); err != nil {
 			return nil, err
 		}
 		out = append(out, hook)
@@ -304,12 +307,19 @@ func scanWebhooks(rows pgx.Rows) ([]WebhookEndpoint, error) {
 	return out, rows.Err()
 }
 
+// CreateWebhook mints the endpoint's signing secret and stores it sealed by
+// seal, so deliveries can be signed with the secret the customer is shown.
 func CreateWebhook(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	environment, url string, events []string) (WebhookEndpoint, error) {
+	environment, url string, events []string,
+	seal func(string) (string, error)) (WebhookEndpoint, error) {
 
 	secret, prefix, hash, err := generateSecret(environment)
 	if err != nil {
 		return WebhookEndpoint{}, err
+	}
+	sealed, err := seal(secret)
+	if err != nil {
+		return WebhookEndpoint{}, fmt.Errorf("store: seal webhook secret: %w", err)
 	}
 	if events == nil {
 		events = []string{}
@@ -319,11 +329,12 @@ func CreateWebhook(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			INSERT INTO webhook_endpoints (tenant_id, environment, url,
-			    subscribed_events, signing_secret_prefix, signing_secret_hash)
-			VALUES ($1,$2,$3,$4,$5,$6)
+			    subscribed_events, signing_secret_prefix, signing_secret_hash,
+			    signing_secret_sealed)
+			VALUES ($1,$2,$3,$4,$5,$6,$7)
 			RETURNING id, environment, url, subscribed_events, signing_secret_prefix,
 			          status, created_at`,
-			id.TenantID, environment, url, events, prefix, hash,
+			id.TenantID, environment, url, events, prefix, hash, sealed,
 		).Scan(&hook.ID, &hook.Environment, &hook.URL, &hook.SubscribedEvents,
 			&hook.SigningSecretPrefix, &hook.Status, &hook.CreatedAt)
 	})

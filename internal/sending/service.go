@@ -45,6 +45,10 @@ type Service struct {
 	// and what the tests that assert on freshness rely on.
 	Hot *store.HotCache
 
+	// Settled is told when a carrier's report moves a message to its final
+	// state, after the new state is written. Nil tells nobody.
+	Settled func(context.Context, store.Identity, store.MessageRecord)
+
 	// Coalescer batches the transactional send path. Nil means every send pays
 	// for its own round trips, which is correct and slow — see coalesce.go for
 	// why the batched form is the same send rather than a deferred one.
@@ -545,7 +549,13 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 			record.ErrorCode, record.ErrorClass = &code, &classValue
 		}
 	}
-	return s.record(ctx, identity, record, string(from), string(to), report.ErrorCode)
+	if err := s.record(ctx, identity, record, string(from), string(to), report.ErrorCode); err != nil {
+		return err
+	}
+	if s.Settled != nil {
+		s.Settled(ctx, identity, record)
+	}
+	return nil
 }
 
 // release returns held money to the wallet.

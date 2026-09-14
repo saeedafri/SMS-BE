@@ -316,7 +316,7 @@ func (s *Server) CreateWebhookEndpoint(ctx context.Context, request gen.CreateWe
 			enumMessage("Environment", validEnvironments))), nil
 	}
 	hook, err := store.CreateWebhook(ctx, s.DB, identity,
-		string(request.Body.Environment), request.Body.Url, events)
+		string(request.Body.Environment), request.Body.Url, events, s.Secrets.Encrypt)
 	if err != nil {
 		return nil, err
 	}
@@ -464,13 +464,8 @@ func (s *Server) SendWebhookTestEvent(ctx context.Context, request gen.SendWebho
 		if hook.ID.String() != request.Id {
 			continue
 		}
-		delivery := webhook.Deliver(ctx, hook.URL, "message.delivered",
-			webhook.SamplePayload(), hook.SigningSecretPrefix)
-		recorded, err := store.RecordWebhookEvent(ctx, s.DB, identity, store.WebhookDelivery{
-			EndpointID: hook.ID, EventType: "message.delivered", Attempt: 1,
-			Outcome: delivery.Outcome, HTTPStatus: delivery.HTTPStatus,
-			ResponseSnippet: delivery.ResponseSnippet, Payload: delivery.Payload,
-		})
+		recorded, err := s.deliverWebhook(ctx, identity, hook, "message.delivered",
+			webhook.SamplePayload(), 1)
 		if err != nil {
 			return nil, err
 		}
@@ -508,14 +503,8 @@ func (s *Server) ResendWebhookEvent(ctx context.Context, request gen.ResendWebho
 		if hook.ID != original.EndpointID {
 			continue
 		}
-		delivery := webhook.Deliver(ctx, hook.URL, original.EventType,
-			original.Payload, hook.SigningSecretPrefix)
-		recorded, err := store.RecordWebhookEvent(ctx, s.DB, identity, store.WebhookDelivery{
-			EndpointID: hook.ID, EventType: original.EventType,
-			Attempt: original.Attempt + 1, Outcome: delivery.Outcome,
-			HTTPStatus: delivery.HTTPStatus, ResponseSnippet: delivery.ResponseSnippet,
-			Payload: original.Payload,
-		})
+		recorded, err := s.deliverWebhook(ctx, identity, hook, original.EventType,
+			original.Payload, original.Attempt+1)
 		if err != nil {
 			return nil, err
 		}

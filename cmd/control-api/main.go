@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -99,6 +100,15 @@ func run() error {
 	sandbox := connector.NewSandbox(0)
 	metrics := api.NewMetrics()
 
+	// The workers below start before the API server exists, and settle messages
+	// the server's webhooks must hear about.
+	var liveServer atomic.Pointer[api.Server]
+	messageSettled := func(ctx context.Context, identity store.Identity, record store.MessageRecord) {
+		if server := liveServer.Load(); server != nil {
+			server.MessageSettled(ctx, identity, record)
+		}
+	}
+
 	if clickhouse.Configured() {
 		// Applies the sandbox carrier's delivery reports. A real carrier POSTs
 		// these to an ingest endpoint; the sandbox queues them in-process, so
@@ -113,7 +123,8 @@ func run() error {
 				if err != nil {
 					return nil // nothing to drain while it is unreachable
 				}
-				drainer := &sending.Service{DB: pool, ClickHouse: conn, Connector: sandbox}
+				drainer := &sending.Service{DB: pool, ClickHouse: conn, Connector: sandbox,
+					Settled: messageSettled}
 				applied, err := drainer.DrainSandboxReports(ctx)
 				if err != nil {
 					clickhouse.Drop()
@@ -134,7 +145,8 @@ func run() error {
 				if err != nil {
 					return nil
 				}
-				reconciler := &sending.Service{DB: pool, ClickHouse: conn, Logger: logger}
+				reconciler := &sending.Service{DB: pool, ClickHouse: conn, Logger: logger,
+					Settled: messageSettled}
 				expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
 				if err != nil {
 					clickhouse.Drop()
@@ -299,6 +311,7 @@ func run() error {
 		Mail: &mailer.Mailer{
 			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 		}}
+	liveServer.Store(apiServer)
 
 	// Batch the transactional send path. The sends already in flight go through
 	// the pipeline together — one suppression query, one wallet movement per
