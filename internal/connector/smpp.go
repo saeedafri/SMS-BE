@@ -20,13 +20,12 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 )
 
-// The TLVs Indian operators read DLT identity from on every submit_sm.
-//
-// These are the tags in common use, and they are CONSTANTS TO CONFIRM against
-// each operator's SMPP interface document before the first live send: public
-// sources disagree about the order of 0x1400 and 0x1401, and a swapped pair
-// is rejected by DLT scrubbing on every single message. 0x1402 (5122) carries
-// the PE-TM chain hash TRAI has enforced since 11 December 2024.
+// The TLVs Indian operators read DLT identity from on every submit_sm, as the
+// defaults. Public sources disagree about the order of 0x1400 and 0x1401, and a
+// swapped pair is rejected by DLT scrubbing on every single message, so each
+// connection can override them (SMPPProtocol) from its operator's interface
+// document. 0x1402 (5122) carries the PE-TM chain hash TRAI has enforced since
+// 11 December 2024.
 const (
 	TagDLTEntityID   pdu.Tag = 0x1400
 	TagDLTTemplateID pdu.Tag = 0x1401
@@ -51,6 +50,43 @@ type SMPPConfig struct {
 	WindowSize  int
 	EnquireLink time.Duration
 	Rebind      time.Duration
+	// Protocol is the effective wire values: the connection's overrides over
+	// the platform defaults.
+	Protocol SMPPProtocol
+}
+
+// SMPPProtocol is what an operator's interface document fixes about the wire.
+//
+// Comparable, like SMPPConfig: the chain is held joined rather than as a slice,
+// so a reload's equality test sees a changed chain and redials. Leaving a slice
+// out of the comparison instead would keep the old bind, and the old hash, for
+// good.
+type SMPPProtocol struct {
+	SourceTon, SourceNpi, DestTon, DestNpi byte
+	RegisteredDelivery                     byte
+	EntityTag, TemplateTag, ChainTag       pdu.Tag
+	// Chain is the PE-to-telemarketer chain, comma separated, ending with the
+	// platform's own telemarketer id.
+	Chain string
+}
+
+// DefaultSMPPProtocol is what a connection with no overrides sends: the values
+// the client sent before they were configurable, byte for byte.
+func DefaultSMPPProtocol(chain []string) SMPPProtocol {
+	return SMPPProtocol{
+		SourceTon: 0x05, SourceNpi: 0x00, // alphanumeric header
+		DestTon: 0x01, DestNpi: 0x01, // international, E.164
+		RegisteredDelivery: 0x01, // a receipt for every message
+		EntityTag:          TagDLTEntityID, TemplateTag: TagDLTTemplateID, ChainTag: TagDLTChainHash,
+		Chain: strings.Join(chain, ","),
+	}
+}
+
+func (p SMPPProtocol) chain() []string {
+	if p.Chain == "" {
+		return nil
+	}
+	return strings.Split(p.Chain, ",")
 }
 
 // DLTChainHash is the value TLV 5122 carries: SHA-256 over the principal
@@ -75,7 +111,6 @@ type SMPPEvents struct {
 // SMPPBind is one live session to one operator.
 type SMPPBind struct {
 	config   SMPPConfig
-	chain    []string
 	events   SMPPEvents
 	session  *gosmpp.Session
 	ticker   *time.Ticker
@@ -140,11 +175,11 @@ var errNoSubmitResp = errors.New("no submit_sm_resp")
 
 // DialSMPP binds to an operator. Receipts carry the operator's message id and
 // this bind's carrier; the caller resolves them to a message.
-func DialSMPP(config SMPPConfig, chain []string, events SMPPEvents) (*SMPPBind, error) {
-	return dialSMPP(context.Background(), config, chain, events)
+func DialSMPP(config SMPPConfig, events SMPPEvents) (*SMPPBind, error) {
+	return dialSMPP(context.Background(), config, events)
 }
 
-func dialSMPP(ctx context.Context, config SMPPConfig, chain []string, events SMPPEvents) (*SMPPBind, error) {
+func dialSMPP(ctx context.Context, config SMPPConfig, events SMPPEvents) (*SMPPBind, error) {
 	if config.MaxTPS <= 0 {
 		config.MaxTPS = 1
 	}
@@ -158,7 +193,7 @@ func dialSMPP(ctx context.Context, config SMPPConfig, chain []string, events SMP
 		events.LateSubmit = func(LateSubmit) {}
 	}
 	b := &SMPPBind{
-		config: config, chain: chain, events: events,
+		config: config, events: events,
 		ticker:         time.NewTicker(time.Second / time.Duration(config.MaxTPS)),
 		stop:           make(chan struct{}),
 		window:         make(chan struct{}, config.WindowSize),
@@ -283,7 +318,7 @@ func ProbeSMPP(ctx context.Context, config SMPPConfig) error {
 	}
 	done := make(chan error, 1)
 	go func() {
-		b, err := dialSMPP(ctx, config, nil, SMPPEvents{})
+		b, err := dialSMPP(ctx, config, SMPPEvents{})
 		if err == nil {
 			err = b.Close()
 		}
@@ -410,7 +445,7 @@ func (b *SMPPBind) submitOne(ctx context.Context, s Submission) *Receipt {
 		receipt.ErrorCode = "OUTSIDE_PROMOTIONAL_WINDOW"
 		return receipt
 	}
-	parts, err := smppParts(s, b.chain)
+	parts, err := smppParts(s, b.config.Protocol)
 	if err != nil {
 		receipt.ErrorCode = "ENCODING"
 		return receipt
@@ -543,17 +578,18 @@ func (b *SMPPBind) exchange(ctx context.Context, part *pdu.SubmitSM, priority bo
 //
 // The split is billing's, not the library's: what an operator receives must be
 // what the customer was charged for.
-func smppParts(s Submission, chain []string) ([]*pdu.SubmitSM, error) {
+func smppParts(s Submission, protocol SMPPProtocol) ([]*pdu.SubmitSM, error) {
 	texts, gsm7 := billing.Segments(s.Body)
 	encoding := data.Encoding(data.UCS2)
 	if gsm7 {
 		encoding = data.GSM7BIT
 	}
-	source, err := pdu.NewAddressWithTonNpiAddr(0x05, 0x00, s.Sender) // alphanumeric header
+	source, err := pdu.NewAddressWithTonNpiAddr(protocol.SourceTon, protocol.SourceNpi, s.Sender)
 	if err != nil {
 		return nil, err
 	}
-	dest, err := pdu.NewAddressWithTonNpiAddr(0x01, 0x01, strings.TrimPrefix(s.Msisdn, "+"))
+	dest, err := pdu.NewAddressWithTonNpiAddr(protocol.DestTon, protocol.DestNpi,
+		strings.TrimPrefix(s.Msisdn, "+"))
 	if err != nil {
 		return nil, err
 	}
@@ -581,15 +617,15 @@ func smppParts(s Submission, chain []string) ([]*pdu.SubmitSM, error) {
 			part.Message.SetUDH(pdu.UDH{pdu.NewIEConcatMessage(byte(len(texts)), byte(i+1), reference)})
 			part.EsmClass = 0x40 // UDH present
 		}
-		part.RegisteredDelivery = 0x01 // a receipt for every message
+		part.RegisteredDelivery = protocol.RegisteredDelivery
 		if s.DLTEntityID != "" {
-			part.RegisterOptionalParam(pdu.Field{Tag: TagDLTEntityID, Data: []byte(s.DLTEntityID)})
+			part.RegisterOptionalParam(pdu.Field{Tag: protocol.EntityTag, Data: []byte(s.DLTEntityID)})
 		}
 		if s.DLTTemplateID != "" {
-			part.RegisterOptionalParam(pdu.Field{Tag: TagDLTTemplateID, Data: []byte(s.DLTTemplateID)})
+			part.RegisterOptionalParam(pdu.Field{Tag: protocol.TemplateTag, Data: []byte(s.DLTTemplateID)})
 		}
-		if hash := DLTChainHash(s.DLTEntityID, chain); hash != "" {
-			part.RegisterOptionalParam(pdu.Field{Tag: TagDLTChainHash, Data: []byte(hash)})
+		if hash := DLTChainHash(s.DLTEntityID, protocol.chain()); hash != "" {
+			part.RegisterOptionalParam(pdu.Field{Tag: protocol.ChainTag, Data: []byte(hash)})
 		}
 		parts = append(parts, part)
 	}
@@ -764,7 +800,7 @@ func (r *SMPPRouter) Submit(ctx context.Context, submissions []Submission) ([]Re
 //
 // The returned map holds the dial outcome of every connection it tried to bind,
 // nil for success.
-func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig, chain []string,
+func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig,
 	events SMPPEvents, configured bool) map[string]error {
 
 	r.mu.RLock()
@@ -776,7 +812,9 @@ func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig, chain []string,
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for id, config := range wanted {
-		if live, ok := current[id]; ok && live.config == config && sameChain(live.chain, chain) {
+		// config is comparable, protocol and chain included, so any changed
+		// value redials.
+		if live, ok := current[id]; ok && live.config == config {
 			mu.Lock()
 			next[id] = live
 			mu.Unlock()
@@ -785,7 +823,7 @@ func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig, chain []string,
 		wg.Add(1)
 		go func(id string, config SMPPConfig) {
 			defer wg.Done()
-			bind, err := DialSMPP(config, chain, events)
+			bind, err := DialSMPP(config, events)
 			mu.Lock()
 			defer mu.Unlock()
 			outcomes[id] = err
@@ -813,10 +851,6 @@ func (r *SMPPRouter) Sync(wanted map[string]SMPPConfig, chain []string,
 	r.byID, r.binds, r.configured = next, byCarrier, configured
 	r.mu.Unlock()
 	return outcomes
-}
-
-func sameChain(a, b []string) bool {
-	return strings.Join(a, ",") == strings.Join(b, ",")
 }
 
 // SMPPAddr is the address a bind dials.

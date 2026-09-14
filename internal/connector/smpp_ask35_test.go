@@ -16,7 +16,7 @@ import (
 func fakeConfig(smsc *fakeSMSC, carrier string, tps, window int) SMPPConfig {
 	return SMPPConfig{Carrier: carrier, Addr: smsc.addr, SystemID: "relay",
 		Password: "secret", MaxTPS: tps, WindowSize: window,
-		EnquireLink: 30 * time.Second, Rebind: time.Second}
+		EnquireLink: 30 * time.Second, Rebind: time.Second, Protocol: DefaultSMPPProtocol(nil)}
 }
 
 func indianSMS(id, carrier string) Submission {
@@ -33,13 +33,13 @@ func TestTwoConnectionsToOneOperatorBothCarryTraffic(t *testing.T) {
 	outcomes := router.Sync(map[string]SMPPConfig{
 		"a": fakeConfig(first, "AIRTEL", 100, 4),
 		"b": fakeConfig(second, "AIRTEL", 100, 4),
-	}, nil, SMPPEvents{}, true)
+	}, SMPPEvents{}, true)
 	for id, err := range outcomes {
 		if err != nil {
 			t.Fatalf("bind %s: %v", id, err)
 		}
 	}
-	t.Cleanup(func() { router.Sync(nil, nil, SMPPEvents{}, false) })
+	t.Cleanup(func() { router.Sync(nil, SMPPEvents{}, false) })
 
 	batch := make([]Submission, 10)
 	for i := range batch {
@@ -75,7 +75,7 @@ func TestAReceiptCarriesTheTimeTheHandsetGotIt(t *testing.T) {
 // operator: bulk gets a floor of one tick in every few.
 func TestAnOTPFloodDoesNotStarveACampaign(t *testing.T) {
 	smsc := startFakeSMSC(t)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 5, 4), nil, SMPPEvents{})
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 5, 4), SMPPEvents{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestAnOTPFloodDoesNotStarveACampaign(t *testing.T) {
 // it produces no receipt.
 func TestAWaitThatNeverSentIsNotARefusal(t *testing.T) {
 	smsc := startFakeSMSC(t)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4), nil, SMPPEvents{})
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4), SMPPEvents{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestSegmentCountsAgreeWithBilling(t *testing.T) {
 		"81 extended (162 s)": strings.Repeat("€", 81),
 	}
 	for name, body := range bodies {
-		parts, err := smppParts(Submission{Body: body, Sender: "ACMERT", Msisdn: "+919820000025"}, nil)
+		parts, err := smppParts(Submission{Body: body, Sender: "ACMERT", Msisdn: "+919820000025"}, DefaultSMPPProtocol(nil))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

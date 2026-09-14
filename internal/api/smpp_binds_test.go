@@ -111,7 +111,7 @@ func (h *harness) withSMPP(environment string) *countingSandbox {
 	h.server.SMPP = &connector.SMPPRouter{Fallback: sandbox}
 	h.server.Carriers = connector.Registry{Default: h.server.SMPP}
 	h.server.SMPPEnvironment = environment
-	h.t.Cleanup(func() { h.server.SMPP.Sync(nil, nil, connector.SMPPEvents{}, false) })
+	h.t.Cleanup(func() { h.server.SMPP.Sync(nil, connector.SMPPEvents{}, false) })
 	return sandbox
 }
 

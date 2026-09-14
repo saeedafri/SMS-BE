@@ -62,7 +62,10 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 					for key := range body {
 						present[key] = true
 					}
-					r = r.WithContext(context.WithValue(r.Context(), bodyKeysContextKey{}, present))
+					ctx := context.WithValue(r.Context(), bodyKeysContextKey{}, present)
+					// The raw values too, for a nested merge patch whose inner
+					// nulls the typed struct loses the same way.
+					r = r.WithContext(context.WithValue(ctx, bodyValuesContextKey{}, body))
 					var unknown []string
 					for key := range body {
 						if !set[key] {
@@ -95,6 +98,15 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 // worked only because that route's sibling had no id in it — every later entry
 // written as {id} silently matched nothing, and the guard passed by never
 // firing. That is how a throttle body carrying `status` got through.
+type bodyValuesContextKey struct{}
+
+// bodyValue is one top-level value of a guarded request body, exactly as sent.
+func bodyValue(ctx context.Context, key string) (json.RawMessage, bool) {
+	values, _ := ctx.Value(bodyValuesContextKey{}).(map[string]json.RawMessage)
+	value, present := values[key]
+	return value, present
+}
+
 func routeKey(r *http.Request) string {
 	segments := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
 	for i, segment := range segments {
@@ -112,7 +124,7 @@ func routeKey(r *http.Request) string {
 var connectionBodyFields = []string{
 	"label", "carrier", "environment", "host", "port", "systemId", "systemType",
 	"bindType", "password", "maxTps", "windowSize", "enquireLinkSeconds",
-	"reconnectBackoffSeconds",
+	"reconnectBackoffSeconds", "protocol",
 }
 
 // rcsAgentBodyFields is the agent PATCH body, which is a JSON Merge Patch.

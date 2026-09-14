@@ -32,6 +32,8 @@ type Connection struct {
 	// the API package reads it; the send path decrypts it when it binds.
 	PasswordEncrypted *string
 	PasswordSetAt     *time.Time
+	// Protocol is the stored overrides of the SMPP protocol values, as JSON.
+	Protocol []byte
 
 	MaxTps                  int
 	WindowSize              int
@@ -49,14 +51,15 @@ type Connection struct {
 const connectionColumns = `id, label, carrier, environment, host, port, system_id,
 	system_type, bind_type, password_encrypted, password_set_at, max_tps, window_size,
 	enquire_link_seconds, reconnect_backoff_seconds, status, health_status,
-	last_bound_at, last_error, created_at, updated_at`
+	last_bound_at, last_error, created_at, updated_at, protocol`
 
 func scanConnection(row pgx.Row) (Connection, error) {
 	var c Connection
 	err := row.Scan(&c.ID, &c.Label, &c.Carrier, &c.Environment, &c.Host, &c.Port,
 		&c.SystemID, &c.SystemType, &c.BindType, &c.PasswordEncrypted, &c.PasswordSetAt,
 		&c.MaxTps, &c.WindowSize, &c.EnquireLinkSeconds, &c.ReconnectBackoffSeconds,
-		&c.Status, &c.HealthStatus, &c.LastBoundAt, &c.LastError, &c.CreatedAt, &c.UpdatedAt)
+		&c.Status, &c.HealthStatus, &c.LastBoundAt, &c.LastError, &c.CreatedAt, &c.UpdatedAt,
+		&c.Protocol)
 	return c, err
 }
 
@@ -106,12 +109,12 @@ func CreateConnection(ctx context.Context, pool *pgxpool.Pool, c Connection) (Co
 	created, err := scanConnection(pool.QueryRow(ctx, `
 		INSERT INTO connections (label, carrier, environment, host, port, system_id,
 		    system_type, bind_type, password_encrypted, password_set_at, max_tps,
-		    window_size, enquire_link_seconds, reconnect_backoff_seconds)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+		    window_size, enquire_link_seconds, reconnect_backoff_seconds, protocol)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,COALESCE($15::jsonb, '{}'))
 		RETURNING `+connectionColumns,
 		c.Label, c.Carrier, c.Environment, c.Host, c.Port, c.SystemID,
 		c.SystemType, c.BindType, c.PasswordEncrypted, c.PasswordSetAt, c.MaxTps,
-		c.WindowSize, c.EnquireLinkSeconds, c.ReconnectBackoffSeconds))
+		c.WindowSize, c.EnquireLinkSeconds, c.ReconnectBackoffSeconds, nullableJSON(c.Protocol)))
 	if isUniqueViolation(err) {
 		return Connection{}, ErrConflict
 	}
@@ -138,6 +141,9 @@ type ConnectionPatch struct {
 	WindowSize              *int
 	EnquireLinkSeconds      *int
 	ReconnectBackoffSeconds *int
+	// Protocol is the complete new set of overrides, already merged and
+	// validated; nil leaves the stored set alone.
+	Protocol []byte
 }
 
 // UpdateConnection applies a patch.
@@ -167,13 +173,14 @@ func UpdateConnection(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID,
 		    window_size               = COALESCE($12, window_size),
 		    enquire_link_seconds      = COALESCE($13, enquire_link_seconds),
 		    reconnect_backoff_seconds = COALESCE($14, reconnect_backoff_seconds),
+		    protocol                  = COALESCE($15::jsonb, protocol),
 		    updated_at                = now()
 		WHERE id = $1
 		RETURNING `+connectionColumns,
 		id, patch.Label, patch.Carrier, patch.Environment, patch.Host, patch.Port,
 		patch.SystemID, patch.SystemType, patch.BindType, patch.PasswordEncrypted,
 		patch.MaxTps, patch.WindowSize, patch.EnquireLinkSeconds,
-		patch.ReconnectBackoffSeconds))
+		patch.ReconnectBackoffSeconds, nullableJSON(patch.Protocol)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Connection{}, ErrNotFound
 	}

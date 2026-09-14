@@ -128,8 +128,8 @@ func dialFake(t *testing.T, smsc *fakeSMSC, chain []string) (*SMPPBind, chan Del
 	reports := make(chan DeliveryReport, 16)
 	bind, err := DialSMPP(SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
 		Password: "secret", MaxTPS: 100, WindowSize: 4,
-		EnquireLink: 30 * time.Second, Rebind: time.Second},
-		chain, SMPPEvents{Report: func(r DeliveryReport) { reports <- r }})
+		EnquireLink: 30 * time.Second, Rebind: time.Second, Protocol: DefaultSMPPProtocol(chain)},
+		SMPPEvents{Report: func(r DeliveryReport) { reports <- r }})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -242,11 +242,11 @@ func TestTheRouterNeverHandsARealSMSToTheSandbox(t *testing.T) {
 	router := &SMPPRouter{Fallback: sandbox}
 	outcomes := router.Sync(map[string]SMPPConfig{"c1": {Carrier: "AIRTEL", Addr: smsc.addr,
 		SystemID: "relay", Password: "secret", MaxTPS: 100, WindowSize: 4,
-		EnquireLink: 30 * time.Second, Rebind: time.Second}}, nil, SMPPEvents{}, true)
+		EnquireLink: 30 * time.Second, Rebind: time.Second}}, SMPPEvents{}, true)
 	if outcomes["c1"] != nil {
 		t.Fatalf("sync bind: %v", outcomes["c1"])
 	}
-	t.Cleanup(func() { router.Sync(nil, nil, SMPPEvents{}, false) })
+	t.Cleanup(func() { router.Sync(nil, SMPPEvents{}, false) })
 
 	got, _ := router.Submit(context.Background(), []Submission{
 		{MessageID: "no-bind", Channel: "SMS", Carrier: "JIO", Country: "IN", Msisdn: "+919820000005", Sender: "ACMERT", Body: "hi"},
@@ -283,8 +283,8 @@ func TestAnOTPIsNotQueuedBehindACampaignOnTheSameBind(t *testing.T) {
 	smsc := startFakeSMSC(t)
 	bind, err := DialSMPP(SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
 		Password: "secret", MaxTPS: 5, WindowSize: 2,
-		EnquireLink: 30 * time.Second, Rebind: time.Second},
-		nil, SMPPEvents{})
+		EnquireLink: 30 * time.Second, Rebind: time.Second, Protocol: DefaultSMPPProtocol(nil)},
+		SMPPEvents{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
 	} {
 		smsc := startFakeSMSC(t)
 		router := &SMPPRouter{Fallback: NewSandbox(0)}
-		if err := router.Sync(map[string]SMPPConfig{"c": config(smsc, bindType)}, nil,
+		if err := router.Sync(map[string]SMPPConfig{"c": config(smsc, bindType)},
 			SMPPEvents{}, true)["c"]; err != nil {
 			t.Fatalf("%q: bind: %v", bindType, err)
 		}
@@ -350,6 +350,6 @@ func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
 		} else if !got[0].Accepted {
 			t.Errorf("%q bind refused a submit: %+v", bindType, got[0])
 		}
-		router.Sync(nil, nil, SMPPEvents{}, false)
+		router.Sync(nil, SMPPEvents{}, false)
 	}
 }

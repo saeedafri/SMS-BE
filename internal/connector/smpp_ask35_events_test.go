@@ -32,7 +32,7 @@ func lateEvents(reports chan DeliveryReport, late chan LateSubmit) SMPPEvents {
 func TestAReceiptNamesTheCarrierItArrivedOn(t *testing.T) {
 	smsc := startFakeSMSC(t)
 	reports := make(chan DeliveryReport, 4)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4), nil,
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4),
 		SMPPEvents{Report: func(r DeliveryReport) { reports <- r }})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -61,7 +61,7 @@ func TestALateSubmitResponseIsStillRecorded(t *testing.T) {
 	smsc := startFakeSMSC(t)
 	smsc.respondAfter = 600 * time.Millisecond
 	late := make(chan LateSubmit, 1)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4), nil,
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4),
 		lateEvents(make(chan DeliveryReport, 4), late))
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -89,7 +89,7 @@ func TestAWaitThatNeverSentIsSentLater(t *testing.T) {
 	// Every message that was waiting when its caller gave up is retried, the
 	// cancelled OTPs included, so the channel carries more than the one asserted.
 	late := make(chan LateSubmit, 64)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4), nil,
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4),
 		lateEvents(make(chan DeliveryReport, 64), late))
 	if err != nil {
 		t.Fatalf("bind: %v", err)
@@ -157,8 +157,8 @@ func TestADeadHostDoesNotDelayTheOtherBinds(t *testing.T) {
 	started := time.Now()
 	router.Sync(map[string]SMPPConfig{
 		"dead-1": first, "dead-2": second, "live": fakeConfig(smsc, "AIRTEL", 100, 4),
-	}, nil, SMPPEvents{}, true)
-	t.Cleanup(func() { router.Sync(nil, nil, SMPPEvents{}, true) })
+	}, SMPPEvents{}, true)
+	t.Cleanup(func() { router.Sync(nil, SMPPEvents{}, true) })
 	if took := time.Since(started); took > 15*time.Second {
 		t.Fatalf("Sync took %s with two dead hosts, want the dials in parallel", took)
 	}
@@ -189,8 +189,8 @@ func TestAConfiguredDeploymentNeverUsesTheSandbox(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sandbox := &countingConnector{Connector: NewSandbox(0)}
 			router := &SMPPRouter{Fallback: sandbox}
-			router.Sync(tc.wanted, nil, SMPPEvents{}, tc.configured)
-			t.Cleanup(func() { router.Sync(nil, nil, SMPPEvents{}, false) })
+			router.Sync(tc.wanted, SMPPEvents{}, tc.configured)
+			t.Cleanup(func() { router.Sync(nil, SMPPEvents{}, false) })
 			receipts, _ := router.Submit(context.Background(), []Submission{tc.submission})
 			if got := sandbox.submitted.Load(); got != tc.sandbox {
 				t.Fatalf("sandbox received %d submissions, want %d", got, tc.sandbox)
@@ -211,7 +211,7 @@ func TestADispatchAfterTheWindowClosesIsRefused(t *testing.T) {
 	t.Cleanup(func() { smppClock = previous })
 
 	smsc := startFakeSMSC(t)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4), nil, SMPPEvents{})
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 100, 4), SMPPEvents{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestADispatchAfterTheWindowClosesIsRefused(t *testing.T) {
 func TestAWaitingMessageOnAClosedBindIsReportedNotSent(t *testing.T) {
 	smsc := startFakeSMSC(t)
 	late := make(chan LateSubmit, 64)
-	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4), nil,
+	bind, err := DialSMPP(fakeConfig(smsc, "AIRTEL", 1, 4),
 		lateEvents(make(chan DeliveryReport, 64), late))
 	if err != nil {
 		t.Fatalf("bind: %v", err)

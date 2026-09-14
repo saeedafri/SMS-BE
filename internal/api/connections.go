@@ -23,7 +23,7 @@ import (
 // thing a reader ever learns is when it was last set. Every response on these
 // eight routes goes through this one function so there is a single place that
 // could ever leak it, and it does not.
-func connectionResponse(c store.Connection) gen.Connection {
+func (s *Server) connectionResponse(c store.Connection) gen.Connection {
 	out := gen.Connection{
 		Id:                      c.ID,
 		Label:                   c.Label,
@@ -40,6 +40,7 @@ func connectionResponse(c store.Connection) gen.Connection {
 		EnquireLinkSeconds:      c.EnquireLinkSeconds,
 		ReconnectBackoffSeconds: c.ReconnectBackoffSeconds,
 		Status:                  gen.ConnectionStatus(c.Status),
+		Protocol:                effectiveProtocol(storedProtocol(c.Protocol), s.DLTChain),
 		Health: gen.ConnectionHealth{
 			Status:      gen.ConnectionHealthStatus(c.HealthStatus),
 			LastBoundAt: c.LastBoundAt,
@@ -87,7 +88,7 @@ func (s *Server) GetConnections(ctx context.Context, request gen.GetConnectionsR
 	}
 	out := make([]gen.Connection, 0, len(connections))
 	for _, connection := range connections {
-		out = append(out, connectionResponse(connection))
+		out = append(out, s.connectionResponse(connection))
 	}
 	return gen.GetConnections200JSONResponse{Connections: out}, nil
 }
@@ -110,7 +111,7 @@ func (s *Server) GetConnection(ctx context.Context, request gen.GetConnectionReq
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetConnection200JSONResponse(connectionResponse(connection)), nil
+	return gen.GetConnection200JSONResponse(s.connectionResponse(connection)), nil
 }
 
 func (s *Server) CreateConnection(ctx context.Context, request gen.CreateConnectionRequestObject) (
@@ -128,6 +129,12 @@ func (s *Server) CreateConnection(ctx context.Context, request gen.CreateConnect
 	}
 	if refusal := validateConnectionShape(string(body.Carrier), string(body.Environment),
 		string(body.BindType), body.Port, body.MaxTps); refusal != "" {
+		return gen.CreateConnection422JSONResponse(errorBody(codeValidation, refusal)), nil
+	}
+
+	raw, present := bodyValue(ctx, "protocol")
+	protocol, field, refusal := mergeProtocol(nil, raw, present, s.DLTChain)
+	if field != "" {
 		return gen.CreateConnection422JSONResponse(errorBody(codeValidation, refusal)), nil
 	}
 
@@ -163,6 +170,7 @@ func (s *Server) CreateConnection(ctx context.Context, request gen.CreateConnect
 		WindowSize:              intOrDefault(body.WindowSize, 10),
 		EnquireLinkSeconds:      intOrDefault(body.EnquireLinkSeconds, 30),
 		ReconnectBackoffSeconds: intOrDefault(body.ReconnectBackoffSeconds, 5),
+		Protocol:                protocol,
 	}
 	created, err := store.CreateConnection(ctx, s.operatorPool(), connection)
 	if errors.Is(err, store.ErrConflict) {
@@ -175,7 +183,7 @@ func (s *Server) CreateConnection(ctx context.Context, request gen.CreateConnect
 	// The detail names the bind, never its password.
 	s.recordConnectionAction(ctx, operator, "connection.create", created,
 		fmt.Sprintf("Created the %s %s bind %q", created.Carrier, created.Environment, created.Label))
-	return gen.CreateConnection201JSONResponse(connectionResponse(created)), nil
+	return gen.CreateConnection201JSONResponse(s.connectionResponse(created)), nil
 }
 
 func (s *Server) UpdateConnection(ctx context.Context, request gen.UpdateConnectionRequestObject) (
@@ -235,6 +243,23 @@ func (s *Server) UpdateConnection(ctx context.Context, request gen.UpdateConnect
 		return gen.UpdateConnection422JSONResponse(
 			errorBody(codeValidation, "maxTps must be greater than zero.")), nil
 	}
+	// The protocol is merged with what is stored and the whole result validated
+	// before anything is written, so a refused request changes nothing.
+	if raw, present := bodyValue(ctx, "protocol"); present {
+		current, err := store.GetConnection(ctx, s.operatorPool(), id)
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.UpdateConnection404JSONResponse(errorBody(codeNotFound, "No such connection.")), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		merged, field, refusal := mergeProtocol(current.Protocol, raw, true, s.DLTChain)
+		if field != "" {
+			return gen.UpdateConnection422JSONResponse(errorBody(codeValidation, refusal)), nil
+		}
+		patch.Protocol = merged
+	}
+
 	// Omitting password leaves the stored one untouched; supplying it replaces
 	// it and moves passwordSetAt.
 	if body.Password != nil {
@@ -263,7 +288,7 @@ func (s *Server) UpdateConnection(ctx context.Context, request gen.UpdateConnect
 	}
 	s.recordConnectionAction(ctx, operator, "connection.update", updated,
 		fmt.Sprintf("Updated the %s %s bind %q", updated.Carrier, updated.Environment, updated.Label))
-	return gen.UpdateConnection200JSONResponse(connectionResponse(updated)), nil
+	return gen.UpdateConnection200JSONResponse(s.connectionResponse(updated)), nil
 }
 
 func (s *Server) EnableConnection(ctx context.Context, request gen.EnableConnectionRequestObject) (
@@ -301,7 +326,7 @@ func (s *Server) EnableConnection(ctx context.Context, request gen.EnableConnect
 	}
 	s.recordConnectionAction(ctx, operator, "connection.enable", updated,
 		fmt.Sprintf("Enabled the %s %s bind %q", updated.Carrier, updated.Environment, updated.Label))
-	return gen.EnableConnection200JSONResponse(connectionResponse(updated)), nil
+	return gen.EnableConnection200JSONResponse(s.connectionResponse(updated)), nil
 }
 
 func (s *Server) DisableConnection(ctx context.Context, request gen.DisableConnectionRequestObject) (
@@ -340,7 +365,7 @@ func (s *Server) DisableConnection(ctx context.Context, request gen.DisableConne
 	s.recordConnectionAction(ctx, operator, "connection.disable", updated,
 		fmt.Sprintf("Disabled the %s %s bind %q; %d corridor(s) now fall through to the next priority",
 			updated.Carrier, updated.Environment, updated.Label, carrying))
-	return gen.DisableConnection200JSONResponse(connectionResponse(updated)), nil
+	return gen.DisableConnection200JSONResponse(s.connectionResponse(updated)), nil
 }
 
 func (s *Server) DeleteConnection(ctx context.Context, request gen.DeleteConnectionRequestObject) (
@@ -523,6 +548,7 @@ func (s *Server) smppConfig(c store.Connection) (connector.SMPPConfig, error) {
 		MaxTPS:   c.MaxTps, WindowSize: c.WindowSize,
 		EnquireLink: time.Duration(c.EnquireLinkSeconds) * time.Second,
 		Rebind:      time.Duration(c.ReconnectBackoffSeconds) * time.Second,
+		Protocol:    wireProtocol(effectiveProtocol(storedProtocol(c.Protocol), s.DLTChain)),
 	}, nil
 }
 
@@ -573,7 +599,7 @@ func (s *Server) ReloadSMPPBinds(ctx context.Context) error {
 	// Configured means this environment has connection rows at all, in any
 	// status. It decides whether the sandbox may serve SMS, so it comes from the
 	// table, never from whether a dial happened to work.
-	dials := s.SMPP.Sync(wanted, s.DLTChain, events, len(connections) > 0)
+	dials := s.SMPP.Sync(wanted, events, len(connections) > 0)
 
 	// Health is written for every connection this pass touched, from what the
 	// bind is doing now: a bind that dropped since the last pass, or keeps
