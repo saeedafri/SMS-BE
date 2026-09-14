@@ -435,6 +435,36 @@ func ListTemplates(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	return out, total, nil
 }
 
+// ApprovedTemplatesForSender reads every approved template on one sender, with
+// no page limit: a match against the 201st must be found as surely as against
+// the first.
+func ApprovedTemplatesForSender(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	senderID uuid.UUID) ([]Template, error) {
+
+	var out []Template
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+templateColumns+` FROM templates
+			WHERE sender_id = $1 AND status = 'approved'
+			ORDER BY created_at DESC, id DESC`, senderID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			template, err := scanTemplate(rows)
+			if err != nil {
+				return err
+			}
+			out = append(out, template)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: approved templates for sender: %w", err)
+	}
+	return out, nil
+}
+
 func GetTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templateID uuid.UUID) (Template, error) {
 	var template Template
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {

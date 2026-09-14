@@ -12,9 +12,9 @@ import (
 func TestAMonthsDeliveredUsageBecomesOneGSTInvoicePerCurrency(t *testing.T) {
 	tenant := uuid.New()
 	lines := invoiceLines([]store.BilledUsage{
-		{TenantID: tenant, Channel: "SMS", Country: "IN", Currency: "INR", MessageCount: 8000, AmountMinor: 96000},
-		{TenantID: tenant, Channel: "RCS", Country: "IN", Currency: "INR", MessageCount: 1000, AmountMinor: 21000},
-		{TenantID: tenant, Channel: "SMS", Country: "US", Currency: "USD", MessageCount: 3, AmountMinor: 7},
+		{TenantID: tenant, Channel: "SMS", Country: "IN", Currency: "INR", Quantity: 8000, UnitMinor: 12, AmountMinor: 96000},
+		{TenantID: tenant, Channel: "RCS", Country: "IN", Currency: "INR", Quantity: 1000, UnitMinor: 21, AmountMinor: 21000},
+		{TenantID: tenant, Channel: "SMS", Country: "US", Currency: "USD", Quantity: 7, UnitMinor: 1, AmountMinor: 7},
 	})
 	if len(lines) != 2 {
 		t.Fatalf("%d invoices, want one per currency", len(lines))

@@ -67,7 +67,7 @@ func TestBilledUsageCountsOnlyDeliveredMessagesInThePeriod(t *testing.T) {
 			mine = append(mine, row)
 		}
 	}
-	if len(mine) != 1 || mine[0].MessageCount != 1 || mine[0].AmountMinor != 12 {
+	if len(mine) != 1 || mine[0].Quantity != 1 || mine[0].UnitMinor != 12 || mine[0].AmountMinor != 12 {
 		t.Fatalf("usage = %+v, want exactly the one delivered message at 12", mine)
 	}
 }

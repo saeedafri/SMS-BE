@@ -896,11 +896,11 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		return fmt.Errorf("seed invoice: %w", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO invoice_line_items (invoice_id, tenant_id, description, quantity,
-		                                unit_minor, amount_minor)
-		VALUES ($1, $2, 'SMS messages (IN)', 8000, 12,  96000),
-		       ($1, $2, 'RCS messages (IN)', 1000, 21,  21000),
-		       ($1, $2, 'Number lookup',      100, 10,   1000)`,
+		INSERT INTO invoice_line_items (invoice_id, tenant_id, description, channel, country,
+		                                quantity, unit_minor, amount_minor)
+		VALUES ($1, $2, 'SMS messages', 'SMS', 'IN', 8000, 12,  96000),
+		       ($1, $2, 'RCS messages', 'RCS', 'IN', 1000, 21,  21000),
+		       ($1, $2, 'Number lookup', NULL, NULL,  100, 10,   1000)`,
 		invoiceID, tenantID); err != nil {
 		return fmt.Errorf("seed invoice lines: %w", err)
 	}

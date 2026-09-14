@@ -260,7 +260,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		TemplateSender: templateSender, Suppressed: suppressed,
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
-		RegisteredTemplateRequired: registeredTemplateRequired(sender.Country),
+		RegisteredTemplateRequired: RegisteredTemplateRequired(sender.Country),
 		OutsidePromotionalWindow:   outsidePromotionalWindow(sender.Country, template),
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
@@ -731,14 +731,14 @@ func refusalCurrency(identity store.Identity, country string) string {
 	return ""
 }
 
-// registeredTemplateRequired asks the DESTINATION's regime whether a send must
+// RegisteredTemplateRequired asks the DESTINATION's regime whether a send must
 // carry a template the regulator registered.
 //
 // Resolved from the sender's country, in one function, so the three dispatch
 // paths cannot disagree about it. An unknown country requires nothing: we do
 // not operate there, and inventing a rule for it would refuse sends we have no
 // basis to refuse.
-func registeredTemplateRequired(country string) bool {
+func RegisteredTemplateRequired(country string) bool {
 	regime, known := compliance.For(country)
 	return known && regime.RequiresRegisteredTemplate()
 }

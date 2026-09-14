@@ -34,8 +34,25 @@ func (s *Server) IssueMonthlyInvoices(ctx context.Context) error {
 		return err
 	}
 	var failures []error
+	// A message whose cost is not a whole number of segments is a pricing
+	// defect. That tenant is not invoiced — an invoice cannot state a unit price
+	// that does not exist — and the error names it so it gets fixed.
+	mispriced := map[uuid.UUID]int64{}
+	for _, row := range usage {
+		mispriced[row.TenantID] += row.Mispriced
+	}
+	for tenant, count := range mispriced {
+		if count > 0 {
+			failures = append(failures, fmt.Errorf(
+				"tenant %s: %d delivered messages cost a non-whole number of segments; invoice not issued",
+				tenant, count))
+		}
+	}
 	issued := 0
 	for key, lines := range invoiceLines(usage) {
+		if mispriced[key.tenant] > 0 {
+			continue
+		}
 		invoice := buildInvoice(key.currency, start, end, lines)
 		ok, err := store.IssueInvoice(ctx, s.DB, store.Identity{TenantID: key.tenant},
 			invoice, lines)
@@ -61,17 +78,18 @@ type invoiceKey struct {
 	currency string
 }
 
+// invoiceLines turns billed usage into lines, one per (channel, country, unit
+// price). quantity * unit == amount on every line by construction, because the
+// usage is already grouped by that exact unit price.
 func invoiceLines(usage []store.BilledUsage) map[invoiceKey][]store.InvoiceLine {
 	out := map[invoiceKey][]store.InvoiceLine{}
 	for _, row := range usage {
 		key := invoiceKey{row.TenantID, row.Currency}
-		unit := int64(0)
-		if row.MessageCount > 0 {
-			unit = row.AmountMinor / row.MessageCount
-		}
+		channel, country := row.Channel, row.Country
 		out[key] = append(out[key], store.InvoiceLine{
-			Description: fmt.Sprintf("%s messages (%s)", row.Channel, row.Country),
-			Quantity:    row.MessageCount, UnitMinor: unit, AmountMinor: row.AmountMinor,
+			Description: channel + " messages",
+			Channel:     &channel, Country: &country,
+			Quantity: row.Quantity, UnitMinor: row.UnitMinor, AmountMinor: row.AmountMinor,
 		})
 	}
 	return out

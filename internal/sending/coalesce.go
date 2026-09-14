@@ -290,7 +290,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			// The destination regime's template binding, applied identically to
 			// the batched path. A gate that is weaker when messages arrive in
 			// company is not a gate.
-			RegisteredTemplateRequired: registeredTemplateRequired(plan.sender.Country),
+			RegisteredTemplateRequired: RegisteredTemplateRequired(plan.sender.Country),
 			OutsidePromotionalWindow:   outsidePromotionalWindow(plan.sender.Country, plan.template),
 			TemplateBody:               templateBody(plan.template),
 			Body:                       plan.pending.request.Body,

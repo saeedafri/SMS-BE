@@ -17,14 +17,16 @@ import (
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 )
 
-// toVerifyService maps a stored service. Status is derived from whether every
-// configured channel has an approved sender: a service whose sender is still
-// in review cannot actually send, and reporting it as "live" would mean the
-// first real OTP silently fails.
+// toVerifyService maps a stored service, with each channel's readiness.
+//
+// A service is live only when every channel's sender is approved and every
+// channel whose destination requires a registered template has one that its
+// copy instantiates. Reporting "live" on sender approval alone meant a service
+// whose copy matched nothing read live while every code it tried was refused.
 func (s *Server) toVerifyService(ctx context.Context, identity store.Identity,
 	service store.VerifyService) gen.VerifyService {
 
-	channels := make([]gen.VerifyChannelConfig, 0, len(service.Channels))
+	channels := make([]gen.VerifyChannelState, 0, len(service.Channels))
 	live := len(service.Channels) > 0
 	for _, channel := range service.Channels {
 		senderID, valid := parsePathID(channel.SenderID)
@@ -32,13 +34,24 @@ func (s *Server) toVerifyService(ctx context.Context, identity store.Identity,
 			live = false
 			continue
 		}
-		channels = append(channels, gen.VerifyChannelConfig{
+		state := gen.VerifyChannelState{
 			Channel: gen.ChannelId(channel.Channel), SenderId: senderID, Body: channel.Body,
-		})
+		}
 		sender, err := store.GetSenderID(ctx, s.DB, identity, senderID)
 		if err != nil || sender.Status != "approved" {
 			live = false
 		}
+		if err == nil {
+			state.TemplateRequired = sending.RegisteredTemplateRequired(sender.Country)
+			template, err := s.matchOTPTemplate(ctx, identity, senderID, channel.Body, service.CodeLength)
+			if err == nil && template != nil {
+				state.MatchedTemplate = &gen.VerifyTemplateMatch{Id: template.ID, Name: template.Name}
+			}
+			if state.TemplateRequired && state.MatchedTemplate == nil {
+				live = false
+			}
+		}
+		channels = append(channels, state)
 	}
 
 	fallback := make([]gen.ChannelId, 0, len(service.FallbackOrder))
@@ -225,9 +238,23 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 			refusal = "sender_not_found"
 			continue
 		}
+		// The template is chosen from the copy, never from the real code, by
+		// the same function the service's readiness uses, so the screen cannot
+		// say "matched" while the send is refused. Only then is the real code
+		// substituted. With no match the send goes without a template, and the
+		// gate refuses it registered_template_required exactly where the
+		// destination requires one, and sends it where it does not.
+		template, err := s.matchOTPTemplate(ctx, identity, senderID, config.Body, service.CodeLength)
+		if err != nil {
+			return nil, err
+		}
+		var templateID *uuid.UUID
+		if template != nil {
+			templateID = &template.ID
+		}
 		body := strings.Replace(config.Body, "{{code}}", code, 1)
 		result, err := sendService.Send(ctx, identity, sending.SendRequest{
-			SenderID: senderID, TemplateID: s.otpTemplate(ctx, identity, senderID, body),
+			SenderID: senderID, TemplateID: templateID,
 			Msisdn: request.Body.Msisdn, Body: body, Priority: true,
 		})
 		if err != nil && !messaging.IsRefusal(err) && result.FailureCode == "" {
@@ -250,9 +277,12 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 		}
 		s.Logger.Warn("verification code not sent",
 			"verificationId", created.ID, "reason", refusal)
-		return gen.CreateVerification422JSONResponse(errorBody(codeValidation,
-			"The code could not be sent ("+refusal+"). Check this service's sender, "+
-				"its registered OTP template and the wallet balance.")), nil
+		// The reason is data, so an API caller learns whether to top up or
+		// register a template without parsing English.
+		body := errorBody("verification_not_sent", "The code could not be sent on any channel. "+
+			"Check this service's sender, its approved OTP template and the wallet balance.")
+		body.Error.Reason = &refusal
+		return gen.CreateVerification422JSONResponse(body), nil
 	}
 	if err := store.SetVerificationDelivery(ctx, s.DB, identity, created.ID,
 		channel, created.CostMinor); err != nil {
@@ -287,31 +317,41 @@ func verifyChannelOrder(service store.VerifyService) []store.VerifyChannelConfig
 	return ordered
 }
 
-// otpTemplate finds the approved template this OTP body instantiates.
+// matchOTPTemplate is the approved template for this sender whose registered
+// text the OTP copy instantiates, using the send path's own matcher. Used by
+// BOTH CreateVerification and toVerifyService, so the service can never report
+// a match the send path would not use.
 //
-// A verify service stores its copy, not a template id, yet India refuses any
-// send that names no registered template. The customer registers the OTP text
-// on DLT like any other template; matching the rendered body against their
-// approved ones for this sender is what binds the two without asking them to
-// configure the same thing twice. Nil when none matches, which the gate then
-// refuses with its own reason.
-func (s *Server) otpTemplate(ctx context.Context, identity store.Identity,
-	senderID uuid.UUID, body string) *uuid.UUID {
+// Every approved template on the sender is read, with no page limit. The copy is
+// rendered twice, with codes of the service's length that share no digit, and
+// both renderings must match: a fixed digit beside the variable ("Your code:
+// 1{{code}}") satisfies one code in ten, and would otherwise match now and then.
+func (s *Server) matchOTPTemplate(ctx context.Context, identity store.Identity,
+	senderID uuid.UUID, copy string, codeLength int) (*store.Template, error) {
 
-	approved := "approved"
-	templates, _, err := store.ListTemplates(ctx, s.DB, identity,
-		store.CatalogueFilter{Status: &approved, Limit: 200})
+	templates, err := store.ApprovedTemplatesForSender(ctx, s.DB, identity, senderID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	for _, template := range templates {
-		if template.SenderID == senderID && template.Body != nil &&
-			messaging.MatchesTemplate(*template.Body, body) {
-			id := template.ID
-			return &id
+	zeros := strings.Replace(copy, "{{code}}", strings.Repeat("0", codeLength), 1)
+	nines := strings.Replace(copy, "{{code}}", strings.Repeat("9", codeLength), 1)
+	for i := range templates {
+		text, ok := registeredText(templates[i])
+		if ok && messaging.MatchesTemplate(text, zeros) && messaging.MatchesTemplate(text, nines) {
+			return &templates[i], nil
 		}
 	}
-	return nil
+	return nil, nil
+}
+
+// registeredText is the text a template registers: its body, or for an RCS text
+// template the text inside rcsContent. A card has no single text and matches
+// nothing.
+func registeredText(t store.Template) (string, bool) {
+	if t.Body != nil && *t.Body != "" {
+		return *t.Body, true
+	}
+	return rcsTemplateText(t)
 }
 
 // CheckVerification applies one guess.

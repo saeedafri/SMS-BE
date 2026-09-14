@@ -127,7 +127,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// construction — which is the point. The same rule applies to every
 			// dispatch path, and a campaign that somehow sent text unrelated to
 			// its own template would be refused here too.
-			RegisteredTemplateRequired: registeredTemplateRequired(context.sender.Country),
+			RegisteredTemplateRequired: RegisteredTemplateRequired(context.sender.Country),
 			OutsidePromotionalWindow:   outsidePromotionalWindow(context.sender.Country, context.template),
 			TemplateBody:               templateBody(context.template),
 			Body:                       body,

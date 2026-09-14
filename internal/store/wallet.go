@@ -657,13 +657,13 @@ type Invoice struct {
 }
 
 type InvoiceLineItem struct {
-	CampaignID   *string
-	CampaignName *string
-	JourneyID    *string
-	JourneyName  *string
-	Channel      string
-	AmountMinor  int64
-	CreatedAt    time.Time
+	Description string
+	// Channel and Country are nil for a line that is not a message channel.
+	Channel     *string
+	Country     *string
+	Quantity    int64
+	UnitMinor   int64
+	AmountMinor int64
 }
 
 // TaxRatePercentFor returns the tax applied to an invoice in a currency.
@@ -735,7 +735,8 @@ func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID 
 		}
 
 		rows, err := tx.Query(ctx, `
-			SELECT description, amount_minor FROM invoice_line_items
+			SELECT description, channel, country, quantity, unit_minor, amount_minor
+			FROM invoice_line_items
 			WHERE invoice_id = $1 ORDER BY id`, invoiceID)
 		if err != nil {
 			return err
@@ -744,12 +745,10 @@ func GetInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity, invoiceID 
 		invoice.LineItems = []InvoiceLineItem{}
 		for rows.Next() {
 			var item InvoiceLineItem
-			var description string
-			if err := rows.Scan(&description, &item.AmountMinor); err != nil {
+			if err := rows.Scan(&item.Description, &item.Channel, &item.Country,
+				&item.Quantity, &item.UnitMinor, &item.AmountMinor); err != nil {
 				return err
 			}
-			item.Channel = description
-			item.CreatedAt = invoice.PeriodEnd
 			invoice.LineItems = append(invoice.LineItems, item)
 		}
 		return rows.Err()
@@ -845,10 +844,10 @@ func IssueInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		for _, line := range lines {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO invoice_line_items (invoice_id, tenant_id, description,
-				    quantity, unit_minor, amount_minor)
-				VALUES ($1,$2,$3,$4,$5,$6)`,
-				invoiceID, id.TenantID, line.Description, line.Quantity,
-				line.UnitMinor, line.AmountMinor); err != nil {
+				    channel, country, quantity, unit_minor, amount_minor)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+				invoiceID, id.TenantID, line.Description, line.Channel, line.Country,
+				line.Quantity, line.UnitMinor, line.AmountMinor); err != nil {
 				return err
 			}
 		}
@@ -864,6 +863,8 @@ func IssueInvoice(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // InvoiceLine is one row written to an invoice.
 type InvoiceLine struct {
 	Description string
+	Channel     *string
+	Country     *string
 	Quantity    int64
 	UnitMinor   int64
 	AmountMinor int64

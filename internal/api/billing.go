@@ -16,18 +16,20 @@ func invoiceResponse(inv store.Invoice) gen.Invoice {
 	items := make([]gen.InvoiceLineItem, 0, len(inv.LineItems))
 	for _, item := range inv.LineItems {
 		line := gen.InvoiceLineItem{
-			CampaignId:   item.CampaignID,
-			CampaignName: item.CampaignName,
-			JourneyId:    item.JourneyID,
-			JourneyName:  item.JourneyName,
-			AmountMinor:  int(item.AmountMinor),
-			CreatedAt:    item.CreatedAt,
+			Description: item.Description,
+			Quantity:    int(item.Quantity),
+			UnitMinor:   int(item.UnitMinor),
+			AmountMinor: int(item.AmountMinor),
 		}
-		// Nullable oneOf in the contract, so a generated union rather than a
-		// plain enum.
-		var channel gen.InvoiceLineItem_Channel
-		_ = channel.FromChannelId(gen.ChannelId(item.Channel))
-		line.Channel = &channel
+		// JSON null when the line is not a message channel or country.
+		if item.Channel != nil {
+			channel := gen.ChannelId(*item.Channel)
+			line.Channel = &channel
+		}
+		if item.Country != nil {
+			country := gen.CountryCode(*item.Country)
+			line.Country = &country
+		}
 		items = append(items, line)
 	}
 	return gen.Invoice{
