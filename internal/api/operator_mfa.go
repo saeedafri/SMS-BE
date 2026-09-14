@@ -105,7 +105,7 @@ func (s *Server) OperatorEnrollMfa(ctx context.Context, _ gen.OperatorEnrollMfaR
 		return gen.OperatorEnrollMfa401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
-	secret, otpauthURI, err := auth.NewTOTPSecret(operator.Email, s.EnableDevEndpoints)
+	secret, otpauthURI, err := auth.NewTOTPSecret(operator.Email, s.devSecretFor(operator.Email))
 	if err != nil {
 		return nil, err
 	}

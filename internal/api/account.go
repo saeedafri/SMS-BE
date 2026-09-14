@@ -170,6 +170,13 @@ func isFixtureAddress(email string) bool {
 	return false
 }
 
+// devSecretFor says whether an account may be enrolled with the published dev
+// TOTP secret: dev endpoints on AND a fixture address, like every other dev
+// bypass. The flag alone handed it to real customers.
+func (s *Server) devSecretFor(email string) bool {
+	return s.EnableDevEndpoints && isFixtureAddress(email)
+}
+
 // devPasswordResetToken is the reset token issued when dev endpoints are on.
 // It matches DEV_RESET_TOKEN in ../SMS-UI/src/lib/auth/session-config.ts, which
 // is what the dev-only "Open reset link" shortcut on the forgot screen points
@@ -298,7 +305,7 @@ func (s *Server) EnrollMfa(ctx context.Context, _ gen.EnrollMfaRequestObject) (g
 		// than a typed response.
 		return nil, errUnauthenticated
 	}
-	secret, otpauthURI, err := auth.NewTOTPSecret(identity.Email, s.EnableDevEndpoints)
+	secret, otpauthURI, err := auth.NewTOTPSecret(identity.Email, s.devSecretFor(identity.Email))
 	if err != nil {
 		return nil, err
 	}
