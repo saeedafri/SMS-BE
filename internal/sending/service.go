@@ -344,21 +344,20 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		return SendResult{}, fmt.Errorf("sending: submit: %w", err)
 	}
 
-	state, errorCode := messaging.StateAccepted, ""
-	var carrierRef *string
+	// No receipt at all means the message never left the bind's wait: it stays
+	// queued with its hold until the bind reports how it went.
+	outcome := receiptOutcome{state: messaging.StateQueued, pending: true}
 	if len(receipts) > 0 {
-		if receipts[0].Accepted {
-			ref := receipts[0].CarrierRef
-			carrierRef = &ref
-		} else {
-			state = messaging.StateCarrierRejected
-			errorCode = receipts[0].ErrorCode
-		}
+		outcome = outcomeOf(receipts[0], true)
+	}
+	if outcome.pending {
+		return SendResult{MessageID: messageID, Status: messaging.ContractStatus(outcome.state),
+			CostMinor: cost, Currency: rate.Currency, Segments: segments}, nil
 	}
 
-	// A carrier rejection releases the hold immediately: nothing was delivered,
-	// so nothing is owed.
-	if state == messaging.StateCarrierRejected {
+	// A refusal or a carrier rejection releases the hold immediately: nothing
+	// was delivered, so nothing is owed.
+	if outcome.release {
 		if err := s.release(ctx, identity, rate.Currency, cost, messageID); err != nil {
 			return SendResult{}, err
 		}
@@ -368,27 +367,92 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	update := store.MessageRecord{
 		ID: messageID, Channel: sender.Channel, Country: sender.Country,
 		SenderHeader: sender.Header, TemplateID: request.TemplateID, Msisdn: msisdn,
-		Status: string(state), Segments: uint8(segments), Currency: rate.Currency,
-		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: carrierRef,
+		Status: string(outcome.state), Segments: uint8(segments), Currency: rate.Currency,
+		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: outcome.ref,
 		Carrier: carrier, RouteID: routeID,
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
 	}
-	if errorCode != "" {
-		update.ErrorCode = &errorCode
-		class, _ := messaging.ClassifyCarrierError(errorCode)
-		classValue := string(class)
-		update.ErrorClass = &classValue
+	update.ErrorCode, update.ErrorClass = outcome.codes()
+	if outcome.release {
 		update.CostMinor = 0
 	}
 	if err := s.record(ctx, identity, update,
-		string(messaging.StateQueued), string(state), errorCode); err != nil {
+		string(messaging.StateQueued), string(outcome.state), outcome.code); err != nil {
 		return SendResult{}, err
 	}
 
-	return SendResult{
-		MessageID: messageID, Status: messaging.ContractStatus(state),
+	result := SendResult{
+		MessageID: messageID, Status: messaging.ContractStatus(outcome.state),
 		CostMinor: update.CostMinor, Currency: rate.Currency, Segments: segments,
-	}, nil
+	}
+	if outcome.state == messaging.StateRejected {
+		result.FailureCode = outcome.code
+	}
+	return result, nil
+}
+
+// receiptOutcome is what one carrier receipt means for its message. The three
+// send loops — a single message, a coalesced batch and a campaign page — all
+// decide through outcomeOf, so a code cannot be a refusal on one path and an
+// operator's failure on another.
+type receiptOutcome struct {
+	state messaging.State
+	// code is the refusal code for our refusals, else the operator's error code.
+	code string
+	// class is set only for an operator's failure. A refusal has none.
+	class string
+	ref   *string
+	// release: the hold goes back now, and the message costs nothing.
+	release bool
+	// pending: nothing to write. The message stays queued, holding its money,
+	// until the bind reports through LateSubmit.
+	pending bool
+}
+
+// ourRefusals are the receipt codes the router decides before any operator sees
+// the message. The contract calls that a refusal: rejected, a lowercase
+// MessageRefusalCode, cost 0 — never the operator's failure.
+var ourRefusals = map[string]string{
+	"NO_OPERATOR_BIND": "no_operator_bind",
+	"DLT_IDS_MISSING":  "dlt_ids_missing",
+}
+
+func outcomeOf(receipt connector.Receipt, found bool) receiptOutcome {
+	switch {
+	case !found:
+		return receiptOutcome{state: messaging.StateQueued, pending: true}
+	case receipt.Accepted:
+		ref := receipt.CarrierRef
+		return receiptOutcome{state: messaging.StateAccepted, ref: &ref}
+	case receipt.ErrorCode == "SUBMIT_TIMEOUT":
+		// Written and never answered. The operator may have taken it, so it is
+		// in flight with its hold, not refused. A late response settles it, and
+		// otherwise the reconciler expires it and releases the hold.
+		return receiptOutcome{state: messaging.StateSubmitted}
+	}
+	if code, ours := ourRefusals[receipt.ErrorCode]; ours {
+		return receiptOutcome{state: messaging.StateRejected, code: code, release: true}
+	}
+	code := receipt.ErrorCode
+	if code == "" {
+		code = "SUBMIT_FAILED"
+	}
+	class, _ := messaging.ClassifyCarrierError(code)
+	return receiptOutcome{state: messaging.StateCarrierRejected, code: code,
+		class: string(class), release: true}
+}
+
+// codes is the error code and class as the message record stores them.
+func (o receiptOutcome) codes() (code, class *string) {
+	if o.code != "" {
+		value := o.code
+		code = &value
+	}
+	if o.class != "" {
+		value := o.class
+		class = &value
+	}
+	return code, class
 }
 
 // ApplyDeliveryReport settles a message against what the carrier eventually

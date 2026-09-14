@@ -109,11 +109,27 @@ type Connector interface {
 // arrives minutes to hours after submission, over a completely separate
 // channel from the submit call.
 type DeliveryReport struct {
+	// Carrier is the operator whose bind the receipt arrived on. Operators
+	// number their messages independently, so a CarrierRef means nothing
+	// without it: Airtel and Jio can both issue 4471902.
+	Carrier    string
 	CarrierRef string
 	MessageID  string
 	Delivered  bool
 	ErrorCode  string
 	OccurredAt time.Time
+}
+
+// LateSubmit is an operator's answer to a submit the send path stopped waiting
+// for: a submit_sm_resp that arrived after the timeout, or the outcome of a
+// message that waited for the bind and was sent afterwards. The message was
+// left pending with its hold, and this settles which way it went.
+type LateSubmit struct {
+	MessageID  string
+	Carrier    string
+	Accepted   bool
+	CarrierRef string
+	ErrorCode  string
 }
 
 // submitEach satisfies the batching in Connector for carriers that have no

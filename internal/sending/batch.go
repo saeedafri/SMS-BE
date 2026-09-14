@@ -261,29 +261,19 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			continue
 		}
 		receipt, found := byID[plan.messageID.String()]
-		state := messaging.StateAccepted
-		cost := plan.cost
-		var errorCode *string
-		var errorClass *string
-		var carrierRef *string
-
-		if !found || !receipt.Accepted {
-			state = messaging.StateCarrierRejected
+		outcome := outcomeOf(receipt, found)
+		if outcome.pending {
+			// Still queued with its hold; the bind reports it later.
+			continue
+		}
+		state, cost, carrierRef := outcome.state, plan.cost, outcome.ref
+		errorCode, errorClass := outcome.codes()
+		if outcome.release {
+			// Nothing was delivered, so nothing is owed.
 			cost = 0
-			code := "SUBMIT_FAILED"
-			if found {
-				code = receipt.ErrorCode
-			}
-			class, _ := messaging.ClassifyCarrierError(code)
-			classValue := string(class)
-			errorCode, errorClass = &code, &classValue
-			// A carrier refusal releases the hold immediately: nothing was
-			// delivered, so nothing is owed.
 			releaseTotal += plan.cost
 			failed++
 		} else {
-			ref := receipt.CarrierRef
-			carrierRef = &ref
 			sent++
 		}
 
@@ -316,7 +306,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	if releaseTotal > 0 {
 		if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
 			Currency: context.rate.Currency, Type: "refund", AmountMinor: releaseTotal,
-			Description: "Released holds for carrier-rejected messages",
+			Description: "Released holds for messages that were not sent",
 			CampaignID:  context.campaignID,
 		}); err != nil {
 			return sent, failed, err

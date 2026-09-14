@@ -316,9 +316,15 @@ func run() error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// Binds every active operator connection, then keeps them in step with the
-	// console once a minute: a new connection goes live within a minute and a
-	// failed dial is retried without a restart.
+	// The first reload runs here, synchronously, before the server takes any
+	// traffic: until it has, the router cannot tell a deployment with operators
+	// from one without, and a minute of SMS after every deploy would be handed to
+	// the sandbox, marked delivered and charged.
+	logger.Info(apiServer.BootSMPP(ctx))
+
+	// Then keeps the binds in step with the console once a minute: a new
+	// connection goes live within a minute and a failed dial is retried without
+	// a restart.
 	go resilience.Supervise(ctx, "smpp-binds", time.Minute, logger,
 		func(name string) { metrics.RecordIncident("worker_panic", name) },
 		apiServer.ReloadSMPPBinds)

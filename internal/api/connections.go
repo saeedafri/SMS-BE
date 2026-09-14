@@ -472,9 +472,23 @@ func validateConnectionShape(carrier, environment, bindType string, port, maxTps
 func (s *Server) probeConnection(ctx context.Context, c store.Connection) (
 	gen.ConnectionTestResult, string, *string) {
 
+	// A connection already bound for live traffic is reported as it is, not
+	// probed: a second session under the same system_id can be refused by an
+	// operator that allows one or two, or can drop the live bind.
+	if s.SMPP != nil {
+		if health, _, ok := s.SMPP.BindHealth(c.ID.String()); ok {
+			status, detail := "bound", health.Detail
+			var lastError *string
+			if !health.Healthy {
+				status, lastError = "error", &detail
+			}
+			return gen.ConnectionTestResult{Ok: health.Healthy, Message: "Live bind: " + detail,
+				Status: gen.ConnectionHealthStatus(status), TestedAt: time.Now().UTC()}, status, lastError
+		}
+	}
 	config, err := s.smppConfig(c)
 	if err == nil {
-		err = connector.ProbeSMPP(config)
+		err = connector.ProbeSMPP(ctx, config)
 	}
 	if err != nil {
 		// The operator reads this, so it names the address and the failure
@@ -539,22 +553,86 @@ func (s *Server) ReloadSMPPBinds(ctx context.Context) error {
 		wanted[c.ID.String()] = config
 	}
 
-	settle := func(report connector.DeliveryReport) {
-		settleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := s.sendingService(settleCtx).SettleCarrierReport(settleCtx, report); err != nil && s.Logger != nil {
-			s.Logger.Error("delivery receipt not settled", "carrier_ref", report.CarrierRef, "error", err)
-		}
+	events := connector.SMPPEvents{
+		Report: func(report connector.DeliveryReport) {
+			settleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.sendingService(settleCtx).SettleCarrierReport(settleCtx, report); err != nil && s.Logger != nil {
+				s.Logger.Error("delivery receipt not settled", "carrier_ref", report.CarrierRef, "error", err)
+			}
+		},
+		LateSubmit: func(late connector.LateSubmit) {
+			lateCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.sendingService(lateCtx).ApplyLateSubmit(lateCtx, late); err != nil && s.Logger != nil {
+				s.Logger.Error("late submit outcome not applied", "message", late.MessageID, "error", err)
+			}
+		},
 	}
-	for id, dialErr := range s.SMPP.Sync(wanted, s.DLTChain, settle) {
-		connectionID, _ := uuid.Parse(id)
-		if dialErr != nil {
-			reason := dialErr.Error()
-			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), connectionID, "error", &reason, nil)
+	previous := s.SMPP.BoundIDs()
+	// Configured means this environment has connection rows at all, in any
+	// status. It decides whether the sandbox may serve SMS, so it comes from the
+	// table, never from whether a dial happened to work.
+	dials := s.SMPP.Sync(wanted, s.DLTChain, events, len(connections) > 0)
+
+	// Health is written for every connection this pass touched, from what the
+	// bind is doing now: a bind that dropped since the last pass, or keeps
+	// failing to rebind, must not stay green on the console.
+	for _, c := range connections {
+		id := c.ID.String()
+		if _, isWanted := wanted[id]; !isWanted {
 			continue
 		}
-		now := time.Now().UTC()
-		_ = store.RecordConnectionHealth(ctx, s.operatorPool(), connectionID, "bound", nil, &now)
+		health, boundAt, held := s.SMPP.BindHealth(id)
+		switch {
+		case held && health.Healthy:
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), c.ID, "bound", nil, &boundAt)
+		case dials[id] != nil:
+			reason := dials[id].Error()
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), c.ID, "error", &reason, nil)
+		default:
+			reason := health.Detail
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), c.ID, "error", &reason, nil)
+		}
+	}
+	for _, id := range previous {
+		if _, isWanted := wanted[id]; isWanted {
+			continue
+		}
+		if connectionID, err := uuid.Parse(id); err == nil {
+			_ = store.RecordConnectionHealth(ctx, s.operatorPool(), connectionID, "unbound", nil, nil)
+		}
 	}
 	return nil
+}
+
+// smppBootTimeout bounds the first reload, which runs before the server takes
+// traffic.
+const smppBootTimeout = 30 * time.Second
+
+// BootSMPP runs the first reload before the server takes any traffic, so the
+// minute after every deploy is never a minute in which SMS reaches the sandbox.
+// If the configuration cannot be read, SMS is refused until a later reload
+// succeeds: a deployment that cannot read its configuration must not decide it
+// has none. It returns the line to log.
+func (s *Server) BootSMPP(ctx context.Context) string {
+	if s.SMPP == nil {
+		return "smpp binds at boot: no router"
+	}
+	bootCtx, cancel := context.WithTimeout(ctx, smppBootTimeout)
+	defer cancel()
+	if err := s.ReloadSMPPBinds(bootCtx); err != nil {
+		s.SMPP.FailClosed()
+		return fmt.Sprintf("smpp binds at boot: configured=unknown, failing closed: %v", err)
+	}
+	bound, failed := 0, 0
+	for _, id := range s.SMPP.BoundIDs() {
+		if health, _, _ := s.SMPP.BindHealth(id); health.Healthy {
+			bound++
+		} else {
+			failed++
+		}
+	}
+	return fmt.Sprintf("smpp binds at boot: configured=%t bound=%d failed=%d",
+		s.SMPP.Configured(), bound, failed)
 }

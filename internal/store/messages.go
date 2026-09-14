@@ -335,7 +335,7 @@ func FindStaleMessages(ctx context.Context, conn driver.Conn,
 		SELECT tenant_id, id, status, segments, cost_minor, currency, campaign_id,
 		       channel, country, sender_header, msisdn, created_at, version
 		FROM messages FINAL
-		WHERE status IN ('submitted', 'accepted') AND updated_at < ?
+		WHERE status IN ('queued', 'submitted', 'accepted') AND updated_at < ?
 		ORDER BY updated_at ASC
 		LIMIT ?`, olderThan, limit)
 	if err != nil {
@@ -492,8 +492,15 @@ func FindMessageTenant(ctx context.Context, conn driver.Conn, messageID uuid.UUI
 // An empty carrier reference matches nothing on purpose. Every message that has
 // not reached a carrier has a null one, and a blank lookup would otherwise pick
 // an arbitrary unsent message and settle it.
+//
+// carrier scopes the match to one operator, and an SMPP receipt must always
+// give it: operators number messages independently, so Airtel and Jio can both
+// issue 4471902, and an unscoped match settles whichever row was written last —
+// possibly another tenant's, moving money on the wrong account. Empty matches
+// any carrier, for the RCS webhooks, whose references are ids their vendor
+// issues and are unique across it.
 func FindMessageByCarrierRef(ctx context.Context, conn driver.Conn,
-	carrierRef string) (tenantID uuid.UUID, messageID uuid.UUID, err error) {
+	carrier, carrierRef string) (tenantID uuid.UUID, messageID uuid.UUID, err error) {
 
 	if carrierRef == "" {
 		return uuid.Nil, uuid.Nil, ErrNotFound
@@ -504,9 +511,9 @@ func FindMessageByCarrierRef(ctx context.Context, conn driver.Conn,
 	// the newest.
 	err = conn.QueryRow(ctx, `
 		SELECT tenant_id, id FROM messages
-		 WHERE carrier_ref = ?
+		 WHERE carrier_ref = ? AND (? = '' OR carrier = ?)
 		 ORDER BY version DESC
-		 LIMIT 1`, carrierRef).Scan(&tenantID, &messageID)
+		 LIMIT 1`, carrierRef, carrier, carrier).Scan(&tenantID, &messageID)
 	if err != nil {
 		return uuid.Nil, uuid.Nil, ErrNotFound
 	}

@@ -155,7 +155,7 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 		// Airtel's payload contains nothing we control, so the only way back to
 		// a Relay message — and to the tenant whose wallet is holding money
 		// against it — is the reference we stored at submit.
-		tenantID, messageID, err := store.FindMessageByCarrierRef(ctx, clickhouse, event.CarrierRef)
+		tenantID, messageID, err := store.FindMessageByCarrierRef(ctx, clickhouse, "", event.CarrierRef)
 		if err != nil {
 			log.Info("delivery report for a message we did not send",
 				"carrier_ref", event.CarrierRef)

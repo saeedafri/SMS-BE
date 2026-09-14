@@ -2,6 +2,8 @@
 // transitions are legal, and what each one means for money.
 package messaging
 
+import "strings"
+
 // State is where a message is in its life. These are our internal states; the
 // dashboard contract collapses them to a smaller set (see ContractStatus).
 //
@@ -38,7 +40,9 @@ var legalTransitions = map[State][]State{
 	// Rejected is reachable only BEFORE submission — it is our own gate saying
 	// no. Once a message has been handed over, a refusal is the carrier's and
 	// lands in CarrierRejected.
-	StateQueued:     {StateSubmitting, StateRejected},
+	// Queued can expire: a message that never left a bind's wait, and whose
+	// bind never reported, is released by the reconciler like any other silence.
+	StateQueued:     {StateSubmitting, StateRejected, StateExpired},
 	StateSubmitting: {StateSubmitted, StateRejected},
 	StateSubmitted:  {StateAccepted, StateCarrierRejected, StateExpired},
 	StateAccepted:   {StateDelivered, StateUndelivered, StateExpired},
@@ -138,6 +142,19 @@ const (
 // explanation. The PRD calls carrier error dictionaries a differentiator:
 // "DELIVRD/UNDELIV/107" tells a developer nothing on its own.
 func ClassifyCarrierError(code string) (ErrorClass, string) {
+	// An SMPP delivery receipt's error is "stat:err", e.g. UNDELIV:001. The
+	// stat decides the class; the operator's err value refines it once their
+	// error tables arrive, and is kept in the message meanwhile.
+	if stat, _, receipt := strings.Cut(code, ":"); receipt {
+		switch stat {
+		case "EXPIRD", "EXPIRED":
+			return ErrorExpired, "The carrier could not deliver within the validity period (" + code + ")."
+		case "UNDELIV":
+			return ErrorUnreachable, "The handset could not be reached (" + code + ")."
+		case "REJECTD", "DELETED", "UNKNOWN":
+			return ErrorRejected, "The carrier rejected this message (" + code + ")."
+		}
+	}
 	switch code {
 	case "":
 		return "", ""

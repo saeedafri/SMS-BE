@@ -667,24 +667,20 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 		}
 
 		receipt, found := receipts[plan.messageID.String()]
-		state := messaging.StateAccepted
-		cost := plan.cost
-		var errorCode, errorClass, carrierRef *string
-
-		if !found || !receipt.Accepted {
-			state = messaging.StateCarrierRejected
+		outcome := outcomeOf(receipt, found)
+		if outcome.pending {
+			// Still queued with its hold; the bind reports it later.
+			outcomes[plan] = sendOutcome{result: SendResult{
+				MessageID: plan.messageID, Status: messaging.ContractStatus(outcome.state),
+				CostMinor: plan.cost, Currency: plan.rate.Currency, Segments: plan.segments,
+			}}
+			continue
+		}
+		state, cost, carrierRef := outcome.state, plan.cost, outcome.ref
+		errorCode, errorClass := outcome.codes()
+		if outcome.release {
 			cost = 0
-			code := "SUBMIT_FAILED"
-			if found {
-				code = receipt.ErrorCode
-			}
-			class, _ := messaging.ClassifyCarrierError(code)
-			classValue := string(class)
-			errorCode, errorClass = &code, &classValue
 			releases[plan.walletKey()] += plan.cost
-		} else {
-			ref := receipt.CarrierRef
-			carrierRef = &ref
 		}
 
 		records = append(records, store.MessageRecord{
@@ -710,10 +706,14 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			SegmentCount: uint64(plan.segments), CostMinor: cost,
 			Currency: plan.rate.Currency,
 		})
-		outcomes[plan] = sendOutcome{result: SendResult{
+		result := SendResult{
 			MessageID: plan.messageID, Status: messaging.ContractStatus(state),
 			CostMinor: cost, Currency: plan.rate.Currency, Segments: plan.segments,
-		}}
+		}
+		if state == messaging.StateRejected {
+			result.FailureCode = outcome.code
+		}
+		outcomes[plan] = sendOutcome{result: result}
 	}
 
 	// Refunds before the callers are told anything, so a caller that reads its
@@ -731,7 +731,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 		}
 		if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
 			Currency: key.currency, Type: "refund", AmountMinor: amount,
-			Description: "Released holds for carrier-rejected messages",
+			Description: "Released holds for messages that were not sent",
 		}); err != nil {
 			failAll(plans, err)
 			return

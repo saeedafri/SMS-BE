@@ -27,6 +27,8 @@ type fakeSMSC struct {
 	binds   []uint32 // command_id of every bind, in arrival order
 	nextID  int
 	refuse  bool
+	// respondAfter delays every submit_sm_resp, to play a slow operator.
+	respondAfter time.Duration
 }
 
 func startFakeSMSC(t *testing.T) *fakeSMSC {
@@ -86,8 +88,11 @@ func (f *fakeSMSC) serve(conn net.Conn) {
 			f.submits = append(f.submits, raw)
 			f.nextID++
 			id := fmt.Sprint(f.nextID)
-			refuse := f.refuse
+			refuse, delay := f.refuse, f.respondAfter
 			f.mu.Unlock()
+			if delay > 0 {
+				time.Sleep(delay)
+			}
 
 			resp := v.GetResponse().(*pdu.SubmitSMResp)
 			if refuse {
@@ -124,7 +129,7 @@ func dialFake(t *testing.T, smsc *fakeSMSC, chain []string) (*SMPPBind, chan Del
 	bind, err := DialSMPP(SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
 		Password: "secret", MaxTPS: 100, WindowSize: 4,
 		EnquireLink: 30 * time.Second, Rebind: time.Second},
-		chain, func(r DeliveryReport) { reports <- r })
+		chain, SMPPEvents{Report: func(r DeliveryReport) { reports <- r }})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -237,11 +242,11 @@ func TestTheRouterNeverHandsARealSMSToTheSandbox(t *testing.T) {
 	router := &SMPPRouter{Fallback: sandbox}
 	outcomes := router.Sync(map[string]SMPPConfig{"c1": {Carrier: "AIRTEL", Addr: smsc.addr,
 		SystemID: "relay", Password: "secret", MaxTPS: 100, WindowSize: 4,
-		EnquireLink: 30 * time.Second, Rebind: time.Second}}, nil, func(DeliveryReport) {})
+		EnquireLink: 30 * time.Second, Rebind: time.Second}}, nil, SMPPEvents{}, true)
 	if outcomes["c1"] != nil {
 		t.Fatalf("sync bind: %v", outcomes["c1"])
 	}
-	t.Cleanup(func() { router.Sync(nil, nil, nil) })
+	t.Cleanup(func() { router.Sync(nil, nil, SMPPEvents{}, false) })
 
 	got, _ := router.Submit(context.Background(), []Submission{
 		{MessageID: "no-bind", Channel: "SMS", Carrier: "JIO", Country: "IN", Msisdn: "+919820000005", Sender: "ACMERT", Body: "hi"},
@@ -279,7 +284,7 @@ func TestAnOTPIsNotQueuedBehindACampaignOnTheSameBind(t *testing.T) {
 	bind, err := DialSMPP(SMPPConfig{Carrier: "AIRTEL", Addr: smsc.addr, SystemID: "relay",
 		Password: "secret", MaxTPS: 5, WindowSize: 2,
 		EnquireLink: 30 * time.Second, Rebind: time.Second},
-		nil, func(DeliveryReport) {})
+		nil, SMPPEvents{})
 	if err != nil {
 		t.Fatalf("bind: %v", err)
 	}
@@ -325,7 +330,7 @@ func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
 		smsc := startFakeSMSC(t)
 		router := &SMPPRouter{Fallback: NewSandbox(0)}
 		if err := router.Sync(map[string]SMPPConfig{"c": config(smsc, bindType)}, nil,
-			func(DeliveryReport) {})["c"]; err != nil {
+			SMPPEvents{}, true)["c"]; err != nil {
 			t.Fatalf("%q: bind: %v", bindType, err)
 		}
 		smsc.mu.Lock()
@@ -345,6 +350,6 @@ func TestTheConfiguredBindTypeIsTheBindThatOpens(t *testing.T) {
 		} else if !got[0].Accepted {
 			t.Errorf("%q bind refused a submit: %+v", bindType, got[0])
 		}
-		router.Sync(nil, nil, nil)
+		router.Sync(nil, nil, SMPPEvents{}, false)
 	}
 }

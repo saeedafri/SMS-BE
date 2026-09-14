@@ -5,10 +5,12 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -64,7 +66,9 @@ func (s *Service) DrainSandboxReports(ctx context.Context) (int, error) {
 // never settles.
 func (s *Service) SettleCarrierReport(ctx context.Context, report connector.DeliveryReport) error {
 	for _, ref := range carrierRefSpellings(report.CarrierRef) {
-		tenantID, messageID, err := store.FindMessageByCarrierRef(ctx, s.ClickHouse, ref)
+		// Scoped to the bind's operator, so the other-base spelling cannot
+		// collide with a different operator's id either.
+		tenantID, messageID, err := store.FindMessageByCarrierRef(ctx, s.ClickHouse, report.Carrier, ref)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
@@ -75,6 +79,62 @@ func (s *Service) SettleCarrierReport(ctx context.Context, report connector.Deli
 		return s.ApplyDeliveryReport(ctx, store.Identity{TenantID: tenantID}, report)
 	}
 	return nil // a receipt for a message this deployment never sent
+}
+
+// ApplyLateSubmit settles a message the send path left pending: a submit that
+// was written and never answered in time, or a message that waited for the bind
+// and was sent after its caller had moved on.
+//
+// Only a message still queued or submitted moves. One the reconciler has
+// already expired stays expired — its hold is back — and anything further on
+// has been settled by a receipt already.
+func (s *Service) ApplyLateSubmit(ctx context.Context, late connector.LateSubmit) error {
+	messageID, err := uuid.Parse(late.MessageID)
+	if err != nil {
+		return nil
+	}
+	tenantID, err := store.FindMessageTenant(ctx, s.ClickHouse, messageID)
+	if err != nil {
+		return nil
+	}
+	identity := store.Identity{TenantID: tenantID}
+	current, err := store.LoadMessageState(ctx, s.ClickHouse, tenantID, messageID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	from := messaging.State(current.Status)
+	if from != messaging.StateQueued && from != messaging.StateSubmitted {
+		return nil
+	}
+
+	outcome := outcomeOf(connector.Receipt{MessageID: late.MessageID, Accepted: late.Accepted,
+		CarrierRef: late.CarrierRef, ErrorCode: late.ErrorCode}, true)
+	if outcome.release {
+		if err := s.release(ctx, identity, current.Currency, current.CostMinor, messageID); err != nil {
+			return err
+		}
+	}
+	now := time.Now().UTC()
+	record := current
+	record.Status, record.CarrierRef, record.UpdatedAt = string(outcome.state), outcome.ref, now
+	record.ErrorCode, record.ErrorClass = outcome.codes()
+	if record.SentAt == nil {
+		record.SentAt = &now
+	}
+	if outcome.release {
+		record.CostMinor = 0
+	}
+	// Two versions ahead of a queued row, not one. The send path writes its own
+	// version 2 for a message it is still answering, and a late outcome that
+	// races it must not be replaced by that write.
+	record.Version = current.Version + 1
+	if from == messaging.StateQueued {
+		record.Version = current.Version + 2
+	}
+	return s.record(ctx, identity, record, string(from), string(outcome.state), outcome.code)
 }
 
 func carrierRefSpellings(ref string) []string {

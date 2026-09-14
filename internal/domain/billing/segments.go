@@ -25,14 +25,12 @@ var gsm7Charset = buildGSM7Charset()
 func buildGSM7Charset() map[rune]bool {
 	const basic = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?" +
 		"¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
-	// Extension characters occupy two septets each.
-	const extension = "^{}\\[~]|€"
 
-	set := make(map[rune]bool, len(basic)+len(extension))
+	set := make(map[rune]bool, len(basic)+len(gsm7Extension))
 	for _, r := range basic {
 		set[r] = true
 	}
-	for _, r := range extension {
+	for _, r := range gsm7Extension {
 		set[r] = true
 	}
 	return set
@@ -48,51 +46,64 @@ func IsGSM7(body string) bool {
 	return true
 }
 
-// gsm7Length counts septets, charging two for extension-table characters.
-func gsm7Length(body string) int {
-	const extension = "^{}\\[~]|€"
-	length := 0
-	for _, r := range body {
-		if strings.ContainsRune(extension, r) {
-			length += 2
-		} else {
-			length++
-		}
-	}
-	return length
-}
+// gsm7Extension is the GSM 03.38 extension table: each character in it
+// occupies two septets.
+const gsm7Extension = "^{}\\[~]|€"
 
 // SegmentCount returns how many SMS segments a body occupies.
 //
 // An empty body still costs one segment: the carrier bills for the submission,
 // not for the characters.
 func SegmentCount(body string) int {
-	if IsGSM7(body) {
-		length := gsm7Length(body)
-		if length <= gsm7SingleLimit {
-			return 1
-		}
-		return ceilDiv(length, gsm7MultiLimit)
-	}
-
-	// UCS-2 counts UTF-16 code units, so characters outside the Basic
-	// Multilingual Plane — emoji, most notably — cost two each.
-	length := 0
-	for _, r := range body {
-		if r > 0xFFFF {
-			length += 2
-		} else {
-			length++
-		}
-	}
-	if length <= ucs2SingleLimit {
-		return 1
-	}
-	return ceilDiv(length, ucs2MultiLimit)
+	parts, _ := Segments(body)
+	return len(parts)
 }
 
-func ceilDiv(value, divisor int) int {
-	return (value + divisor - 1) / divisor
+// Segments splits a body exactly as it goes over the wire: the text of each
+// segment, and whether the message is GSM-7 (otherwise UCS-2).
+//
+// It is the one split. The SMPP client sends these parts and billing counts
+// them, so what a customer is charged and what an operator receives cannot
+// disagree. They did: the library's own splitter sent a 160-character message
+// as two segments we billed as one, and 81 euro signs as one we billed as two.
+//
+// A segment boundary never falls inside a character. An extension character
+// takes two septets and a character outside the Basic Multilingual Plane two
+// UTF-16 units, and splitting either would put half a character on each handset
+// fragment — so a part can end a unit short, and a body can take one segment
+// more than dividing its length would suggest.
+func Segments(body string) (parts []string, gsm7 bool) {
+	gsm7 = IsGSM7(body)
+	width := func(r rune) int {
+		if gsm7 && strings.ContainsRune(gsm7Extension, r) || !gsm7 && r > 0xFFFF {
+			return 2
+		}
+		return 1
+	}
+	single, multi := ucs2SingleLimit, ucs2MultiLimit
+	if gsm7 {
+		single, multi = gsm7SingleLimit, gsm7MultiLimit
+	}
+
+	total := 0
+	for _, r := range body {
+		total += width(r)
+	}
+	if total <= single {
+		return []string{body}, gsm7
+	}
+	var part strings.Builder
+	used := 0
+	for _, r := range body {
+		if used+width(r) > multi {
+			parts = append(parts, part.String())
+			part.Reset()
+			used = 0
+		}
+		part.WriteRune(r)
+		used += width(r)
+	}
+	return append(parts, part.String()), gsm7
 }
 
 // AssumedVariableChars is the width one {{variable}} is assumed to substitute
