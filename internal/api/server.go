@@ -63,6 +63,10 @@ type Server struct {
 	// this host. Nil trusts nobody, so RemoteAddr stays the TCP peer.
 	TrustedProxies []*net.IPNet
 
+	// BFFClientIPToken is the secret the dashboard server sends to name its
+	// user's address (ask 42). Empty ignores the dashboard's headers.
+	BFFClientIPToken string
+
 	// AllowGreyRoutes permits enabling a route with a grey compliance standing.
 	// Off unless the deployment says otherwise; see the config field for why.
 	AllowGreyRoutes bool
@@ -228,7 +232,7 @@ func outsidePromotionalWindow(country string, at time.Time) *gen.Error {
 
 func NewRouter(s *Server) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, trustedProxyRealIP(s.TrustedProxies), middleware.Recoverer)
+	r.Use(middleware.RequestID, s.trustedProxyRealIP, middleware.Recoverer)
 	// After trustedProxyRealIP, which is what makes RemoteAddr the caller's
 	// address rather than the proxy's, and before authenticate so a session minted during this
 	// request can record the device it was minted on.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -64,26 +65,37 @@ const (
 // first (so a client's copy reaches us unchanged), and the second is a list the
 // client can prepend to.
 //
-// All three are deleted before any handler runs, so nothing downstream can read
-// them by accident.
-func trustedProxyRealIP(trusted []*net.IPNet) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				host = r.RemoteAddr
+// Then the dashboard. It is a BFF: every customer's request reaches us from the
+// dashboard server, so that address stands for all of them. The BFF names the
+// user's address in X-Relay-Client-IP, which is believed only alongside
+// X-Relay-BFF-Token equal to BFF_CLIENT_IP_TOKEN — the BFF's egress is not a
+// published range, so trust is a secret, not an address.
+//
+// Every header named here is deleted before any handler runs, so nothing
+// downstream can read them by accident, and the token is never logged.
+func (s *Server) trustedProxyRealIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		if peer := net.ParseIP(host); peer != nil && inAny(s.TrustedProxies, peer) {
+			if real := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); real != nil {
+				r.RemoteAddr = net.JoinHostPort(real.String(), "0")
 			}
-			if peer := net.ParseIP(host); peer != nil && inAny(trusted, peer) {
-				if real := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); real != nil {
-					r.RemoteAddr = net.JoinHostPort(real.String(), "0")
-				}
+		}
+		if s.BFFClientIPToken != "" && subtle.ConstantTimeCompare(
+			[]byte(r.Header.Get("X-Relay-BFF-Token")), []byte(s.BFFClientIPToken)) == 1 {
+			if user := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Relay-Client-IP"))); user != nil {
+				r.RemoteAddr = net.JoinHostPort(user.String(), "0")
 			}
-			r.Header.Del("True-Client-IP")
-			r.Header.Del("X-Real-IP")
-			r.Header.Del("X-Forwarded-For")
-			next.ServeHTTP(w, r)
-		})
-	}
+		}
+		for _, name := range []string{"True-Client-IP", "X-Real-IP", "X-Forwarded-For",
+			"X-Relay-BFF-Token", "X-Relay-Client-IP"} {
+			r.Header.Del(name)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func inAny(networks []*net.IPNet, ip net.IP) bool {

@@ -136,6 +136,10 @@ type Config struct {
 	// everybody would let any caller choose its own address.
 	TrustedProxies []*net.IPNet
 
+	// BFFClientIPToken lets the dashboard server name its user's address.
+	// BFF_CLIENT_IP_TOKEN; empty disables it. At least 32 bytes when set.
+	BFFClientIPToken string
+
 	// DLTTelemarketerChain is every telemarketer DLT id between a customer's
 	// principal entity and the operator, comma separated, ending with Relay's
 	// own. Hashed into TLV 5122 on every SMS; TRAI has rejected messages
@@ -225,6 +229,10 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: TRUSTED_PROXY_CIDRS: %w", err)
 	}
 	cfg.TrustedProxies = trusted.Networks()
+	cfg.BFFClientIPToken = strings.TrimSpace(os.Getenv("BFF_CLIENT_IP_TOKEN"))
+	if cfg.BFFClientIPToken != "" && len(cfg.BFFClientIPToken) < 32 {
+		return Config{}, fmt.Errorf("config: BFF_CLIENT_IP_TOKEN must be at least 32 bytes")
+	}
 
 	return cfg, nil
 }

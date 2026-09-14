@@ -182,3 +182,16 @@ func TestAMalformedTrustedProxyListStopsTheServer(t *testing.T) {
 		t.Fatal("Load accepted TRUSTED_PROXY_CIDRS=not-a-cidr")
 	}
 }
+
+// A guessable dashboard token would let anyone choose their own address.
+func TestAShortBFFTokenStopsTheServer(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("BFF_CLIENT_IP_TOKEN", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted a 5-byte BFF_CLIENT_IP_TOKEN")
+	}
+	t.Setenv("BFF_CLIENT_IP_TOKEN", "0123456789abcdef0123456789abcdef")
+	if cfg, err := Load(); err != nil || cfg.BFFClientIPToken == "" {
+		t.Fatalf("Load refused a 32-byte token: %v", err)
+	}
+}

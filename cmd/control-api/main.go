@@ -289,6 +289,7 @@ func run() error {
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
 		TrustedProxies:    cfg.TrustedProxies,
+		BFFClientIPToken:  cfg.BFFClientIPToken,
 		OperatorDB:        operatorPool, AppBaseURL: cfg.AppBaseURL,
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,
