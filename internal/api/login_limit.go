@@ -19,15 +19,18 @@ type LoginLimits struct {
 	MaxLock         time.Duration
 }
 
-// DefaultLoginLimits are the production rules for one login surface. Operators
-// get tighter ones: that account sees every customer.
+// DefaultLoginLimits are the production rules for one login surface: three
+// wrong passwords lock the address for 30 seconds, it then gets three fresh
+// chances, and every further lock within a day doubles (30s, 1m, 2m, 4m, ...)
+// up to MaxLock. Operators reach a longer ceiling: that account sees every
+// customer.
 func DefaultLoginLimits(scope string) LoginLimits {
 	if scope == "operator" {
 		return LoginLimits{AccountFailures: 3, IPFailures: 10, Window: 15 * time.Minute,
-			Lock: 30 * time.Minute, MaxLock: 4 * time.Hour}
+			Lock: 30 * time.Second, MaxLock: 4 * time.Hour}
 	}
-	return LoginLimits{AccountFailures: 5, IPFailures: 20, Window: 15 * time.Minute,
-		Lock: 15 * time.Minute, MaxLock: time.Hour}
+	return LoginLimits{AccountFailures: 3, IPFailures: 20, Window: 15 * time.Minute,
+		Lock: 30 * time.Second, MaxLock: time.Hour}
 }
 
 // codeTooManyAttempts rides on the login's existing 401 so no new status is
@@ -35,11 +38,29 @@ func DefaultLoginLimits(scope string) LoginLimits {
 const codeTooManyAttempts = "too_many_attempts"
 
 func tooManyAttemptsMessage(wait time.Duration) string {
-	minutes := int(wait.Round(time.Minute) / time.Minute)
-	if minutes < 1 {
-		minutes = 1
+	return fmt.Sprintf("Too many sign-in attempts. Try again in %s.", waitPhrase(wait))
+}
+
+// waitPhrase says a lock's remaining time the way a person would: seconds under
+// a minute, whole minutes under an hour, then hours.
+func waitPhrase(wait time.Duration) string {
+	seconds := int((wait + time.Second - 1) / time.Second)
+	switch {
+	case seconds <= 1:
+		return "1 second"
+	case seconds < 60:
+		return fmt.Sprintf("%d seconds", seconds)
+	case seconds <= 60*60:
+		if minutes := (seconds + 59) / 60; minutes > 1 {
+			return fmt.Sprintf("%d minutes", minutes)
+		}
+		return "1 minute"
+	default:
+		if hours := (seconds + 3599) / 3600; hours > 1 {
+			return fmt.Sprintf("%d hours", hours)
+		}
+		return "1 hour"
 	}
-	return fmt.Sprintf("Too many sign-in attempts. Try again in %d minutes.", minutes)
 }
 
 func loginKey(kind, scope, value string) string {

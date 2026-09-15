@@ -16,7 +16,7 @@ func randomIP() string {
 	return fmt.Sprintf("198.18.%d.%d", rand.Intn(255), 1+rand.Intn(250))
 }
 
-// Five wrong passwords lock an address: the sixth attempt is refused even with
+// Three wrong passwords lock an address: the next attempt is refused even with
 // the right password, with the same answer an unknown address gets. Another
 // account from another address is unaffected, and a success before the limit
 // resets the count.
@@ -35,12 +35,12 @@ func TestRepeatedWrongPasswordsLockTheAccountForAWhile(t *testing.T) {
 	if res := h.loginFrom(ip, "/v1/auth/login", victim.Email, "test-password-123"); res.Code != http.StatusOK {
 		t.Fatalf("correct password after two mistakes = %d\n%s", res.Code, res.Body)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 2; i++ {
 		if res := h.loginFrom(ip, "/v1/auth/login", victim.Email, "wrong-password-1"); res.errorCode(t) != "unauthenticated" {
 			t.Fatalf("attempt %d after a success was treated as locked: %s", i+1, res.Body)
 		}
 	}
-	h.loginFrom(ip, "/v1/auth/login", victim.Email, "wrong-password-1") // fifth failure locks
+	h.loginFrom(ip, "/v1/auth/login", victim.Email, "wrong-password-1") // third failure locks
 	res := h.loginFrom(randomIP(), "/v1/auth/login", victim.Email, "test-password-123")
 	if res.Code != http.StatusUnauthorized || res.errorCode(t) != "too_many_attempts" {
 		t.Fatalf("correct password on a locked account = %d %s, want 401 too_many_attempts", res.Code, res.Body)
