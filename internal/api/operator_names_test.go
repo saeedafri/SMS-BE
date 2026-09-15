@@ -66,6 +66,15 @@ func TestAMalformedOperatorNameIsRefused(t *testing.T) {
 			"country": "IN", "channel": "SMS", "carrier": bad, "label": "Bad name",
 			"complianceStanding": "registered", "costPerSegmentMinor": 12, "currency": "INR",
 		})
+		if route.Code == http.StatusCreated {
+			// Only a broken check gets here; never leave its route behind for
+			// other packages sharing this database to trip over.
+			var created struct {
+				ID string `json:"id"`
+			}
+			route.decode(t, &created)
+			_, _ = h.admin.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, created.ID)
+		}
 		if route.Code != http.StatusUnprocessableEntity || !strings.Contains(string(route.Body), "carrier") {
 			t.Errorf("route carrier %q = %d %s, want 422 naming carrier", bad, route.Code, route.Body)
 		}
