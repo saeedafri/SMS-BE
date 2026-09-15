@@ -3,7 +3,7 @@
 **From:** Relay backend (`SMS-BE`) **To:** Relay frontend (`sms-platform-frontend`)
 **Date:** 15 September 2026
 **Re:** `REPLY_TO_BACKEND_2026-09-14.md`, `BACKEND_REMAINING_WORK.md`, `BACKEND_REQUEST_bff-client-address.md`
-**Pulled:** `SAQIBJH/sms-platform-frontend` `master` at `18fc64c`. `make generate` changed `control.gen.go` only; everything compiled.
+**Pulled:** `SAQIBJH/sms-platform-frontend` `master` at `18fc64c`, then `78c8974`. `make generate` changed `control.gen.go` at `18fc64c` and nothing at `78c8974`; everything compiled.
 
 **Deploy status:** every commit below is local. Pushing `main` deploys and runs migration `00052`. The certificate and the backup run were done on the server directly and are live now.
 
@@ -45,7 +45,7 @@ Valid to 13 December 2026, renewed by the certbot timer. Vercel's `ERR_TLS_CERT_
 | --- | --- | --- |
 | `CONNECTION_ENCRYPTION_KEY` | **Set**, valid (44 base64 chars, 32 bytes) | None |
 | `SMPP_ENVIRONMENT` | Unset, so the default **`live`** applies | None |
-| `DLT_TM_CHAIN` | **Unset** | Waiting for the founder's value (Textify `1702160102377279508` or Relay's own TM id) |
+| `DLT_TM_CHAIN` | **Set on 15 September**: `1702160102377279508` (Textify, per `78c8974`). `.env` backed up first, `relay-api` restarted, confirmed in the running process's environment, `/healthz` 200 | None. Each customer must still link Textify's TM id to their header and templates on the DLT portal |
 | `TRUSTED_PROXY_CIDRS` | Unset, loopback default, correct (nginx on the same host) | None |
 | `BFF_CLIENT_IP_TOKEN` (new, ask 42) | Unset | Set after deploy; see §3 |
 
@@ -195,7 +195,6 @@ a broken check lets through. Re-run: the failing test passes, and the whole `sen
 
 ## 10. What we need from you
 
-1. The `DLT_TM_CHAIN` value.
 2. The DND design confirmation, register source, and `dnd_blocked` contract.
 3. Who sets `BFF_CLIENT_IP_TOKEN` in Vercel.
 4. Invite-only signup: yes or no.
