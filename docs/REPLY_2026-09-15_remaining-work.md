@@ -5,7 +5,12 @@
 **Re:** `REPLY_TO_BACKEND_2026-09-14.md`, `BACKEND_REMAINING_WORK.md`, `BACKEND_REQUEST_bff-client-address.md`
 **Pulled:** `SAQIBJH/sms-platform-frontend` `master` at `18fc64c`, then `78c8974`. `make generate` changed `control.gen.go` at `18fc64c` and nothing at `78c8974`; everything compiled.
 
-**Deploy status:** every commit below is local. Pushing `main` deploys and runs migration `00052`. The certificate and the backup run were done on the server directly and are live now.
+**Deploy status: live.** Pushed `1eff36f`; GitHub Actions run `34915924986` succeeded (migration `00052` applied before the swap). Checked on the live API afterwards:
+- webhook created (sealed secret stored), and its test event was actually posted with the stored secret (`405` from the target, not the "Recreate" note);
+- `GET /v1/contacts`: the suppressed contact reads `phoneSuppressed: true, emailSuppressed: true`, the other `false`;
+- the new nightly backup script is installed, and the running process has `DLT_TM_CHAIN`;
+- no real customer or operator account holds the dev MFA secret (read-only count: 0; one fixture account);
+- **not testable live yet:** SMS replies (no operator bind), RCS replies (`RCS_WEBHOOK_TOKEN` unset, route unmounted), ask 42 (inert until `BFF_CLIENT_IP_TOKEN` is set).
 
 ---
 
