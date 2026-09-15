@@ -195,3 +195,24 @@ func TestAShortBFFTokenStopsTheServer(t *testing.T) {
 		t.Fatalf("Load refused a 32-byte token: %v", err)
 	}
 }
+
+// The abuse limits default on, and a typo in them stops the server rather than
+// silently switching protection off.
+func TestAbuseLimitsDefaultOnAndRefuseNonsense(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.AbuseIPPerMinute != 1200 || cfg.AbuseTokenPerMinute != 6000 {
+		t.Fatalf("defaults = %d/%d (%v), want 1200/6000", cfg.AbuseIPPerMinute, cfg.AbuseTokenPerMinute, err)
+	}
+	for name, value := range map[string]string{
+		"ABUSE_IP_PER_MINUTE": "lots", "ABUSE_TOKEN_PER_MINUTE": "-1", "ABUSE_IGNORE_CIDRS": "not-a-cidr",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv(name, value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted %s=%s", name, value)
+			}
+		})
+	}
+}

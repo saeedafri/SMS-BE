@@ -38,6 +38,8 @@ type harness struct {
 	// logs captures the server's structured output so tests can read tokens
 	// the API deliberately never returns in a response.
 	logs *bytes.Buffer
+	// clock is the time tests that pin Server.Now move by hand.
+	clock time.Time
 	// operatorPool carries app.operator=on, for rebuilding the router in
 	// variants like newHarnessWithInviteCode.
 	operatorPool *pgxpool.Pool

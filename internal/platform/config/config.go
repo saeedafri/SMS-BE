@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/saeedafri/sms-be/internal/api"
@@ -136,6 +137,14 @@ type Config struct {
 	// everybody would let any caller choose its own address.
 	TrustedProxies []*net.IPNet
 
+	// Abuse limits, applied to every route (carrier webhooks and /healthz
+	// excepted). ABUSE_IP_PER_MINUTE bans an address that goes over;
+	// ABUSE_TOKEN_PER_MINUTE refuses a credential that goes over; zero turns
+	// either off. ABUSE_IGNORE_CIDRS are never limited.
+	AbuseIPPerMinute    int
+	AbuseTokenPerMinute int
+	AbuseIgnore         []*net.IPNet
+
 	// BFFClientIPToken lets the dashboard server name its user's address.
 	// BFF_CLIENT_IP_TOKEN; empty disables it. At least 32 bytes when set.
 	BFFClientIPToken string
@@ -229,6 +238,19 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: TRUSTED_PROXY_CIDRS: %w", err)
 	}
 	cfg.TrustedProxies = trusted.Networks()
+	if cfg.AbuseIPPerMinute, err = intEnv("ABUSE_IP_PER_MINUTE", 1200); err != nil {
+		return Config{}, err
+	}
+	if cfg.AbuseTokenPerMinute, err = intEnv("ABUSE_TOKEN_PER_MINUTE", 6000); err != nil {
+		return Config{}, err
+	}
+	if raw := strings.TrimSpace(os.Getenv("ABUSE_IGNORE_CIDRS")); raw != "" {
+		ignore, err := api.ParseIPAllowlist(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: ABUSE_IGNORE_CIDRS: %w", err)
+		}
+		cfg.AbuseIgnore = ignore.Networks()
+	}
 	cfg.BFFClientIPToken = strings.TrimSpace(os.Getenv("BFF_CLIENT_IP_TOKEN"))
 	if cfg.BFFClientIPToken != "" && len(cfg.BFFClientIPToken) < 32 {
 		return Config{}, fmt.Errorf("config: BFF_CLIENT_IP_TOKEN must be at least 32 bytes")
@@ -379,4 +401,17 @@ func (c Config) airtelConfigured() bool {
 	return c.RCSAirtelBaseURL != "" || c.RCSAirtelAuthToken != "" ||
 		c.RCSAirtelCustomerID != "" ||
 		c.RCSAirtelSubAccountID != ""
+}
+
+// intEnv reads a non-negative integer, or fallback when unset.
+func intEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("config: %s=%q must be a whole number, 0 or more", name, raw)
+	}
+	return value, nil
 }

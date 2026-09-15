@@ -41,9 +41,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/term"
 
+	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/store"
+	"time"
 )
 
 const minOperatorPassword = 12
@@ -65,6 +67,8 @@ func usage() error {
   operator-admin enable <email>
   operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
   operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|GOOGLE> <carrier-agent-id>
+  operator-admin bans                 list addresses the abuse guard has banned
+  operator-admin unban <ip>           lift a ban at once and forget its history
 
 The password is prompted for, never passed as an argument.
 `)
@@ -94,6 +98,33 @@ func run() error {
 	defer pool.Close()
 
 	switch os.Args[1] {
+	case "bans", "unban":
+		rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
+		if err != nil {
+			return err
+		}
+		defer rdb.Close()
+		if os.Args[1] == "unban" {
+			if len(os.Args) < 3 {
+				return usage()
+			}
+			if err := api.Unban(ctx, rdb, os.Args[2]); err != nil {
+				return err
+			}
+			fmt.Println("unbanned", os.Args[2])
+			return nil
+		}
+		bans, err := api.Bans(ctx, rdb)
+		if err != nil {
+			return err
+		}
+		if len(bans) == 0 {
+			fmt.Println("no addresses are banned")
+		}
+		for ip, left := range bans {
+			fmt.Printf("%-40s %s left\n", ip, left.Round(time.Second))
+		}
+		return nil
 	case "list":
 		return list(ctx, pool)
 	case "create":

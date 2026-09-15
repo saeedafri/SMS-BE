@@ -67,6 +67,9 @@ type Server struct {
 	// uses the production schedule; tests shorten it.
 	WebhookRetryDelays []time.Duration
 
+	// Abuse limits every caller per address and per credential, with bans.
+	Abuse AbuseLimits
+
 	// BFFClientIPToken is the secret the dashboard server sends to name its
 	// user's address (ask 42). Empty ignores the dashboard's headers.
 	BFFClientIPToken string
@@ -242,6 +245,8 @@ func NewRouter(s *Server) http.Handler {
 	// request can record the device it was minted on.
 	r.Use(withClientInfo)
 	r.Use(requestLogger(s.Logger, s.Metrics))
+	// After the logger, so a refused flood is still visible in the logs.
+	r.Use(s.abuseGuard)
 	// Before authenticate, so a caller outside the allowlist cannot even attempt
 	// an operator login.
 	r.Use(s.restrictOperatorNetwork)
