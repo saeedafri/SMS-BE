@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/saeedafri/sms-be/internal/connector"
@@ -92,8 +93,12 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 	// body that omits it decodes to "" and reaches here looking like a request
 	// that named nothing — which is exactly the guess this field retires.
 	if request.Body == nil || !request.Body.Vendor.Valid() {
+		// Named from the adapters this build holds rather than written out, so
+		// the sentence cannot fall behind the contract the way it did when jio
+		// and google joined the enum.
 		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeValidation,
-			"Name the carrier this registration belongs to: vendor must be airtel or vi.")), nil
+			"Name the carrier this registration belongs to: vendor must be "+
+				strings.Join(rcsVendorNames(), ", ")+".")), nil
 	}
 	vendor := string(request.Body.Vendor)
 
@@ -340,4 +345,16 @@ func capitalise(text string) string {
 		return text
 	}
 	return strings.ToUpper(text[:1]) + text[1:]
+}
+
+// rcsVendorNames is every vendor this build can be asked about, sorted — the
+// keys of connector.RCSIntegrations, so a new adapter reaches this sentence
+// without anyone remembering to edit it.
+func rcsVendorNames() []string {
+	names := make([]string, 0, len(connector.RCSIntegrations))
+	for vendor := range connector.RCSIntegrations {
+		names = append(names, vendor)
+	}
+	sort.Strings(names)
+	return names
 }

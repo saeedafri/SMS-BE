@@ -41,9 +41,12 @@ func TestARegistrationThatNamesNoCarrierIsRefused(t *testing.T) {
 		// vendor: with the vendor check removed, "" still fails the launch lookup
 		// further down and answers 422 — the right status for the wrong reason,
 		// and a test asserting only the status would never notice the guard went.
-		{"an empty object", `{}`, "vendor must be airtel or vi"},
-		{"a code but no carrier", `{"carrierTemplateId":"pasted-from-a-portal"}`, "vendor must be airtel or vi"},
-		{"a carrier we hold no integration for", `{"vendor":"jio"}`, "vendor must be airtel or vi"},
+		{"an empty object", `{}`, "vendor must be "},
+		{"a code but no carrier", `{"carrierTemplateId":"pasted-from-a-portal"}`, "vendor must be "},
+		// A network with no adapter in this build. It used to be jio, which the
+		// contract's enum now names — so that case stopped testing the vendor
+		// check and started testing the launch lookup below it.
+		{"a carrier we hold no integration for", `{"vendor":"bsnl"}`, "vendor must be "},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
