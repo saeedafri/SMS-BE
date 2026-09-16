@@ -220,11 +220,15 @@ type mixedPlan struct {
 	template  store.Template
 	rate      store.PricingRate
 	msisdn    string
-	valid     bool
-	segments  int
-	cost      int64
-	carrier   string
-	routeID   *string
+	// dndBlocked and dndUnavailable are the register's answer for this message,
+	// asked once here rather than inside the gate, which does no I/O.
+	dndBlocked     bool
+	dndUnavailable bool
+	valid          bool
+	segments       int
+	cost           int64
+	carrier        string
+	routeID        *string
 
 	// rcsCarrier is the gateway RCS has to itself, empty when there is none,
 	// and agentID the brand this message's sender goes out under on it.
@@ -291,7 +295,9 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			// the batched path. A gate that is weaker when messages arrive in
 			// company is not a gate.
 			RegisteredTemplateRequired: RegisteredTemplateRequired(plan.sender.Country),
-			OutsidePromotionalWindow:   outsidePromotionalWindow(plan.sender.Country, plan.template),
+			OutsidePromotionalWindow:   s.outsidePromotionalWindow(plan.sender.Country, plan.template),
+			DNDBlocked:                 plan.dndBlocked,
+			DNDCheckUnavailable:        plan.dndUnavailable,
 			TemplateBody:               templateBody(plan.template),
 			Body:                       plan.pending.request.Body,
 			// The balance already committed to earlier messages in this batch is
@@ -433,6 +439,8 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 		plan.carrier, plan.routeID = path.carrier, path.routeID
 		plan.rcsCarrier = s.dedicatedCarrier(sender.Channel)
 		plan.agentID = s.rcsAgentFor(ctx, identity, sender, plan.rcsCarrier)
+
+		plan.dndBlocked, plan.dndUnavailable = s.dndStatus(ctx, sender.Channel, msisdn, plan.template)
 
 		if valid {
 			recipients[identity.TenantID] = append(recipients[identity.TenantID], msisdn)

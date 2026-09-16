@@ -145,6 +145,11 @@ type Config struct {
 	AbuseTokenPerMinute int
 	AbuseIgnore         []*net.IPNet
 
+	// DNDRegister names the do-not-disturb register a promotional SMS to India
+	// is checked against. DND_REGISTER; "none" (the default) has no register,
+	// so that traffic is refused dnd_check_unavailable rather than risked.
+	DNDRegister string
+
 	// BFFClientIPToken lets the dashboard server name its user's address.
 	// BFF_CLIENT_IP_TOKEN; empty disables it. At least 32 bytes when set.
 	BFFClientIPToken string
@@ -250,6 +255,10 @@ func Load() (Config, error) {
 			return Config{}, fmt.Errorf("config: ABUSE_IGNORE_CIDRS: %w", err)
 		}
 		cfg.AbuseIgnore = ignore.Networks()
+	}
+	cfg.DNDRegister = strings.ToLower(strings.TrimSpace(envOr("DND_REGISTER", "none")))
+	if cfg.DNDRegister != "none" {
+		return Config{}, fmt.Errorf("config: DND_REGISTER=%q is not a register this build has a client for; only \"none\" today", cfg.DNDRegister)
 	}
 	cfg.BFFClientIPToken = strings.TrimSpace(os.Getenv("BFF_CLIENT_IP_TOKEN"))
 	if cfg.BFFClientIPToken != "" && len(cfg.BFFClientIPToken) < 32 {

@@ -216,3 +216,18 @@ func TestAbuseLimitsDefaultOnAndRefuseNonsense(t *testing.T) {
 		})
 	}
 }
+
+// The DND register defaults to none, which refuses Indian promotional SMS, and
+// a name this build has no client for stops the server rather than silently
+// checking nothing.
+func TestDNDRegisterDefaultsToNoneAndRefusesAnUnknownName(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.DNDRegister != "none" {
+		t.Fatalf("default = %q (%v), want none", cfg.DNDRegister, err)
+	}
+	t.Setenv("DND_REGISTER", "some-provider")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted DND_REGISTER=some-provider")
+	}
+}

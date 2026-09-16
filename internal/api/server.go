@@ -67,6 +67,10 @@ type Server struct {
 	// uses the production schedule; tests shorten it.
 	WebhookRetryDelays []time.Duration
 
+	// DND is the do-not-disturb register the send path checks a promotional
+	// Indian SMS against. Nil refuses that traffic (dnd_check_unavailable).
+	DND sending.DNDRegister
+
 	// Abuse limits every caller per address and per credential, with bans.
 	Abuse AbuseLimits
 

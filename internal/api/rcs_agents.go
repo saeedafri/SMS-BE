@@ -95,10 +95,10 @@ func (s *Server) rcsAgentResponse(ctx context.Context, agent store.RcsAgent) gen
 
 	out.CarrierLaunches = make([]gen.RcsCarrierLaunch, 0, len(carriers))
 	for _, carrier := range carriers {
-		// A launch on a platform the contract has no carrier value for — Google
-		// RBM test agents — is used for sending but not listed, so the screen
-		// never receives a carrier it cannot render.
-		if !gen.CarrierId(carrier).Valid() {
+		// A launch on the Google RBM test platform is used for sending but not
+		// listed: the console offers Airtel and Vi only, and a GOOGLE row on the
+		// agent screen would be a carrier nobody can act on.
+		if !operatorName.MatchString(carrier) || carrier == "GOOGLE" {
 			continue
 		}
 		launch, ok := recorded[carrier]

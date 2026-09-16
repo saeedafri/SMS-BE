@@ -60,6 +60,12 @@ var (
 	ErrOutsidePromotionalWindow = errors.New(
 		"messaging: promotional messages may only be sent during the permitted hours")
 
+	ErrDNDBlocked = errors.New(
+		"messaging: this number does not accept promotional messages")
+
+	ErrDNDCheckUnavailable = errors.New(
+		"messaging: this number could not be checked against the do-not-disturb register")
+
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
 )
@@ -105,6 +111,13 @@ type GateInput struct {
 	// between two messages when a carrier suspends an agent.
 	RCSAgentRequired bool
 	RCSAgentResolved bool
+
+	// DNDBlocked and DNDCheckUnavailable are the do-not-disturb register's
+	// answer for a promotional message to a country that keeps one. Blocked
+	// means the register says no; unavailable means no register is configured
+	// or the lookup failed, which refuses too rather than risking a breach.
+	DNDBlocked          bool
+	DNDCheckUnavailable bool
 
 	// OutsidePromotionalWindow is a promotional message sent when its
 	// destination forbids promotional traffic.
@@ -180,6 +193,14 @@ func Check(input GateInput) error {
 	if input.Suppressed {
 		return ErrSuppressed
 	}
+	// The register, after the person's own opt-out and before any money: a
+	// refused promotional message must never hold funds, even briefly.
+	if input.DNDBlocked {
+		return ErrDNDBlocked
+	}
+	if input.DNDCheckUnavailable {
+		return ErrDNDCheckUnavailable
+	}
 	if input.BalanceMinor < input.CostMinor {
 		return ErrInsufficientFunds
 	}
@@ -211,7 +232,8 @@ func IsRefusal(err error) bool {
 // so a new refusal cannot reach a customer as "Refused" with no reason.
 var refusals = []error{
 	ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
-	ErrSenderTemplateMismatch, ErrSuppressed, ErrInsufficientFunds,
+	ErrSenderTemplateMismatch, ErrSuppressed, ErrDNDBlocked, ErrDNDCheckUnavailable,
+	ErrInsufficientFunds,
 	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 	ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
 	ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
@@ -241,6 +263,10 @@ func GateFailureCode(err error) string {
 		return "outside_promotional_window"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
+	case errors.Is(err, ErrDNDBlocked):
+		return "dnd_blocked"
+	case errors.Is(err, ErrDNDCheckUnavailable):
+		return "dnd_check_unavailable"
 	case errors.Is(err, ErrInsufficientFunds):
 		return "insufficient_balance"
 	case errors.Is(err, ErrInvalidRecipient):

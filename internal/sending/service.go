@@ -44,6 +44,13 @@ type Service struct {
 	// every lookup goes to Postgres, which is the behaviour before this existed
 	// and what the tests that assert on freshness rely on.
 	Hot *store.HotCache
+	// DND is the do-not-disturb register a promotional SMS to India is checked
+	// against. Nil means none is configured, which refuses that traffic.
+	DND DNDRegister
+
+	// Now is the clock the promotional window is judged by. Nil means the wall
+	// clock; tests fix it.
+	Now func() time.Time
 
 	// Settled is told when a carrier's report moves a message to its final
 	// state, after the new state is written. Nil tells nobody.
@@ -256,6 +263,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	rcsCarrier := s.dedicatedCarrier(sender.Channel)
 	agentID := s.rcsAgentFor(ctx, identity, sender, rcsCarrier)
 
+	dndBlocked, dndUnavailable := s.dndStatus(ctx, sender.Channel, msisdn, template)
+
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
@@ -265,7 +274,9 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
 		RegisteredTemplateRequired: RegisteredTemplateRequired(sender.Country),
-		OutsidePromotionalWindow:   outsidePromotionalWindow(sender.Country, template),
+		OutsidePromotionalWindow:   s.outsidePromotionalWindow(sender.Country, template),
+		DNDBlocked:                 dndBlocked,
+		DNDCheckUnavailable:        dndUnavailable,
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
 		// Required only where a real RCS gateway is configured. With none, the
@@ -758,9 +769,17 @@ func RegisteredTemplateRequired(country string) bool {
 // outsidePromotionalWindow is a template DLT registered as promotional, sent to
 // a country at an hour its regulator forbids promotional traffic. Transactional,
 // service and OTP traffic are exempt, so only the template's DLT category counts.
-func outsidePromotionalWindow(country string, template store.Template) bool {
+func (s *Service) outsidePromotionalWindow(country string, template store.Template) bool {
 	return template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL" &&
-		!compliance.PromotionalAllowedAt(country, time.Now())
+		!compliance.PromotionalAllowedAt(country, s.now())
+}
+
+// now is the clock every time-of-day rule reads.
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // templateBody is the registered text a submitted body must instantiate.

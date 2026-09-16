@@ -136,8 +136,10 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 		})
 	}
 	for _, row := range deliverability {
-		// Same reason as the agent's launch list: GOOGLE is not a contract carrier.
-		if row.Carrier != "" && !gen.CarrierId(row.Carrier).Valid() {
+		// CarrierId is free text now, so anything well-formed renders as itself.
+		// GOOGLE stays out for the same reason as the agent's launch list: it is
+		// the RBM test platform, not an operator anyone buys traffic from.
+		if row.Carrier != "" && (!operatorName.MatchString(row.Carrier) || row.Carrier == "GOOGLE") {
 			continue
 		}
 		rate := 0.0

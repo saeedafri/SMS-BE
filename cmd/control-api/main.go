@@ -302,6 +302,9 @@ func run() error {
 		OperatorAllowlist: operatorAllowlist,
 		TrustedProxies:    cfg.TrustedProxies,
 		BFFClientIPToken:  cfg.BFFClientIPToken,
+		// "none" is the only value this build has a client for, so every
+		// promotional SMS to India is refused until a register is chosen.
+		DND: sending.CacheDNDLookups(sending.NoDNDRegister{}, time.Now),
 		Abuse: api.AbuseLimits{PerIPMinute: cfg.AbuseIPPerMinute,
 			PerTokenMinute: cfg.AbuseTokenPerMinute, Ignore: cfg.AbuseIgnore},
 		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL,

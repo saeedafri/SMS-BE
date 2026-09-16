@@ -112,6 +112,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			cost: cost, segments: segments, fields: contact.Fields,
 		}
 
+		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, SenderStatus: context.sender.Status,
 			SenderID: context.sender.ID.String(), TemplateStatus: context.templateStatus,
@@ -128,7 +129,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// dispatch path, and a campaign that somehow sent text unrelated to
 			// its own template would be refused here too.
 			RegisteredTemplateRequired: RegisteredTemplateRequired(context.sender.Country),
-			OutsidePromotionalWindow:   outsidePromotionalWindow(context.sender.Country, context.template),
+			OutsidePromotionalWindow:   s.outsidePromotionalWindow(context.sender.Country, context.template),
+			DNDBlocked:                 dndBlocked,
+			DNDCheckUnavailable:        dndUnavailable,
 			TemplateBody:               templateBody(context.template),
 			Body:                       body,
 			// The balance check uses the running total for this batch, so a
