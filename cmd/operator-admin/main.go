@@ -21,6 +21,7 @@
 //	operator-admin disable ops@company.com
 //	operator-admin credit-wallet owner@customer.com INR 500000.00 UTR123456789
 //	operator-admin rcs-launch <agent-uuid> GOOGLE relay-test_abc_agent@rbm.goog
+//	operator-admin rcs-connection add jio "Jio JBM"
 //
 // The password is never taken as an argument. It is read from the terminal
 // without echo, because an argument is visible in `ps`, in shell history, and
@@ -44,6 +45,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/platform/config"
+	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"github.com/saeedafri/sms-be/internal/store"
 	"time"
 )
@@ -66,7 +68,8 @@ func usage() error {
   operator-admin disable <email>
   operator-admin enable <email>
   operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
-  operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|GOOGLE> <carrier-agent-id>
+  operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE> <carrier-agent-id>
+  operator-admin rcs-connection ...  RCS operator accounts; run it for its own help
   operator-admin bans                 list addresses the abuse guard has banned
   operator-admin unban <ip>           lift a ban at once and forget its history
 
@@ -152,6 +155,12 @@ func run() error {
 			return usage()
 		}
 		return launchRCSAgent(ctx, pool, os.Args[2], os.Args[3], os.Args[4])
+	case "rcs-connection":
+		box, err := secrets.NewBox(cfg.ConnectionEncryptionKey)
+		if err != nil {
+			return err
+		}
+		return runRCSConnection(ctx, pool, box, os.Args[2:])
 	case "credit-wallet":
 		if len(os.Args) < 6 {
 			return usage()
@@ -232,8 +241,8 @@ func launchRCSAgent(ctx context.Context, pool *pgxpool.Pool,
 		return errors.New("agent must be the Relay agent's uuid")
 	}
 	carrier = strings.ToUpper(strings.TrimSpace(carrier))
-	if !slices.Contains([]string{"AIRTEL", "VI", "GOOGLE"}, carrier) {
-		return errors.New("carrier must be AIRTEL, VI or GOOGLE")
+	if !slices.Contains(rcsLaunchCarriers(), carrier) {
+		return errors.New("carrier must be one of " + strings.Join(rcsLaunchCarriers(), ", "))
 	}
 	carrierAgentID = strings.TrimSpace(carrierAgentID)
 	if carrierAgentID == "" {

@@ -123,7 +123,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			// message skips a rule because it looked the same as its
 			// neighbour's.
 			CarrierTemplateStatus: s.carrierTemplateStatusFor(
-				context.sender.Channel, context.template),
+				context.sender.Channel, context.rcsCarrier, context.template),
 			// A campaign's body IS the template, personalised, so this passes by
 			// construction — which is the point. The same rule applies to every
 			// dispatch path, and a campaign that somehow sent text unrelated to
@@ -194,7 +194,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		} else {
 			submissions = append(submissions, connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
-				Sender: context.sender.Header, Body: plan.body,
+				Sender: context.sender.Header,
+				Body: rcsText(context.sender.Channel, plan.body,
+					context.template, plan.fields),
 				Channel: context.sender.Channel, Country: context.sender.Country,
 				Carrier:           context.carrier,
 				Promotional:       context.template.DltCategory != nil && *context.template.DltCategory == "PROMOTIONAL",

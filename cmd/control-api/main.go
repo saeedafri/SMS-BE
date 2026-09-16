@@ -242,6 +242,14 @@ func run() error {
 	// through to the sandbox exactly as before.
 	smpp := &connector.SMPPRouter{Fallback: sandbox}
 	carriers := connector.Registry{Default: smpp}
+	// With no carrier in the environment, RCS operators come from the
+	// rcs_connections table instead, several at once. An empty router leaves
+	// RCS on the sandbox, as before.
+	var rcsRouter *connector.RCSRouter
+	if rcsCarrier == nil {
+		rcsRouter = &connector.RCSRouter{}
+		carriers.ByChannel = map[string]connector.Connector{"RCS": rcsRouter}
+	}
 	if rcsCarrier != nil {
 		logger.Info("rcs carrier enabled", "vendor", rcsCarrier.Vendor())
 		if sender, ok := rcsCarrier.(connector.Connector); ok {
@@ -297,6 +305,7 @@ func run() error {
 		SMPP:              smpp,
 		DLTChain:          cfg.DLTTelemarketerChain,
 		SMPPEnvironment:   cfg.SMPPEnvironment,
+		RCS:               rcsRouter,
 		Media:             mediaStore,
 		AllowGreyRoutes:   cfg.AllowGreyRoutes,
 		OperatorAllowlist: operatorAllowlist,
@@ -347,6 +356,13 @@ func run() error {
 	go resilience.Supervise(ctx, "smpp-binds", time.Minute, logger,
 		func(name string) { metrics.RecordIncident("worker_panic", name) },
 		apiServer.ReloadSMPPBinds)
+
+	// RCS operator accounts, the same way: enabled in the database, live within
+	// a minute.
+	logger.Info(apiServer.BootRCS(ctx))
+	go resilience.Supervise(ctx, "rcs-connections", time.Minute, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.ReloadRCSConnections)
 
 	// Launches scheduled campaigns when their time comes. Without it a campaign
 	// with a send time was saved as scheduled and never sent.

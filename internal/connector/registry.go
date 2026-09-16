@@ -29,7 +29,7 @@ type Registry struct {
 // path is a panic in the middle of a batch that has already had money held
 // against it.
 func (r Registry) For(channel string) Connector {
-	if carrier, ok := r.ByChannel[strings.ToUpper(channel)]; ok && carrier != nil {
+	if carrier, ok := r.Dedicated(channel); ok {
 		return carrier
 	}
 	return r.Default
@@ -51,8 +51,14 @@ func (r Registry) RCSTemplateRegistrarFor(channel string) (RCSTemplateRegistrar,
 // carrier carried a message needs to know the difference. A channel served by
 // the default sandbox took whatever path the routes table chose; a channel with
 // its own gateway went there regardless of what the routes table says.
+//
+// A router with no operator configured is no gateway: RCS then goes to the
+// default exactly as it did before any account existed.
 func (r Registry) Dedicated(channel string) (Connector, bool) {
 	carrier, ok := r.ByChannel[strings.ToUpper(channel)]
+	if empty, isRouter := carrier.(interface{ Empty() bool }); isRouter && empty.Empty() {
+		return nil, false
+	}
 	return carrier, ok && carrier != nil
 }
 
@@ -60,12 +66,12 @@ func (r Registry) Dedicated(channel string) (Connector, bool) {
 // vendor name a connector reports and valued by the network it reaches, in the
 // upper-case vocabulary the routes and launch tables use.
 //
-// A fact about the CODE, not about a deployment. Airtel and Vi are here because
-// rcs_airtel.go and rcs_vi.go exist, whether or not either has credentials on a
-// given box; Jio is absent because no adapter does. Agent creation is gated on
+// A fact about the CODE, not about a deployment. Airtel, Vi and Jio are here
+// because rcs_airtel.go, rcs_vi.go and rcs_jio.go exist, whether or not any has
+// credentials on a given box. Agent creation is gated on
 // this rather than on configured credentials, so a customer can do the days of
 // brand verification before a deployment's carrier contract is signed.
 //
 // Google is the RBM platform itself rather than a network, used to test on
 // invited handsets; its launches are recorded under GOOGLE.
-var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI", "google": "GOOGLE"}
+var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI", "jio": "JIO", "google": "GOOGLE"}

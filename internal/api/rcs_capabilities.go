@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -70,40 +72,60 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 	// Before the carrier check, so the answer about the agent does not depend on
 	// whether this deployment has credentials. Another tenant's agent reads as
 	// one that does not exist: a distinct answer would confirm the id is real.
-	if _, err := store.GetRcsAgent(ctx, s.DB, identity, request.Body.RcsAgentId); err != nil {
+	agent, err := store.GetRcsAgent(ctx, s.DB, identity, request.Body.RcsAgentId)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return gen.CheckRcsCapabilities404JSONResponse(
 				errorBody(codeNotFound, "No such RCS agent.")), nil
 		}
 		return nil, err
 	}
-	if s.RCSCarrier == nil {
+	checkers := s.rcsCheckers()
+	if len(checkers) == 0 {
 		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
 			"This deployment has no RCS carrier configured, so handset reachability cannot be checked")), nil
 	}
-	// The carrier's own id for this agent, on the carrier this deployment checks
-	// through — under the same three conditions a send uses, from the same query,
-	// so "reachable" here and "sendable" at the gate cannot disagree.
-	carrier := connector.RCSIntegrations[s.RCSCarrier.Vendor()]
-	agentID, err := store.CarrierAgentID(ctx, s.DB, identity, request.Body.RcsAgentId, carrier)
-	if errors.Is(err, store.ErrNotFound) {
+	// The carrier's own id for this agent, on the first operator in route
+	// priority it is launched on — under the same conditions and in the same
+	// order a send uses, so "reachable" here and "sendable" at the gate cannot
+	// disagree.
+	carriers := make([]string, 0, len(checkers))
+	for carrier := range checkers {
+		carriers = append(carriers, carrier)
+	}
+	slices.Sort(carriers)
+	if ordered, err := store.RCSCarriersByPriority(ctx, s.operatorPool(), agent.Country, carriers); err == nil {
+		carriers = ordered
+	}
+	var checker connector.RCSCapabilityChecker
+	agentID := ""
+	for _, carrier := range carriers {
+		id, err := store.CarrierAgentID(ctx, s.DB, identity, request.Body.RcsAgentId, carrier)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		checker, agentID = checkers[carrier], id
+		break
+	}
+	if checker == nil {
 		// Refused rather than answered with reachableCount 0. A zero reads as a
 		// fact about the handsets; the truth is a fact about the agent.
+		named := strings.Join(carriers, ", ")
 		return gen.CheckRcsCapabilities422JSONResponse(errorBody(codeValidation,
-			"This agent has no approved launch on "+carrier+", so it reaches no one "+
-				"there. Reach is checked through "+carrier+" on this deployment.")), nil
-	}
-	if err != nil {
-		return nil, err
+			"This agent has no approved launch on "+named+", so it reaches no one "+
+				"there. Reach is checked through "+named+" on this deployment.")), nil
 	}
 
 	report := gen.RcsCapabilityReport{
-		Vendor:  gen.RcsVendor(s.RCSCarrier.Vendor()),
+		Vendor:  gen.RcsVendor(checker.Vendor()),
 		Results: make([]gen.RcsCapability, 0, len(valid)+len(rejected)),
 	}
 
 	if len(valid) == 1 {
-		capability, err := s.RCSCarrier.Capability(ctx, agentID, valid[0])
+		capability, err := checker.Capability(ctx, agentID, valid[0])
 		if err != nil {
 			return rcsCarrierError(err)
 		}
@@ -121,7 +143,7 @@ func (s *Server) CheckRcsCapabilities(ctx context.Context, request gen.CheckRcsC
 			Features:  &features,
 		})
 	} else {
-		reachable, err := s.RCSCarrier.Reachable(ctx, agentID, valid)
+		reachable, err := checker.Reachable(ctx, agentID, valid)
 		if err != nil {
 			return rcsCarrierError(err)
 		}

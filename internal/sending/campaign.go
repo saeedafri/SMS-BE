@@ -120,12 +120,11 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 
 	// The path this campaign's traffic takes, resolved once with everything else
 	// that is identical across recipients. See resolvePath in service.go.
-	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel)
-
-	// The brand every message in this campaign goes out under, resolved once
-	// with the path. A campaign has one sender and therefore one agent.
-	rcsCarrier := s.dedicatedCarrier(sender.Channel)
-	agentID := s.rcsAgentFor(ctx, identity, sender, rcsCarrier)
+	//
+	// The brand every message in this campaign goes out under is resolved once
+	// with it. A campaign has one sender and therefore one agent.
+	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
+	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel, rcsCarrier)
 
 	campaignID := campaign.ID
 	batch := batchContext{

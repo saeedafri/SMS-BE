@@ -145,15 +145,16 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 				"). Attach a different code to replace it.")), nil
 	}
 
-	registrar, configured := s.Carriers.RCSTemplateRegistrarFor("RCS")
-	if !configured || registrar == nil {
+	checkers := s.rcsCheckers()
+	if len(checkers) == 0 {
 		return gen.RegisterTemplateWithCarrier503JSONResponse(errorBody(codeValidation,
 			"This deployment has no RCS carrier configured.")), nil
 	}
 	// The named carrier, not whichever one is configured. Submitting to the
 	// wrong one would come back approved under a template id the named carrier
 	// has never seen — the "Template not found" this whole change removes.
-	if registrar.Vendor() != vendor {
+	registrar, configured := checkers[connector.RCSIntegrations[vendor]].(connector.RCSTemplateRegistrar)
+	if !configured || registrar.Vendor() != vendor {
 		return gen.RegisterTemplateWithCarrier503JSONResponse(errorBody(codeValidation,
 			"This deployment has no "+vendor+" integration configured, so it cannot submit "+
 				"a template to "+vendor+". Attach a template code from "+vendor+"'s portal instead.")), nil

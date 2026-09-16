@@ -62,19 +62,70 @@ type Service struct {
 	Coalescer *Coalescer
 }
 
-// dedicatedCarrier is the gateway a channel has all to itself, upper-cased into
-// the vocabulary the routes table and the launch rows use. Empty means the
-// channel has no gateway of its own and falls to the default connector.
+// rcsPath is the operator an RCS message goes out through, upper-cased into
+// the vocabulary the routes table and the launch rows use, and the agent id it
+// goes under there. Both are empty when RCS has no gateway of its own and
+// falls to the default connector.
 //
-// It answers from configuration alone, with no database round trip, which is
-// what lets the gate know which carrier an RCS message would go over before it
-// decides whether to let it.
-func (s *Service) dedicatedCarrier(channel string) string {
+// With several operators configured, the first in route priority on which the
+// sender's agent has an approved launch wins: a brand can only reach a handset
+// through an operator it is launched on. None found returns the first operator
+// and no agent, which the gate refuses as unresolved.
+func (s *Service) rcsPath(ctx context.Context, identity store.Identity,
+	sender store.SenderID) (string, string) {
+
+	if sender.Channel != "RCS" {
+		return "", ""
+	}
+	dedicated, ok := s.Carriers.Dedicated(sender.Channel)
+	if !ok {
+		return "", ""
+	}
+	router, several := dedicated.(interface{ Carriers() []string })
+	if !several {
+		carrier := strings.ToUpper(dedicated.Name())
+		return carrier, s.rcsAgentFor(ctx, identity, sender, carrier)
+	}
+	carriers := s.rcsCarrierOrder(ctx, sender.Country, router.Carriers())
+	if sender.RcsAgentID != nil {
+		for _, carrier := range carriers {
+			agentID, err := store.CachedCarrierAgentID(ctx, s.DB, s.Hot, identity, *sender.RcsAgentID, carrier)
+			if err == nil && agentID != "" {
+				return carrier, agentID
+			}
+		}
+	}
+	return carriers[0], s.rcsAgentFor(ctx, identity, sender, carriers[0])
+}
+
+// rcsCarrierOrder is the configured operators in the corridor's route
+// priority, cached with the rest of the send path's configuration reads.
+func (s *Service) rcsCarrierOrder(ctx context.Context, country string, carriers []string) []string {
+	key := "rcsorder:" + country + ":" + strings.Join(carriers, ",")
+	if cached, found := s.Hot.Get(key); found {
+		return cached.([]string)
+	}
+	ordered, err := store.RCSCarriersByPriority(ctx, s.DB, country, carriers)
+	if err != nil {
+		// The order is a preference; configured operators still send.
+		return carriers
+	}
+	s.Hot.Put(key, ordered)
+	return ordered
+}
+
+// gatewayFor is the connector that will carry a channel's message over
+// carrier: the operator's own gateway when the channel routes between several.
+func (s *Service) gatewayFor(channel, carrier string) (connector.Connector, bool) {
 	dedicated, ok := s.Carriers.Dedicated(channel)
 	if !ok {
-		return ""
+		return nil, false
 	}
-	return strings.ToUpper(dedicated.Name())
+	if router, several := dedicated.(*connector.RCSRouter); several {
+		gateway, found := router.For(carrier)
+		return gateway, found
+	}
+	return dedicated, true
 }
 
 // rcsAgentFor is the agent identity one message goes out under.
@@ -260,8 +311,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// The brand this message would go out under, resolved BEFORE the gate so a
 	// sender with no identity on its carrier is refused rather than charged and
 	// then rejected. It costs one cached lookup and only on RCS.
-	rcsCarrier := s.dedicatedCarrier(sender.Channel)
-	agentID := s.rcsAgentFor(ctx, identity, sender, rcsCarrier)
+	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
 
 	dndBlocked, dndUnavailable := s.dndStatus(ctx, sender.Channel, msisdn, template)
 
@@ -271,7 +321,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		TenantStatus: tenantStatus, SenderStatus: sender.Status,
 		SenderID: sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,
-		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, template),
+		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, rcsCarrier, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
 		RegisteredTemplateRequired: RegisteredTemplateRequired(sender.Country),
 		OutsidePromotionalWindow:   s.outsidePromotionalWindow(sender.Country, template),
@@ -327,7 +377,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// could be reordered and routes enabled or disabled without one message
 	// changing, and every live message was recorded with no carrier, so the
 	// deliverability-by-carrier screens worked only for seeded history.
-	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel)
+	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel, rcsCarrier)
 
 	if err := s.record(ctx, identity, store.MessageRecord{
 		ID: messageID, Channel: sender.Channel, Country: sender.Country,
@@ -348,7 +398,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	entityID, dltTemplateID := s.dltIDs(ctx, identity, sender.Channel, sender.Country, template)
 	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
-		Body: request.Body, Channel: sender.Channel, Country: sender.Country,
+		Body:    rcsText(sender.Channel, request.Body, template, request.Variables),
+		Channel: sender.Channel, Country: sender.Country,
 		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
 		Priority:          request.Priority,
 		Promotional:       template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL",
@@ -629,11 +680,11 @@ func (s *Service) record(ctx context.Context, identity store.Identity,
 //
 // So: the carrier's approval is required exactly when a carrier will receive
 // the message.
-func (s *Service) carrierTemplateStatusFor(channel string, template store.Template) string {
+func (s *Service) carrierTemplateStatusFor(channel, operator string, template store.Template) string {
 	if template.ID == uuid.Nil {
 		return ""
 	}
-	carrier, dedicated := s.Carriers.Dedicated(channel)
+	carrier, dedicated := s.gatewayFor(channel, operator)
 	if !dedicated {
 		return ""
 	}
@@ -712,8 +763,10 @@ func (s *Service) dltIDs(ctx context.Context, identity store.Identity, channel, 
 //
 // Absence is normal, not an error. Email and WhatsApp do not go over a carrier
 // at all, and a corridor with no active route sends exactly as before.
-func (s *Service) resolvePath(ctx context.Context, country, channel string) (string, *string) {
-	if carrier := s.dedicatedCarrier(channel); carrier != "" {
+//
+// rcsCarrier is the operator rcsPath chose, empty for every other channel.
+func (s *Service) resolvePath(ctx context.Context, country, channel, rcsCarrier string) (string, *string) {
+	if carrier := rcsCarrier; carrier != "" {
 		route, err := store.SelectRouteForCarrier(ctx, s.DB, country, channel, carrier)
 		if err != nil {
 			// No route row for this carrier is worth recording as-is rather
@@ -780,6 +833,29 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+// rcsText is the text an RCS submission carries.
+//
+// A campaign's body is empty on RCS, because Airtel and Vi hold the template
+// and render it themselves. The operators that do not — Google, and Jio, which
+// reviews the assistant rather than the message — are handed nothing to show
+// and refuse the send body_required. So the template's own text is rendered
+// here, from the SAME contact values that fill a carrier-held template, and
+// only when the caller supplied no body of its own.
+//
+// Billing is untouched on purpose: the cost was priced from what the caller
+// sent, and rendering text for a carrier is not a reason to charge for more
+// segments.
+func rcsText(channel, body string, template store.Template, fields map[string]string) string {
+	if channel != "RCS" || strings.TrimSpace(body) != "" {
+		return body
+	}
+	text := templateBody(template)
+	for name, value := range fields {
+		text = strings.ReplaceAll(text, "{{"+name+"}}", value)
+	}
+	return text
 }
 
 // templateBody is the registered text a submitted body must instantiate.

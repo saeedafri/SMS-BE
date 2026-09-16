@@ -104,6 +104,10 @@ type Server struct {
 	DLTChain        []string
 	SMPPEnvironment string
 
+	// RCS holds the RCS operator accounts from rcs_connections, in the same
+	// environment as SMPP. Unused while RCSCarrier comes from the environment.
+	RCS *connector.RCSRouter
+
 	// OperatorDB sees across tenants and is used ONLY by operator-console
 	// handlers. Tenant handlers must keep using DB: that split is what stops a
 	// mistake in one handler from becoming a cross-tenant leak.

@@ -290,7 +290,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			SenderID:       plan.sender.ID.String(),
 			TemplateStatus: plan.templateStatus(), TemplateSender: plan.templateSender(),
 			Suppressed:            state.suppressed[plan.msisdn],
-			CarrierTemplateStatus: s.carrierTemplateStatusFor(plan.sender.Channel, plan.template),
+			CarrierTemplateStatus: s.carrierTemplateStatusFor(plan.sender.Channel, plan.rcsCarrier, plan.template),
 			// The destination regime's template binding, applied identically to
 			// the batched path. A gate that is weaker when messages arrive in
 			// company is not a gate.
@@ -430,15 +430,16 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 			plan.template = template
 		}
 
-		corridor := sender.Country + "/" + sender.Channel
+		plan.rcsCarrier, plan.agentID = s.rcsPath(ctx, identity, sender)
+		// Keyed by operator too: two RCS senders in one corridor can go out
+		// through different operators.
+		corridor := sender.Country + "/" + sender.Channel + "/" + plan.rcsCarrier
 		path, cached := routes[corridor]
 		if !cached {
-			path.carrier, path.routeID = s.resolvePath(ctx, sender.Country, sender.Channel)
+			path.carrier, path.routeID = s.resolvePath(ctx, sender.Country, sender.Channel, plan.rcsCarrier)
 			routes[corridor] = path
 		}
 		plan.carrier, plan.routeID = path.carrier, path.routeID
-		plan.rcsCarrier = s.dedicatedCarrier(sender.Channel)
-		plan.agentID = s.rcsAgentFor(ctx, identity, sender, plan.rcsCarrier)
 
 		plan.dndBlocked, plan.dndUnavailable = s.dndStatus(ctx, sender.Channel, msisdn, plan.template)
 
@@ -623,7 +624,9 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 		byChannel[plan.sender.Channel] = append(byChannel[plan.sender.Channel],
 			connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
-				Sender: plan.sender.Header, Body: plan.pending.request.Body,
+				Sender: plan.sender.Header,
+				Body: rcsText(plan.sender.Channel, plan.pending.request.Body,
+					plan.template, plan.pending.request.Variables),
 				Channel: plan.sender.Channel, Country: plan.sender.Country,
 				Carrier:           plan.carrier,
 				DLTEntityID:       entityID,

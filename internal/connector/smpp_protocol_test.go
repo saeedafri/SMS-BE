@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	hexenc "encoding/hex"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,9 +53,38 @@ func protocolBind(t *testing.T, smsc *fakeSMSC, protocol SMPPProtocol) *SMPPBind
 func TestNoProtocolIsByteIdenticalToToday(t *testing.T) {
 	smsc := startFakeSMSC(t)
 	raw := submitGolden(t, protocolBind(t, smsc, DefaultSMPPProtocol(testChain)), smsc)
-	if got := hexenc.EncodeToString(raw); got != goldenSubmit {
-		t.Fatalf("submit_sm bytes changed:\n got %s\nwant %s", got, goldenSubmit)
+	golden, _ := hexenc.DecodeString(goldenSubmit)
+	// gosmpp keeps optional parameters in a map, so the three DLT TLVs go out
+	// in any order. Operators match them by tag: the body before them must be
+	// identical, and the TLVs the same set.
+	body, tlvs := splitTLVs(t, raw, len(golden)-goldenTLVBytes)
+	wantBody, wantTLVs := splitTLVs(t, golden, len(golden)-goldenTLVBytes)
+	if hexenc.EncodeToString(body) != hexenc.EncodeToString(wantBody) ||
+		strings.Join(tlvs, ",") != strings.Join(wantTLVs, ",") {
+		t.Fatalf("submit_sm bytes changed:\n got %x\nwant %s", raw, goldenSubmit)
 	}
+}
+
+// goldenTLVBytes is the length of the three DLT TLVs that end goldenSubmit.
+const goldenTLVBytes = (4 + 19) + (4 + 19) + (4 + 64)
+
+// splitTLVs returns the PDU up to offset and the TLVs after it, sorted.
+func splitTLVs(t *testing.T, raw []byte, offset int) ([]byte, []string) {
+	t.Helper()
+	if offset > len(raw) {
+		t.Fatalf("submit_sm is %d bytes, shorter than its body", len(raw))
+	}
+	var tlvs []string
+	for rest := raw[offset:]; len(rest) > 0; {
+		if len(rest) < 4 || len(rest) < 4+(int(rest[2])<<8|int(rest[3])) {
+			t.Fatalf("truncated TLV at %x", rest)
+		}
+		size := 4 + (int(rest[2])<<8 | int(rest[3]))
+		tlvs = append(tlvs, hexenc.EncodeToString(rest[:size]))
+		rest = rest[size:]
+	}
+	sort.Strings(tlvs)
+	return raw[:offset], tlvs
 }
 
 // Ask 34 A1. The configured tags are the tags on the wire: a swapped

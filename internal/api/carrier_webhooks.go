@@ -66,6 +66,8 @@ func (s *Server) receiveRCSWebhook(w http.ResponseWriter, r *http.Request) {
 		event, err = connector.ParseAirtelWebhook(payload)
 	case "vi":
 		event, err = connector.ParseViWebhook(payload)
+	case "jio":
+		event, err = connector.ParseJioWebhook(payload)
 	case "google":
 		if s.GoogleWebhookClientToken == "" {
 			writeError(w, http.StatusNotFound, codeNotFound, "no such endpoint")

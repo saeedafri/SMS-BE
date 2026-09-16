@@ -19,13 +19,38 @@ import (
 // agent to. Derived from whether a connector is configured, not from a list of
 // networks that exist.
 func (s *Server) reachableCarriers() map[string]bool {
-	if s.RCSCarrier == nil {
+	checkers := s.rcsCheckers()
+	if len(checkers) == 0 {
 		return nil
 	}
-	// The vendor this deployment actually holds credentials for. Derived from
-	// the same handle that decides whether an RCS send can leave at all, so
-	// "we can launch an agent there" and "we can send there" cannot drift.
-	return map[string]bool{strings.ToUpper(s.RCSCarrier.Vendor()): true}
+	// The operators this deployment actually holds credentials for. Derived
+	// from the same handles that decide whether an RCS send can leave at all,
+	// so "we can launch an agent there" and "we can send there" cannot drift.
+	reachable := make(map[string]bool, len(checkers))
+	for carrier := range checkers {
+		reachable[carrier] = true
+	}
+	return reachable
+}
+
+// rcsCheckers is every RCS operator this deployment can reach, by operator
+// name: the one named in the environment when there is one, otherwise the
+// active accounts in rcs_connections.
+func (s *Server) rcsCheckers() map[string]connector.RCSCapabilityChecker {
+	if s.RCSCarrier != nil {
+		return map[string]connector.RCSCapabilityChecker{
+			strings.ToUpper(s.RCSCarrier.Vendor()): s.RCSCarrier}
+	}
+	if s.RCS == nil {
+		return nil
+	}
+	checkers := map[string]connector.RCSCapabilityChecker{}
+	for _, carrier := range s.RCS.Carriers() {
+		if gateway, ok := s.RCS.For(carrier); ok {
+			checkers[carrier] = gateway
+		}
+	}
+	return checkers
 }
 
 // rcsAgentResponse renders an agent, filling in a launch row for every carrier
