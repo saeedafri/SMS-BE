@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/saeedafri/sms-be/internal/connector"
@@ -188,8 +187,7 @@ func (s *Server) BootRCS(ctx context.Context) string {
 	if err := s.ReloadRCSConnections(ctx); err != nil {
 		return fmt.Sprintf("rcs connections at boot: could not be read: %v", err)
 	}
-	carriers := s.RCS.Carriers()
-	sort.Strings(carriers)
+	carriers := s.RCSOperators()
 	line := fmt.Sprintf("rcs connections at boot: operators=%v", carriers)
 	if len(carriers) > 0 && s.CarrierWebhookToken == "" {
 		line += " — RCS_WEBHOOK_TOKEN is not set, so no delivery reports will be accepted"

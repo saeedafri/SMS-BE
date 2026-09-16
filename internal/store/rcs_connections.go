@@ -87,6 +87,11 @@ func GetRCSConnection(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (RC
 
 // CreateRCSConnection inserts an account, always disabled.
 func CreateRCSConnection(ctx context.Context, pool *pgxpool.Pool, c RCSConnection) (RCSConnection, error) {
+	// An account with no settings of its own takes every default, and a nil map
+	// marshals to JSON null, which the object check refuses.
+	if c.Settings == nil {
+		c.Settings = map[string]string{}
+	}
 	settings, err := json.Marshal(c.Settings)
 	if err != nil {
 		return RCSConnection{}, err

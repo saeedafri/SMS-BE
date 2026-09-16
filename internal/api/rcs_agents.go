@@ -53,6 +53,18 @@ func (s *Server) rcsCheckers() map[string]connector.RCSCapabilityChecker {
 	return checkers
 }
 
+// RCSOperators is every operator this deployment can reach, sorted. The boot
+// log and the console read it; the handlers use rcsCheckers directly.
+func (s *Server) RCSOperators() []string {
+	checkers := s.rcsCheckers()
+	operators := make([]string, 0, len(checkers))
+	for carrier := range checkers {
+		operators = append(operators, carrier)
+	}
+	slices.Sort(operators)
+	return operators
+}
+
 // rcsAgentResponse renders an agent, filling in a launch row for every carrier
 // that operates in its country.
 //
