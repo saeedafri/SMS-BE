@@ -80,6 +80,20 @@ produces two prices in one campaign's billing, which is correct but will look
 odd on a screen that shows one route and one price. If you want the console to
 say something about that, tell us and we will surface the route's price history.
 
+## Verified on production
+
+Deployed 00:24 IST, 17 Sep; migration 54 ran before the swap.
+
+| Probe on the live API | Result |
+|---|---|
+| Index `routes_corridor_label` exists | `UNIQUE … (country, channel, label)` |
+| `POST /v1/operator/routes` with an existing label | **409** `conflict`, with the message above |
+| `POST /v1/operator/routes` with a made-up `connectionId` | **422** `validation_failed`, with the message above |
+| Rows written by either probe | **0** |
+
+Both probes were chosen so that nothing is created even if a guard had been
+broken, and the row count confirms it.
+
 ## Also, on your FYI
 
 Videocon is live and bound (`103.153.58.105:4444`, transceiver, 10 TPS, healthy)
