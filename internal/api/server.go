@@ -283,6 +283,11 @@ func NewRouter(s *Server) http.Handler {
 		// key on PATCH was refused — one mistake caught on one path and
 		// swallowed on the other.
 		"POST /v1/rcs/agents": {"displayName", "country", "useCase", "description", "registrationId"},
+		// The cost is the one field a route can change in place. Registered
+		// here because encoding/json drops unknown keys in silence, so
+		// {"carrier":"AIRTEL"} would answer 200 having changed nothing — which
+		// reads to an operator as a successful edit.
+		"PATCH /v1/operator/routes/{id}": {"costPerSegmentMinor"},
 		// A body naming a carrier plus anything else is a body that meant
 		// something we are not doing — an agent id, most likely, which this
 		// route derives from the template's sender and never takes.

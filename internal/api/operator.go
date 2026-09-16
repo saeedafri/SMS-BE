@@ -961,6 +961,70 @@ func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequest
 	return gen.CreateRoute201JSONResponse(toGenRoute(created)), nil
 }
 
+// UpdateRoute changes a route's cost, and only that.
+//
+// Repricing is the one edit that does not move traffic: the same messages take
+// the same path and are billed differently from the next send. Every other
+// property decides WHICH messages a route carries or WHEN — so the rest stay
+// delete-and-recreate, and priority and status keep their own endpoints, which
+// carry guards this one does not need.
+//
+// Before this, correcting a price meant deleting the route and adding it again,
+// and a new route is created last in the corridor and disabled: a one-paise
+// correction took the corridor's primary path out of service by hand.
+func (s *Server) UpdateRoute(ctx context.Context, request gen.UpdateRouteRequestObject) (
+	gen.UpdateRouteResponseObject, error) {
+
+	operator, err := s.requireOperator(ctx)
+	if err != nil {
+		return gen.UpdateRoute401JSONResponse(
+			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
+	}
+	routeID, valid := parsePathID(request.Id)
+	if !valid {
+		return gen.UpdateRoute404JSONResponse(errorBody(codeNotFound, "No such route.")), nil
+	}
+	// Presence, not value: the generated body renders the cost as a plain int,
+	// so an absent key and a deliberate 0 are the same zero here. Zero is a
+	// real cost — a bundled route, a carrier not charging for a corridor — and
+	// treating it as "unset" would refuse it.
+	if _, present := bodyValue(ctx, "costPerSegmentMinor"); !present || request.Body == nil {
+		return gen.UpdateRoute422JSONResponse(errorBody(codeValidation,
+			"Give the new cost: costPerSegmentMinor, in minor units of the route's "+
+				"own currency.")), nil
+	}
+	if request.Body.CostPerSegmentMinor < 0 {
+		return gen.UpdateRoute422JSONResponse(errorBody(codeValidation,
+			"Cost per segment cannot be negative.")), nil
+	}
+
+	// Read first so the audit entry can name the route rather than its uuid,
+	// and so a 404 costs nothing.
+	before, err := store.GetRoute(ctx, s.DB, routeID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateRoute404JSONResponse(errorBody(codeNotFound, "No such route.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	updated, err := store.UpdateRouteCost(ctx, s.DB, routeID, int64(request.Body.CostPerSegmentMinor))
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateRoute404JSONResponse(errorBody(codeNotFound, "No such route.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := store.RecordOperatorAction(ctx, s.DB, operator.Email, "route.update",
+		nil, "", updated.ID.String(),
+		fmt.Sprintf("Changed the cost of the %s route from %d to %d %s per segment",
+			before.Label, before.CostPerSegmentMinor, updated.CostPerSegmentMinor,
+			updated.Currency)); err != nil {
+		return nil, err
+	}
+	return gen.UpdateRoute200JSONResponse(toGenRoute(updated)), nil
+}
+
 // DeleteRoute removes a path from a corridor.
 func (s *Server) DeleteRoute(ctx context.Context, request gen.DeleteRouteRequestObject) (
 	gen.DeleteRouteResponseObject, error) {
