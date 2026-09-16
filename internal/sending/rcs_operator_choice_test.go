@@ -122,8 +122,8 @@ func TestAnRCSMessageGoesThroughAnOperatorItsAgentIsLaunchedOn(t *testing.T) {
 
 	// Launched on Jio too, and Jio's corridor is cheaper: Jio takes it.
 	f.launchOn(senderID, "JIO")
-	f.seedRCSRoute("JIO", 1)
-	f.seedRCSRoute("AIRTEL", 2)
+	f.seedRCSRoute("JIO")
+	f.seedRCSRoute("AIRTEL")
 	f.service.Hot = store.NewHotCache(0)
 
 	second := f.sendRCS(senderID, templateID, "+919820000022")
@@ -172,7 +172,7 @@ func TestAnOperatorThatHoldsNoTemplateIsSentTheRenderedText(t *testing.T) {
 
 	senderID := f.seedApprovedSender("RCSOP3", "RCS")
 	f.launchOn(senderID, "JIO")
-	f.seedRCSRoute("JIO", 1)
+	f.seedRCSRoute("JIO")
 	templateID := f.seedCarrierApprovedRCSTemplate(senderID)
 	listID := f.seedListWithNamedContacts(map[string]string{"919820000024": "Priya"})
 	campaignID := f.seedRCSCampaign(senderID, templateID, listID)
@@ -193,19 +193,22 @@ func TestAnOperatorThatHoldsNoTemplateIsSentTheRenderedText(t *testing.T) {
 	}
 }
 
-func (f *fixture) seedRCSRoute(carrier string, priority int) {
+// seedRCSRoute makes sure the corridor has a route for this operator, adding
+// one only if none exists.
+//
+// It never deletes or renumbers what is already there: the whole suite shares
+// one database and the packages run at the same time, so a test that takes a
+// priority away from another carrier makes an unrelated package fail. The
+// priority follows the pattern the API tests use, which leaves JIO ahead of
+// AIRTEL whether the corridor came from the demo seed or from here.
+func (f *fixture) seedRCSRoute(carrier string) {
 	f.t.Helper()
-	id := uuid.New()
-	// Priorities are unique per corridor, so this takes the number it wants.
-	f.exec(`DELETE FROM routes WHERE country = 'IN' AND channel = 'RCS' AND priority = $1`, priority)
 	if _, err := f.service.DB.Exec(context.Background(), `
-		INSERT INTO routes (id, country, channel, carrier, label, priority,
+		INSERT INTO routes (country, channel, carrier, label, priority,
 		                    compliance_standing, cost_per_segment_minor, currency, status)
-		VALUES ($1, 'IN', 'RCS', $2, $3, $4, 'registered', 45, 'INR', 'active')`,
-		id, carrier, carrier+" RCS test", priority); err != nil {
+		VALUES ('IN', 'RCS', $1, $2, $3, 'registered', 45, 'INR', 'active')
+		ON CONFLICT DO NOTHING`,
+		carrier, carrier+" RCS", 900+len(carrier)); err != nil {
 		f.t.Fatalf("seed rcs route: %v", err)
 	}
-	f.t.Cleanup(func() {
-		_, _ = f.service.DB.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, id)
-	})
 }

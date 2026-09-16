@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,14 +31,40 @@ import (
 // integration tests on purpose: the thing most worth proving about identity is
 // that RLS, the SECURITY DEFINER resolution functions, and the handlers agree
 // with each other, and a mocked store would prove none of that.
+// syncBuffer is a bytes.Buffer that several goroutines may use at once.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 type harness struct {
 	t      *testing.T
 	router http.Handler
 	pool   *pgxpool.Pool
 	admin  *pgxpool.Pool
 	// logs captures the server's structured output so tests can read tokens
-	// the API deliberately never returns in a response.
-	logs *bytes.Buffer
+	// the API deliberately never returns in a response. Locked, because the
+	// server writes to it from its own goroutines — a delivery receipt, an
+	// inbound reply — while a test is reading it.
+	logs *syncBuffer
 	// clock is the time tests that pin Server.Now move by hand.
 	clock time.Time
 	// operatorPool carries app.operator=on, for rebuilding the router in
@@ -110,7 +137,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(operator.Close)
 
-	logs := &bytes.Buffer{}
+	logs := &syncBuffer{}
 	h := &harness{t: t, pool: pool, admin: admin, logs: logs, operatorPool: operator}
 	h.server = &api.Server{
 		DB:                 pool,

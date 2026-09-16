@@ -108,8 +108,13 @@ func TestAuditLogPagesAndCountsWhatTheFilterMatches(t *testing.T) {
 
 	// 4. Walking every page yields exactly total rows — the assertion that
 	// catches a pager reporting more than it can actually reach.
+	//
+	// Bounded by what total claims rather than by a fixed number of pages: this
+	// database is shared and keeps its history, so a fixed cap turns into a
+	// failure about paging the day the filter matches more rows than the cap
+	// could reach.
 	walked := 0
-	for page := 1; page <= 100; page++ {
+	for page := 1; page <= filtered.Total/4+2; page++ {
 		p := get(fmt.Sprintf("?range=90d&limit=4&action=route.disable&page=%d", page))
 		if len(p.Entries) == 0 {
 			break

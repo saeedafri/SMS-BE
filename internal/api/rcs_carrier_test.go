@@ -410,7 +410,9 @@ func TestACarrierWebhookWithTheWrongTokenIsNotFound(t *testing.T) {
 func TestAnUnknownCarrierIsNotFound(t *testing.T) {
 	h := newCarrierHarness(t, &stubRegistrar{vendor: "airtel"})
 
-	res := h.postWebhook("jio", webhookToken,
+	// An operator this build has no adapter for. Jio used to stand here and
+	// cannot any more: rcs_jio.go parses its callbacks now.
+	res := h.postWebhook("bsnl", webhookToken,
 		map[string]any{"messageId": "m", "eventType": "DELIVERED"})
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", res.Code)
