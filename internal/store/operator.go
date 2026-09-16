@@ -561,6 +561,37 @@ func CreateRoute(ctx context.Context, pool *pgxpool.Pool, route Route) (Route, e
 	return created, nil
 }
 
+// UpdateRouteCost changes what a corridor pays per segment on one route, and
+// nothing else.
+//
+// Cost alone, deliberately. Country, channel and carrier decide which messages
+// a route carries, and priority decides when — changing any of them under live
+// traffic silently moves messages to a different operator. Repricing does not:
+// the same messages take the same path and are billed differently from the next
+// send. So this is the one field an operator can edit in place, and everything
+// else stays delete-and-recreate.
+//
+// Repricing does NOT reprice messages already sent. Their cost was taken at
+// send time and is recorded on the message.
+func UpdateRouteCost(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, costMinor int64) (Route, error) {
+	var updated Route
+	err := pool.QueryRow(ctx, `
+		UPDATE routes SET cost_per_segment_minor = $2 WHERE id = $1
+		RETURNING id, country, channel, carrier, label, priority,
+		          compliance_standing, connection_id, cost_per_segment_minor, currency, status`,
+		id, costMinor,
+	).Scan(&updated.ID, &updated.Country, &updated.Channel, &updated.Carrier,
+		&updated.Label, &updated.Priority, &updated.ComplianceStanding, &updated.ConnectionID,
+		&updated.CostPerSegmentMinor, &updated.Currency, &updated.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Route{}, ErrNotFound
+	}
+	if err != nil {
+		return Route{}, fmt.Errorf("store: update route cost: %w", err)
+	}
+	return updated, nil
+}
+
 // DeleteRoute removes a route and closes the gap it leaves.
 //
 // The priorities in a carrier's group are 1..n with no holes — the console
