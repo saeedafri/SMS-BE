@@ -517,6 +517,9 @@ func MoveRoute(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, up bool) e
 	return tx.Commit(ctx)
 }
 
+// ErrUnknownConnection is a route pointing at a bind that does not exist.
+var ErrUnknownConnection = errors.New("store: no such connection")
+
 // CreateRoute adds a route at the end of its carrier's order in a corridor.
 //
 // Always last and always disabled. Priority ranks the whole corridor now, not
@@ -543,6 +546,15 @@ func CreateRoute(ctx context.Context, pool *pgxpool.Pool, route Route) (Route, e
 	).Scan(&created.ID, &created.Country, &created.Channel, &created.Carrier,
 		&created.Label, &created.Priority, &created.ComplianceStanding, &created.ConnectionID,
 		&created.CostPerSegmentMinor, &created.Currency, &created.Status)
+	// The only unique index this insert can trip is the corridor's label, and
+	// the only foreign key is the connection, so each maps to one refusal the
+	// operator can act on rather than to a 500.
+	if isUniqueViolation(err) {
+		return Route{}, ErrConflict
+	}
+	if isForeignKeyViolation(err) {
+		return Route{}, ErrUnknownConnection
+	}
 	if err != nil {
 		return Route{}, fmt.Errorf("store: create route: %w", err)
 	}

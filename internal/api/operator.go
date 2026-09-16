@@ -941,6 +941,16 @@ func (s *Server) CreateRoute(ctx context.Context, request gen.CreateRouteRequest
 	}
 
 	created, err := store.CreateRoute(ctx, s.DB, route)
+	if errors.Is(err, store.ErrConflict) {
+		return gen.CreateRoute409JSONResponse(errorBody(codeConflict,
+			"That corridor already has a route with this label. The label is how an "+
+				"operator tells two paths apart, so give this one a different name.")), nil
+	}
+	if errors.Is(err, store.ErrUnknownConnection) {
+		return gen.CreateRoute422JSONResponse(errorBody(codeValidation,
+			"No connection has that id. Create the operator bind first, or leave "+
+				"connectionId out and attach it once the bind exists.")), nil
+	}
 	if err != nil {
 		return nil, err
 	}
