@@ -456,6 +456,10 @@ func (Unimplemented) DeleteRoute(ctx context.Context, request gen.DeleteRouteReq
 	return nil, errNotImplemented("DeleteRoute")
 }
 
+func (Unimplemented) UpdateRoute(ctx context.Context, request gen.UpdateRouteRequestObject) (gen.UpdateRouteResponseObject, error) {
+	return nil, errNotImplemented("UpdateRoute")
+}
+
 func (Unimplemented) DisableRoute(ctx context.Context, request gen.DisableRouteRequestObject) (gen.DisableRouteResponseObject, error) {
 	return nil, errNotImplemented("DisableRoute")
 }

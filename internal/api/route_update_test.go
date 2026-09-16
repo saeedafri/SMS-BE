@@ -89,6 +89,10 @@ func TestACostThatIsNotAWholeNonNegativeNumberIsRefused(t *testing.T) {
 		"not a whole":  map[string]any{"costPerSegmentMinor": 1.5},
 		"empty object": map[string]any{},
 		"no body":      nil,
+		// A JSON null reaches the handler as "present", and the generated int
+		// decodes it to 0 — so without a check this sets the cost to zero and
+		// answers 200, which reads as a successful edit.
+		"explicit null": map[string]any{"costPerSegmentMinor": nil},
 	} {
 		res := h.do(http.MethodPatch, "/v1/operator/routes/"+route.ID, operator, body)
 		if res.Code != http.StatusUnprocessableEntity {

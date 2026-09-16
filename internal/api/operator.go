@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -988,7 +989,13 @@ func (s *Server) UpdateRoute(ctx context.Context, request gen.UpdateRouteRequest
 	// so an absent key and a deliberate 0 are the same zero here. Zero is a
 	// real cost — a bundled route, a carrier not charging for a corridor — and
 	// treating it as "unset" would refuse it.
-	if _, present := bodyValue(ctx, "costPerSegmentMinor"); !present || request.Body == nil {
+	//
+	// An explicit null is neither. It arrives "present", decodes to 0, and
+	// would silently reprice the route to nothing while answering 200. This
+	// endpoint has no field a null could mean anything for, so it is refused
+	// exactly like an absent cost.
+	raw, present := bodyValue(ctx, "costPerSegmentMinor")
+	if !present || request.Body == nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return gen.UpdateRoute422JSONResponse(errorBody(codeValidation,
 			"Give the new cost: costPerSegmentMinor, in minor units of the route's "+
 				"own currency.")), nil
