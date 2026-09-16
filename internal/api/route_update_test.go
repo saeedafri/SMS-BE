@@ -107,14 +107,25 @@ func TestARouteUpdateCarryingAnyOtherFieldIsRefused(t *testing.T) {
 	operator := h.operatorToken()
 	route := seedRouteForUpdate(t, h, operator)
 
-	for name, body := range map[string]map[string]any{
-		"cost plus a label": {"costPerSegmentMinor": 7, "label": "x"},
-		"another field":     {"carrier": "AIRTEL"},
-		"a typo":            {"costPerSegment": 7},
+	// The refusal has to NAME the offending key. Checking only the status would
+	// pass on a build where the path is not registered at all: an unregistered
+	// path records no body keys, so the handler refuses everything for a
+	// different reason and the test looks green while the guard is gone.
+	for name, tc := range map[string]struct {
+		body  map[string]any
+		names string
+	}{
+		"cost plus a label": {map[string]any{"costPerSegmentMinor": 7, "label": "x"}, "label"},
+		"another field":     {map[string]any{"carrier": "AIRTEL"}, "carrier"},
+		"a typo":            {map[string]any{"costPerSegment": 7}, "costPerSegment"},
 	} {
-		res := h.do(http.MethodPatch, "/v1/operator/routes/"+route.ID, operator, body)
+		res := h.do(http.MethodPatch, "/v1/operator/routes/"+route.ID, operator, tc.body)
 		if res.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s = %d %s, want 422", name, res.Code, res.Body)
+			continue
+		}
+		if !strings.Contains(string(res.Body), "Unknown field(s): "+tc.names) {
+			t.Errorf("%s = %s, want the refusal to name %q", name, res.Body, tc.names)
 		}
 	}
 	assertRouteUnchanged(t, h, operator, route)
