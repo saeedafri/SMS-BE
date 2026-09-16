@@ -87,6 +87,10 @@ func (s *Service) rcsPath(ctx context.Context, identity store.Identity,
 		return carrier, s.rcsAgentFor(ctx, identity, sender, carrier)
 	}
 	carriers := s.rcsCarrierOrder(ctx, sender.Country, router.Carriers())
+	if len(carriers) == 0 {
+		// The last account was disabled between the registry check and here.
+		return "", ""
+	}
 	if sender.RcsAgentID != nil {
 		for _, carrier := range carriers {
 			agentID, err := store.CachedCarrierAgentID(ctx, s.DB, s.Hot, identity, *sender.RcsAgentID, carrier)
