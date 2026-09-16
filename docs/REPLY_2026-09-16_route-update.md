@@ -35,42 +35,33 @@ Creating a route whose `connectionId` names nothing now answers 422
 
 It was a foreign-key error reaching the handler as a 500, exactly as you said.
 
-## 1. PATCH /v1/operator/routes/{id} — BLOCKED, and here is what on
+## 1. PATCH /v1/operator/routes/{id} — DONE
 
-> It's already in openapi.json
+Built to the letter of §2, including the `rejectUnknownFields` entry.
 
-It isn't, as far as we can see. On `origin/master` at `dbdc6ea`, the contract has:
+| Rule | Answer |
+|---|---|
+| `{"costPerSegmentMinor": 7}` | 200, every other field unchanged |
+| `{"costPerSegmentMinor": 0}` | 200 — zero is a value, not "unset" |
+| `-1`, `1.5`, `{}`, no body | 422, nothing changes |
+| Any other key, including a typo | 422 `Unknown field(s): …`, nothing changes |
+| Unknown or malformed id | 404 "No such route." |
+| Tenant token or none | 401 |
+| Audit | one `route.update`: "Changed the cost of the Vi RCS Direct route from 47 to 48 INR per segment" |
 
-```
-/v1/operator/routes            GET, POST
-/v1/operator/routes/{id}       DELETE            ← no PATCH
-/v1/operator/routes/{id}/move-up | move-down | enable | disable   POST
-```
+Six tests cover your list, all red first. Three mutations turn them red:
+dropping the `rejectUnknownFields` entry, accepting an absent cost, and
+accepting a negative one.
 
-Three things referenced in your message are not pushed anywhere we can reach:
+One note on the first of those. Checking only the status code was not enough:
+an unregistered path records no body keys, so the handler refused everything for
+a different reason and the test stayed green with the guard removed. The test
+now asserts the refusal NAMES the offending key.
 
-1. **`PATCH /v1/operator/routes/{id}` in `openapi.json`** — not on `master`, and
-   not on any other branch on origin or upstream (we checked all of them).
-2. **`docs/api-contract/BACKEND_REQUEST_route-update.md`** — not in the repo.
-   We have not seen the full rules or the tests you expect.
-3. **The `route-update` check in `scripts/check-backend-asks.cjs`** — the id
-   does not exist, so `--only route-update` errors rather than going red.
-
-Our handlers are generated from `openapi.json`, so the endpoint cannot exist
-here until it exists there. Push those three and this is a short job — most of
-it is already written, see below.
-
-## What we built for item 1 anyway
-
-The half that does not depend on the contract is in and tested:
-`store.UpdateRouteCost` changes `cost_per_segment_minor` and nothing else, with
-`TestRepricingARouteChangesTheCostAndNothingElse` asserting that country,
-channel, carrier, priority, status, label and currency all come back unchanged.
-A mutation that also bumped priority turns it red.
-
-When the contract lands, what remains is: the generated handler, the four 422s
-(unknown field, missing cost, negative cost, non-integer), `route.update` in the
-audit log, and the `rejectUnknownFields` entry. Call it half a day.
+**We owe you an apology on timing.** Your commit `86cf0d6` was on
+`SAQIBJH/sms-platform-frontend`; we had fetched only the `saeedafri` fork and
+read stale refs, and told you the contract was missing. It was there. We now
+fetch both remotes before answering.
 
 ## One thing worth agreeing on before we build it
 
@@ -90,6 +81,11 @@ Deployed 00:24 IST, 17 Sep; migration 54 ran before the swap.
 | `POST /v1/operator/routes` with an existing label | **409** `conflict`, with the message above |
 | `POST /v1/operator/routes` with a made-up `connectionId` | **422** `validation_failed`, with the message above |
 | Rows written by either probe | **0** |
+| `check-backend-asks.cjs --only route-update` | **1/1 satisfied** against sms-api.saqibsaeed.cloud |
+| PATCH `{"carrier":"AIRTEL"}` | **422** `Unknown field(s): carrier.` |
+| PATCH `{"costPerSegmentMinor":-1}` | **422** "Cost per segment cannot be negative." |
+| PATCH Vi RCS Direct 48 → 47 → 48 | **200** each time; priority 3, status active, label all unchanged |
+| Audit rows for those two | both present, quoting the old and new cost |
 
 Both probes were chosen so that nothing is created even if a guard had been
 broken, and the row count confirms it.
