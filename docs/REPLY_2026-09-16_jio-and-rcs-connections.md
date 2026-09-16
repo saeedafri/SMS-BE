@@ -100,6 +100,28 @@ and put their 40 source IPs (guide §5) in `RCS_WEBHOOK_IP_ALLOWLIST` — Jio do
 not sign its callbacks, so the address list is the other half of the
 authentication.
 
+## Verified on production
+
+Deployed at 19:05 IST on 16 Sep; migration 53 ran before the binary swap.
+
+| Check | Result |
+|---|---|
+| `rcs_connections` exists on the live database | yes, 0 rows |
+| Boot log | `rcs connections at boot: operators=[]` |
+| `operator-admin rcs-connection add jio … --environment test` | created, disabled, Jio's hosts taken as defaults |
+| `enable`, `list`, `disable` | all worked; the list shows "assistants: none yet" |
+| `add-assistant` with the secret piped in | refused — "run this on a terminal", which is the point |
+| Environment scoping | the test-environment account never became a live operator |
+| Reload worker over 10 minutes | no errors; SMPP bind still `bound=1 failed=0` |
+
+A disabled smoke-test row is left behind on the live database, labelled
+"SMOKE TEST - not a real account", in the **test** environment so nothing loads
+it. It holds no credentials.
+
+What could NOT be verified live: an actual Jio send, which needs a real
+assistant id and secret; and the Jio webhook, because `RCS_WEBHOOK_TOKEN` is not
+set on production, so that route answers 404 to everyone today.
+
 ## Still open
 
 - **The contract's `RcsVendor` enum is `["airtel","vi"]`** and the backend now
