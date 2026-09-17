@@ -134,3 +134,43 @@ func TestOnlyAnOperatorCanCreditAndOnlyATenantThatExists(t *testing.T) {
 		t.Errorf("a refused credit left a balance of %d", balance)
 	}
 }
+
+// An operator has to see the balance before deciding to credit, and after.
+func TestAnOperatorReadsATenantsBalances(t *testing.T) {
+	h := newHarness(t)
+	tenant := h.newAccount("owner")
+	operator := h.operatorToken()
+	path := "/v1/operator/tenants/" + tenant.TenantID.String() + "/wallet"
+
+	// A tenant that has never held money has no balances — an empty list, not
+	// a 404: the tenant exists and holds nothing.
+	empty := h.do(http.MethodGet, path, operator, nil)
+	if empty.Code != http.StatusOK || strings.TrimSpace(string(empty.Body)) != "[]" {
+		t.Fatalf("a new tenant's wallet = %d %s, want 200 []", empty.Code, empty.Body)
+	}
+
+	h.do(http.MethodPost, creditPath(tenant.TenantID.String()), operator, map[string]any{
+		"currency": "INR", "amountMinor": 250000, "reference": fmt.Sprintf("UTR%d", rand.Int63()),
+	})
+	var balances []struct {
+		Currency     string `json:"currency"`
+		BalanceMinor int64  `json:"balanceMinor"`
+	}
+	after := h.do(http.MethodGet, path, operator, nil)
+	after.decode(t, &balances)
+	if len(balances) != 1 || balances[0].Currency != "INR" || balances[0].BalanceMinor != 250000 {
+		t.Errorf("balances after crediting = %+v, want one INR balance of 250000", balances)
+	}
+	// The operator's view and the tenant's own view are the same number.
+	if own := inrBalance(t, h, tenant.Token); own != balances[0].BalanceMinor {
+		t.Errorf("operator sees %d, tenant sees %d", balances[0].BalanceMinor, own)
+	}
+
+	if res := h.do(http.MethodGet, path, tenant.Token, nil); res.Code != http.StatusUnauthorized {
+		t.Errorf("tenant reading through the operator route = %d, want 401", res.Code)
+	}
+	if res := h.do(http.MethodGet, "/v1/operator/tenants/6f1d1f6a-0000-4000-8000-000000000000/wallet",
+		operator, nil); res.Code != http.StatusNotFound {
+		t.Errorf("unknown tenant = %d, want 404", res.Code)
+	}
+}

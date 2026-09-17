@@ -1,11 +1,38 @@
 diff --git a/openapi.json b/openapi.json
-index 5f86eaf..065a7cb 100644
+index 5f86eaf..bed65a6 100644
 --- a/openapi.json
 +++ b/openapi.json
-@@ -8121,6 +8121,41 @@
+@@ -8121,6 +8121,68 @@
          }
        }
      },
++    "/v1/operator/tenants/{id}/wallet": {
++      "get": {
++        "operationId": "getTenantWallet",
++        "summary": "Read a tenant's wallet balances",
++        "description": "The balances an operator sees before crediting, one per currency the tenant holds. A tenant that has never held money answers an empty array, not 404. Available to every operator.",
++        "security": [{ "BearerAuth": [] }],
++        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
++        "responses": {
++          "200": {
++            "description": "The tenant's balances, one per currency, ordered by currency",
++            "content": {
++              "application/json": {
++                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/WalletBalance" } }
++              }
++            }
++          },
++          "401": {
++            "description": "Missing or invalid operator bearer token",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          },
++          "404": {
++            "description": "No such tenant",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          }
++        }
++      }
++    },
 +    "/v1/operator/tenants/{id}/wallet/credit": {
 +      "post": {
 +        "operationId": "creditTenantWallet",
@@ -44,7 +71,7 @@ index 5f86eaf..065a7cb 100644
      "/v1/operator/tenants/{id}/throttle": {
        "post": {
          "operationId": "throttleTenant",
-@@ -15823,6 +15858,28 @@
+@@ -15823,6 +15885,28 @@
            }
          }
        },
@@ -73,7 +100,7 @@ index 5f86eaf..065a7cb 100644
        "ThrottleTenantRequest": {
          "type": "object",
          "required": ["ratePerSecond"],
-@@ -16371,6 +16428,7 @@
+@@ -16371,6 +16455,7 @@
            "tenant.reinstate",
            "tenant.flag_abuse",
            "tenant.throttle",

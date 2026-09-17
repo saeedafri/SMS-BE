@@ -14,14 +14,36 @@ cd sms-platform-frontend
 git apply ../SMS-BE/docs/contract-patches/2026-09-17-operator-wallet-credit.patch
 ```
 
-It adds three things, nothing else:
+It adds four things, nothing else:
+- path `GET /v1/operator/tenants/{id}/wallet` (`operationId: getTenantWallet`)
 - path `POST /v1/operator/tenants/{id}/wallet/credit` (`operationId: creditTenantWallet`)
 - schema `CreditTenantWalletRequest`
 - `"wallet.credit"` in the `AuditAction` enum
 
 If you want a different shape, tell us before you build the screen.
 
-## 2. The endpoint
+## 2. Reading the balance first
+
+```http
+GET /v1/operator/tenants/{tenantId}/wallet
+Authorization: Bearer <operator token>
+```
+
+Answers **200** with one entry per currency the tenant holds, ordered by currency:
+
+```json
+[{ "currency": "INR", "balanceMinor": 250000 }]
+```
+
+A tenant that has never held money answers `[]` — not 404. **401** without an
+operator token, **404** for an unknown tenant. It is the same number the tenant
+sees at `GET /v1/wallet/balances`.
+
+Show this in the Credit dialog so the operator sees the balance before and
+after. There is no wallet figure on `TenantDetail`, so this is the only
+operator-side read.
+
+## 3. The credit endpoint
 
 ```http
 POST /v1/operator/tenants/{tenantId}/wallet/credit
@@ -46,7 +68,7 @@ Content-Type: application/json
 
 Available to **every** operator (admin and operator roles).
 
-## 3. Responses
+## 4. Responses
 
 | Status | When | Body |
 |---|---|---|
@@ -56,7 +78,7 @@ Available to **every** operator (admin and operator roles).
 | **409** | This reference was already credited to this tenant | `Reference UTR… has already been credited to <tenant name>.` |
 | **422** | Validation (see table above) | message names the field |
 
-## 4. Why the reference matters — build the UI around it
+## 5. Why the reference matters — build the UI around it
 
 **The same reference can be credited to a tenant only once.** That makes the
 button safe to double-click, safe on a flaky network retry, and safe when two
@@ -66,7 +88,7 @@ unique index, not just a check).
 So on **409**, show the message as information ("already credited"), not as an
 error to retry — the money is already in.
 
-## 5. Suggested UI
+## 6. Suggested UI
 
 - **Where:** tenant detail page in the operator console → **Credit wallet** button.
 - **Dialog fields:** currency (default the tenant's country currency), amount in
@@ -79,18 +101,18 @@ error to retry — the money is already in.
 - The audit log filter can now include **`wallet.credit`**; each row names the
   operator, the tenant, the reference (as the target) and the amount + note.
 
-## 6. What the tenant sees
+## 7. What the tenant sees
 
 `GET /v1/wallet/balances` goes up immediately. `GET /v1/wallet/ledger` shows a
 `topup` entry described **"Bank transfer <reference>"**. The note is not shown.
 
-## 7. Same logic as the CLI
+## 8. Same logic as the CLI
 
 `operator-admin credit-wallet <owner-email> <currency> <amount> <reference>`
 now books through the same backend function, so a transfer credited from the
 server can't be credited again from the console, and vice versa.
 
-## 8. Tests (backend)
+## 9. Tests (backend)
 
 All four failed before the change (501) and pass after:
 
@@ -98,6 +120,7 @@ All four failed before the change (501) and pass after:
 - same reference twice → 409, balance moves once
 - zero, negative, over ₹1 crore, missing/unknown currency, short/missing reference, unknown field → 422, balance unchanged
 - tenant token → 401; unknown tenant → 404
+- operator reads the balance: `[]` for a new tenant, the credited amount after, the same number the tenant sees, 401 for a tenant token, 404 for an unknown tenant
 
 Mutations that turn them red: removing the duplicate-reference mapping, and
 removing the unknown-field guard.
