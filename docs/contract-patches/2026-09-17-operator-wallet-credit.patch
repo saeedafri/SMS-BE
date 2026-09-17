@@ -1,0 +1,83 @@
+diff --git a/openapi.json b/openapi.json
+index 5f86eaf..065a7cb 100644
+--- a/openapi.json
++++ b/openapi.json
+@@ -8121,6 +8121,41 @@
+         }
+       }
+     },
++    "/v1/operator/tenants/{id}/wallet/credit": {
++      "post": {
++        "operationId": "creditTenantWallet",
++        "summary": "Credit a tenant's wallet",
++        "description": "Adds money to a tenant's wallet as a topup ledger entry and records wallet.credit in the audit log. Available to every operator. The tenant sees the entry in GET /v1/wallet/ledger described as \"Bank transfer <reference>\".",
++        "security": [{ "BearerAuth": [] }],
++        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
++        "requestBody": {
++          "required": true,
++          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreditTenantWalletRequest" } } }
++        },
++        "responses": {
++          "201": {
++            "description": "Credited. The new ledger entry, with the balance after it.",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LedgerEntry" } } }
++          },
++          "401": {
++            "description": "Missing or invalid operator bearer token",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          },
++          "404": {
++            "description": "No such tenant",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          },
++          "409": {
++            "description": "This reference has already been credited to this tenant",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          },
++          "422": {
++            "description": "currency, amountMinor or reference is missing or out of range, or the body carries another property",
++            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
++          }
++        }
++      }
++    },
+     "/v1/operator/tenants/{id}/throttle": {
+       "post": {
+         "operationId": "throttleTenant",
+@@ -15823,6 +15858,28 @@
+           }
+         }
+       },
++      "CreditTenantWalletRequest": {
++        "type": "object",
++        "required": ["currency", "amountMinor", "reference"],
++        "additionalProperties": false,
++        "description": "An operator crediting a tenant's wallet for money received outside the product: a bank transfer, an invoice paid offline. The reference makes it safe to press twice: the same reference can be credited to a tenant only once.",
++        "properties": {
++          "currency": { "type": "string", "enum": ["INR", "USD", "GBP", "AED"] },
++          "amountMinor": {
++            "type": "integer",
++            "minimum": 1,
++            "maximum": 1000000000,
++            "description": "Minor units (paise for INR). At most 1,000,000,000 (₹1 crore), so a mistyped extra zero is refused rather than credited."
++          },
++          "reference": {
++            "type": "string",
++            "minLength": 6,
++            "maxLength": 64,
++            "description": "The bank's transfer reference (UTR) or invoice number. Crediting the same reference to the same tenant twice answers 409."
++          },
++          "note": { "type": "string", "maxLength": 200, "description": "Optional. Recorded in the audit log, never shown to the tenant." }
++        }
++      },
+       "ThrottleTenantRequest": {
+         "type": "object",
+         "required": ["ratePerSecond"],
+@@ -16371,6 +16428,7 @@
+           "tenant.reinstate",
+           "tenant.flag_abuse",
+           "tenant.throttle",
++          "wallet.credit",
+           "tenant.dismiss_flag",
+           "route.move_up",
+           "route.move_down",
