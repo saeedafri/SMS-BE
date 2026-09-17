@@ -382,6 +382,8 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		   '{"legalName":"Acme Retail Private Limited","pan":"AACCA1234A",
 		     "entityType":"private_ltd","contactEmail":"compliance@acme.test"}'::jsonb,
 		   '2026-05-01T09:00:00Z', '2026-05-02T09:25:00Z'),
+		  ($1, 'IN', 'tm_mapping', 'approved', NULL, '{}'::jsonb,
+		   '2026-05-01T09:05:00Z', '2026-05-02T09:27:00Z'),
 		  ($1, 'IN', 'dlt_header', 'approved', '1201234567890123456',
 		   '{"header":"ACMERT","headerType":"transactional"}'::jsonb,
 		   '2026-05-01T09:10:00Z', '2026-05-02T09:30:00Z'),

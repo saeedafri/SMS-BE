@@ -6,7 +6,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 )
 
-func TestIndiaHasItsThreeRegistrationObjects(t *testing.T) {
+func TestIndiaHasItsFourRegistrationObjects(t *testing.T) {
 	regime, ok := compliance.For("IN")
 	if !ok {
 		t.Fatal("no regime registered for IN")
@@ -19,13 +19,45 @@ func TestIndiaHasItsThreeRegistrationObjects(t *testing.T) {
 	for _, object := range regime.RegistrationObjects() {
 		keys = append(keys, object.Key)
 	}
-	want := []string{"pe_rtm_entity", "dlt_header", "dlt_template"}
+	want := []string{"pe_rtm_entity", "tm_mapping", "dlt_header", "dlt_template"}
 	if len(keys) != len(want) {
 		t.Fatalf("keys = %v, want %v", keys, want)
 	}
 	for i := range want {
 		if keys[i] != want[i] {
 			t.Fatalf("keys = %v, want %v", keys, want)
+		}
+	}
+}
+
+// Ask 46. In India a principal entity cannot deliver SMS on its own: a
+// registered telemarketer hands the traffic to the operator, and the customer
+// attaches Textify's TM id to their PE on the DLT portal. We cannot see the
+// portal, so the step is self-attested — no fields, the confirmation is the
+// submission — and a header cannot be filed until the mapping is approved.
+func TestIndiaTelemarketerMappingSitsBetweenTheEntityAndTheHeader(t *testing.T) {
+	regime, _ := compliance.For("IN")
+	mapping, ok := regime.Object("tm_mapping")
+	if !ok {
+		t.Fatal("tm_mapping is not registered for IN")
+	}
+	if mapping.Tier != compliance.TierEntity || mapping.DependsOn != "pe_rtm_entity" ||
+		len(mapping.Fields) != 0 || mapping.Label != "Telemarketer mapping" {
+		t.Errorf("tm_mapping = tier %v, dependsOn %q, %d fields, label %q; want entity, "+
+			"pe_rtm_entity, 0, Telemarketer mapping",
+			mapping.Tier, mapping.DependsOn, len(mapping.Fields), mapping.Label)
+	}
+	if header, _ := regime.Object("dlt_header"); header.DependsOn != "tm_mapping" {
+		t.Errorf("dlt_header.DependsOn = %q, want tm_mapping", header.DependsOn)
+	}
+	// The demo seed's fixture check takes the FIRST entity-tier object as the
+	// entity. It has to stay the PE, or every seeded sender reads as having none.
+	for _, object := range regime.RegistrationObjects() {
+		if object.Tier == compliance.TierEntity {
+			if object.Key != "pe_rtm_entity" {
+				t.Errorf("the first entity-tier object is %q, want pe_rtm_entity", object.Key)
+			}
+			break
 		}
 	}
 }
@@ -83,8 +115,12 @@ func TestEveryRegistrationObjectDeclaresUsableFields(t *testing.T) {
 			if object.Label == "" || object.Tier == "" || object.Remediation == "" {
 				t.Errorf("%s/%s is missing label, tier or remediation", country, object.Key)
 			}
-			if len(object.Fields) == 0 {
-				t.Errorf("%s/%s declares no fields", country, object.Key)
+			// No fields is legitimate only for a confirmation step — India's
+			// telemarketer mapping attests to a record it depends on, and the
+			// submission itself is the attestation. Anything else with an empty
+			// list is a form that forgot its fields.
+			if len(object.Fields) == 0 && object.DependsOn == "" {
+				t.Errorf("%s/%s declares no fields and confirms nothing", country, object.Key)
 			}
 			for _, field := range object.Fields {
 				if field.Key == "" || field.Label == "" || field.Type == "" {

@@ -52,10 +52,28 @@ func (india) RegistrationObjects() []RegistrationObject {
 				{Key: "contactEmail", Label: "Compliance contact email", Type: FieldEmail, Required: true},
 			},
 		},
+		// A principal entity cannot deliver SMS by itself: a registered
+		// telemarketer hands it to the operator, and the customer attaches
+		// Textify's TM id to their PE on the DLT portal. We cannot see the
+		// portal, so this is self-attested — the confirmation is the submission
+		// — and an operator approves it like any other registration.
+		//
+		// After the PE, never before it: the demo seed's fixture check takes the
+		// first entity-tier object as the entity.
 		{
-			Key:   "dlt_header",
-			Label: "DLT header (sender ID)",
-			Tier:  TierSender,
+			Key:       "tm_mapping",
+			Label:     "Telemarketer mapping",
+			Tier:      TierEntity,
+			DependsOn: "pe_rtm_entity",
+			Remediation: "Open your DLT account, check Textify's TM id is still attached and your " +
+				"headers are assigned to it, then confirm again here.",
+			Fields: []FieldSpec{},
+		},
+		{
+			Key:       "dlt_header",
+			DependsOn: "tm_mapping",
+			Label:     "DLT header (sender ID)",
+			Tier:      TierSender,
 			Remediation: "Headers are six alphanumeric characters and must already be " +
 				"registered against your principal entity on the DLT portal.",
 			Fields: []FieldSpec{
