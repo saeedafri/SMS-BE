@@ -852,11 +852,26 @@ func (s *Service) now() time.Time {
 // sent, and rendering text for a carrier is not a reason to charge for more
 // segments.
 func rcsText(channel, body string, template store.Template, fields map[string]string) string {
-	if channel != "RCS" || strings.TrimSpace(body) != "" {
-		return body
+	if channel == "RCS" && strings.TrimSpace(body) == "" {
+		return fillSlots(templateBody(template), fields)
 	}
-	text := templateBody(template)
+	// Every other channel carries the text itself, so a slot left in it goes
+	// out literally: an operator matching it against the registered DLT
+	// template delivers "Dear ," and nothing anywhere says why. Filling it here
+	// is the same substitution a campaign does from a contact's fields, applied
+	// to the values a single send named instead.
+	return fillSlots(body, fields)
+}
+
+// fillSlots replaces {{name}} with the value given for name. A slot with no
+// value is left alone rather than blanked: the gate refuses a body that no
+// longer instantiates its template, which is a visible failure instead of a
+// message with a hole in it.
+func fillSlots(text string, fields map[string]string) string {
 	for name, value := range fields {
+		if value == "" {
+			continue
+		}
 		text = strings.ReplaceAll(text, "{{"+name+"}}", value)
 	}
 	return text
