@@ -38,12 +38,14 @@ func (s *Server) GetTenantWallet(ctx context.Context, request gen.GetTenantWalle
 	if err != nil {
 		return nil, err
 	}
-	out := make(gen.GetTenantWallet200JSONResponse, 0, len(balances))
+	// Wrapped in an object, not a bare array: the contract's TenantWallet says
+	// so, and a room to grow beside balances later without breaking callers.
+	wallet := gen.TenantWallet{Balances: make([]gen.WalletBalance, 0, len(balances))}
 	for _, balance := range balances {
-		out = append(out, gen.WalletBalance{
+		wallet.Balances = append(wallet.Balances, gen.WalletBalance{
 			Currency: gen.CurrencyCode(balance.Currency), BalanceMinor: int(balance.BalanceMinor)})
 	}
-	return out, nil
+	return gen.GetTenantWallet200JSONResponse(wallet), nil
 }
 
 // CreditTenantWallet puts money a tenant paid outside the product into their

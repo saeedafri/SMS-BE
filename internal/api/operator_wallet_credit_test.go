@@ -145,25 +145,28 @@ func TestAnOperatorReadsATenantsBalances(t *testing.T) {
 	// A tenant that has never held money has no balances — an empty list, not
 	// a 404: the tenant exists and holds nothing.
 	empty := h.do(http.MethodGet, path, operator, nil)
-	if empty.Code != http.StatusOK || strings.TrimSpace(string(empty.Body)) != "[]" {
-		t.Fatalf("a new tenant's wallet = %d %s, want 200 []", empty.Code, empty.Body)
+	if empty.Code != http.StatusOK || strings.TrimSpace(string(empty.Body)) != `{"balances":[]}` {
+		t.Fatalf("a new tenant's wallet = %d %s, want 200 {\"balances\":[]}", empty.Code, empty.Body)
 	}
 
 	h.do(http.MethodPost, creditPath(tenant.TenantID.String()), operator, map[string]any{
 		"currency": "INR", "amountMinor": 250000, "reference": fmt.Sprintf("UTR%d", rand.Int63()),
 	})
-	var balances []struct {
-		Currency     string `json:"currency"`
-		BalanceMinor int64  `json:"balanceMinor"`
+	var wallet struct {
+		Balances []struct {
+			Currency     string `json:"currency"`
+			BalanceMinor int64  `json:"balanceMinor"`
+		} `json:"balances"`
 	}
 	after := h.do(http.MethodGet, path, operator, nil)
-	after.decode(t, &balances)
-	if len(balances) != 1 || balances[0].Currency != "INR" || balances[0].BalanceMinor != 250000 {
-		t.Errorf("balances after crediting = %+v, want one INR balance of 250000", balances)
+	after.decode(t, &wallet)
+	if len(wallet.Balances) != 1 || wallet.Balances[0].Currency != "INR" ||
+		wallet.Balances[0].BalanceMinor != 250000 {
+		t.Errorf("balances after crediting = %+v, want one INR balance of 250000", wallet.Balances)
 	}
 	// The operator's view and the tenant's own view are the same number.
-	if own := inrBalance(t, h, tenant.Token); own != balances[0].BalanceMinor {
-		t.Errorf("operator sees %d, tenant sees %d", balances[0].BalanceMinor, own)
+	if own := inrBalance(t, h, tenant.Token); own != wallet.Balances[0].BalanceMinor {
+		t.Errorf("operator sees %d, tenant sees %d", wallet.Balances[0].BalanceMinor, own)
 	}
 
 	if res := h.do(http.MethodGet, path, tenant.Token, nil); res.Code != http.StatusUnauthorized {
