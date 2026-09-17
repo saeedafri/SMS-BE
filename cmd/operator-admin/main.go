@@ -217,9 +217,13 @@ func creditWallet(ctx context.Context, pool *pgxpool.Pool,
 		currency, amount, tenantName, tenantID, reference)) {
 		return errors.New("not confirmed; nothing credited")
 	}
-	entry, err := store.AppendLedgerEntry(ctx, pool, store.Identity{TenantID: tenantID},
-		store.LedgerEntry{Currency: currency, Type: "topup", AmountMinor: minor,
-			Description: description})
+	// The same function the operator console's Credit button uses, so the two
+	// ways in cannot disagree about what a transfer is or book one twice.
+	entry, err := store.CreditWalletByTransfer(ctx, pool, store.Identity{TenantID: tenantID},
+		currency, minor, reference)
+	if errors.Is(err, store.ErrConflict) {
+		return fmt.Errorf("reference %s is already credited to %s", reference, tenantName)
+	}
 	if err != nil {
 		return err
 	}

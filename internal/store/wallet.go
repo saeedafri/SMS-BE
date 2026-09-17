@@ -869,3 +869,23 @@ type InvoiceLine struct {
 	UnitMinor   int64
 	AmountMinor int64
 }
+
+// CreditWalletByTransfer books money a tenant paid outside the product — a bank
+// transfer, an invoice settled offline — as a topup described by its reference.
+//
+// A reference is credited to a tenant once. The unique index
+// wallet_ledger_transfer_reference enforces that, so two operators crediting the
+// same transfer at the same moment cannot both succeed: the second is
+// ErrConflict and the balance moves once.
+func CreditWalletByTransfer(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	currency string, amountMinor int64, reference string) (LedgerEntry, error) {
+
+	entry, err := AppendLedgerEntry(ctx, pool, id, LedgerEntry{
+		Currency: currency, Type: "topup", AmountMinor: amountMinor,
+		Description: "Bank transfer " + reference,
+	})
+	if isUniqueViolation(err) {
+		return LedgerEntry{}, ErrConflict
+	}
+	return entry, err
+}

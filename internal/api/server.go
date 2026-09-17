@@ -271,7 +271,10 @@ func NewRouter(s *Server) http.Handler {
 		// Declaring additionalProperties: false and then spreading the body is
 		// how that happens, so the contract's declaration is enforced here.
 		"POST /v1/operator/tenants/{id}/throttle": {"ratePerSecond", "reason"},
-		"PATCH /v1/sender-ids/{id}":               {"header", "displayName", "registrationId"},
+		// A credit carrying "type" or anything else meant something we are not
+		// doing — a refund, a debit — and must not quietly become a topup.
+		"POST /v1/operator/tenants/{id}/wallet/credit": {"currency", "amountMinor", "reference", "note"},
+		"PATCH /v1/sender-ids/{id}":                    {"header", "displayName", "registrationId"},
 		// Registered for the SECOND thing this middleware does: recording which
 		// keys the caller actually sent. An agent PATCH is JSON Merge Patch —
 		// an omitted key leaves the value alone, an explicit null clears it —

@@ -540,6 +540,10 @@ func (Unimplemented) ThrottleTenant(ctx context.Context, request gen.ThrottleTen
 	return nil, errNotImplemented("ThrottleTenant")
 }
 
+func (Unimplemented) CreditTenantWallet(ctx context.Context, request gen.CreditTenantWalletRequestObject) (gen.CreditTenantWalletResponseObject, error) {
+	return nil, errNotImplemented("CreditTenantWallet")
+}
+
 func (Unimplemented) GetOperatorUsage(ctx context.Context, request gen.GetOperatorUsageRequestObject) (gen.GetOperatorUsageResponseObject, error) {
 	return nil, errNotImplemented("GetOperatorUsage")
 }
