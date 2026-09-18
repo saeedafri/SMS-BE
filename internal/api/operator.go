@@ -327,7 +327,33 @@ func toTenantDetail(tenant store.OperatorTenant) gen.TenantDetail {
 			MessagesSent30d: tenant.MessagesSent30d,
 			LastActivityAt:  tenant.LastActivityAt,
 		},
+		// The cap on what this tenant may owe. Both keys are required and
+		// nullable in the contract, so they are always present and the console
+		// never has to tell "no limit" from "field absent" — the two mean very
+		// different things when the field decides whether a credit is refused.
+		CreditLimitMinor:    creditLimitMinor(tenant),
+		CreditLimitCurrency: creditLimitCurrency(tenant),
 	}
+}
+
+// creditLimitMinor narrows the stored bigint to the contract's int.
+//
+// The column is capped at 1,000,000,000 by the database, which is inside int on
+// every platform we build for, so the conversion cannot lose a digit.
+func creditLimitMinor(tenant store.OperatorTenant) *int {
+	if tenant.CreditLimitMinor == nil {
+		return nil
+	}
+	limit := int(*tenant.CreditLimitMinor)
+	return &limit
+}
+
+func creditLimitCurrency(tenant store.OperatorTenant) *gen.TenantDetailCreditLimitCurrency {
+	if tenant.CreditLimitCurrency == nil {
+		return nil
+	}
+	currency := gen.TenantDetailCreditLimitCurrency(*tenant.CreditLimitCurrency)
+	return &currency
 }
 
 func (s *Server) GetTenantDetail(ctx context.Context, request gen.GetTenantDetailRequestObject) (

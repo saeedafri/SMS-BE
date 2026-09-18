@@ -164,6 +164,10 @@ func (h *harness) concreteURL(path string, acct account) string {
 			h.sampleVerifyService = h.seedVerifyService(acct)
 		}
 		return strings.Replace(path, "{id}", h.sampleVerifyService, 1)
+	case strings.HasPrefix(path, "/v1/operator/tenants/"):
+		// The operator reads across tenants, so this account's own id is a
+		// real tenant for every one of these routes — nothing to seed.
+		return strings.Replace(path, "{id}", acct.TenantID.String(), 1)
 	}
 	h.t.Fatalf("no id to substitute into %s — add one rather than skipping the route", path)
 	return ""

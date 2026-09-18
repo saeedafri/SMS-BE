@@ -8,6 +8,37 @@ import (
 	"testing"
 )
 
+// issueCreditResult is the 201 body: the wallet movement and the invoice the
+// tenant now owes for it. Two things, because issuing credit produces two.
+type issueCreditResult struct {
+	Entry struct {
+		Type              string `json:"type"`
+		AmountMinor       int64  `json:"amountMinor"`
+		Currency          string `json:"currency"`
+		BalanceAfterMinor int64  `json:"balanceAfterMinor"`
+		Description       string `json:"description"`
+	} `json:"entry"`
+	Invoice accountInvoiceBody `json:"invoice"`
+}
+
+type accountInvoiceBody struct {
+	ID               string  `json:"id"`
+	Number           string  `json:"number"`
+	Currency         string  `json:"currency"`
+	TaxableMinor     int64   `json:"taxableMinor"`
+	TaxRatePercent   int     `json:"taxRatePercent"`
+	TaxMinor         int64   `json:"taxMinor"`
+	TotalMinor       int64   `json:"totalMinor"`
+	ReceivedMinor    int64   `json:"receivedMinor"`
+	OutstandingMinor int64   `json:"outstandingMinor"`
+	IssuedAt         string  `json:"issuedAt"`
+	DueAt            string  `json:"dueAt"`
+	Status           string  `json:"status"`
+	Reference        string  `json:"reference"`
+	Note             *string `json:"note"`
+	IssuedBy         *string `json:"issuedBy"`
+}
+
 // POST /v1/operator/tenants/{id}/wallet/credit: an operator puts money a tenant
 // paid outside the product into their wallet.
 
@@ -43,17 +74,27 @@ func TestAnOperatorCreditsATenantAndTheTenantSeesTheMoney(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("credit = %d %s, want 201", res.Code, res.Body)
 	}
-	var entry struct {
-		Type              string `json:"type"`
-		AmountMinor       int64  `json:"amountMinor"`
-		Currency          string `json:"currency"`
-		BalanceAfterMinor int64  `json:"balanceAfterMinor"`
-		Description       string `json:"description"`
-	}
-	res.decode(t, &entry)
+	var result issueCreditResult
+	res.decode(t, &result)
+	entry := result.Entry
 	if entry.Type != "topup" || entry.AmountMinor != 5000000 || entry.Currency != "INR" ||
-		entry.BalanceAfterMinor != before+5000000 || entry.Description != "Bank transfer "+reference {
-		t.Errorf("entry = %+v, want a 5000000 INR topup described by the reference", entry)
+		entry.BalanceAfterMinor != before+5000000 {
+		t.Errorf("entry = %+v, want a 5000000 INR topup", entry)
+	}
+	// Only the taxable amount reaches the wallet; the tax is owed, not
+	// spendable. Crediting the gross would hand the tenant sending power they
+	// never bought.
+	invoice := result.Invoice
+	if invoice.TaxableMinor != 5000000 || invoice.TaxRatePercent != 18 ||
+		invoice.TaxMinor != 900000 || invoice.TotalMinor != 5900000 {
+		t.Errorf("invoice = %+v, want 5000000 taxable, 18%%, 900000 tax, 5900000 total", invoice)
+	}
+	if invoice.Reference != reference || invoice.Status != "due" ||
+		invoice.OutstandingMinor != 5900000 || invoice.ReceivedMinor != 0 {
+		t.Errorf("invoice = %+v, want it due and owing the whole 5900000", invoice)
+	}
+	if invoice.Note == nil || *invoice.Note != "Paid on invoice 42" {
+		t.Errorf("invoice note = %v, want the operator's own note", invoice.Note)
 	}
 	if after := inrBalance(t, h, tenant.Token); after != before+5000000 {
 		t.Errorf("tenant balance = %d, want %d", after, before+5000000)
@@ -101,14 +142,16 @@ func TestACreditOutsideTheRulesIsRefusedAndMovesNothing(t *testing.T) {
 		return body
 	}
 	for name, body := range map[string]map[string]any{
-		"zero":             valid(map[string]any{"amountMinor": 0}),
-		"negative":         valid(map[string]any{"amountMinor": -5}),
-		"over one crore":   valid(map[string]any{"amountMinor": 1000000001}),
-		"no currency":      valid(map[string]any{"currency": nil}),
-		"unknown currency": valid(map[string]any{"currency": "EUR"}),
-		"short reference":  valid(map[string]any{"reference": "UTR1"}),
-		"no reference":     valid(map[string]any{"reference": nil}),
-		"an unknown field": valid(map[string]any{"type": "refund"}),
+		"zero":                valid(map[string]any{"amountMinor": 0}),
+		"negative":            valid(map[string]any{"amountMinor": -5}),
+		"over one crore":      valid(map[string]any{"amountMinor": 1000000001}),
+		"no currency":         valid(map[string]any{"currency": nil}),
+		"unknown currency":    valid(map[string]any{"currency": "EUR"}),
+		"short reference":     valid(map[string]any{"reference": "UTR1"}),
+		"no reference":        valid(map[string]any{"reference": nil}),
+		"an unknown field":    valid(map[string]any{"type": "refund"}),
+		"a negative tax rate": valid(map[string]any{"taxRatePercent": -1}),
+		"a tax rate past 100": valid(map[string]any{"taxRatePercent": 101}),
 	} {
 		if res := h.do(http.MethodPost, creditPath(tenant.TenantID.String()), operator, body); res.Code != http.StatusUnprocessableEntity {
 			t.Errorf("%s = %d %s, want 422", name, res.Code, res.Body)

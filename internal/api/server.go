@@ -273,8 +273,20 @@ func NewRouter(s *Server) http.Handler {
 		"POST /v1/operator/tenants/{id}/throttle": {"ratePerSecond", "reason"},
 		// A credit carrying "type" or anything else meant something we are not
 		// doing — a refund, a debit — and must not quietly become a topup.
-		"POST /v1/operator/tenants/{id}/wallet/credit": {"currency", "amountMinor", "reference", "note"},
-		"PATCH /v1/sender-ids/{id}":                    {"header", "displayName", "registrationId"},
+		"POST /v1/operator/tenants/{id}/wallet/credit": {"currency", "amountMinor",
+			"reference", "note", "taxRatePercent", "dueAt"},
+		// The postpaid money routes, all three declaring additionalProperties:
+		// false. encoding/json drops an unknown key in silence, so a payment
+		// body carrying "allocations" or a void carrying "voidedAt" would answer
+		// 201 having ignored exactly the field the caller cared about.
+		"POST /v1/operator/tenants/{id}/payments": {"currency", "amountMinor", "reference", "receivedAt"},
+		// {id} twice, not {paymentId}: routeKey replaces EVERY uuid segment with
+		// the same placeholder, so the contract's parameter name is not the key.
+		// Registered under the contract's spelling it simply never matched, and
+		// a void body carrying voidedAt answered 200 having ignored it.
+		"POST /v1/operator/tenants/{id}/payments/{id}/void": {"reason"},
+		"PUT /v1/operator/tenants/{id}/credit-limit":        {"creditLimitMinor"},
+		"PATCH /v1/sender-ids/{id}":                         {"header", "displayName", "registrationId"},
 		// Registered for the SECOND thing this middleware does: recording which
 		// keys the caller actually sent. An agent PATCH is JSON Merge Patch —
 		// an omitted key leaves the value alone, an explicit null clears it —

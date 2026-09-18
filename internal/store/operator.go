@@ -199,6 +199,12 @@ type OperatorTenant struct {
 	ThrottledRatePerSecond *int
 	MessagesSent30d        int
 	LastActivityAt         *time.Time
+	// CreditLimitMinor is the most this tenant may owe at one time, and
+	// CreditLimitCurrency the money it is counted in. Both nil means no limit,
+	// which is a deliberate act rather than a default; the database keeps them
+	// null or non-null together.
+	CreditLimitMinor    *int64
+	CreditLimitCurrency *string
 }
 
 // ListTenants returns the tenants the operator console lists, narrowed by
@@ -251,7 +257,7 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country, searc
 
 	rows, err := pool.Query(ctx, `
 		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at,
-		       throttled_rate_per_second
+		       throttled_rate_per_second, credit_limit_minor, credit_limit_currency
 		FROM tenants
 		WHERE ($1::text IS NULL OR CASE
 		           WHEN status = 'suspended'      THEN 'suspended'
@@ -275,7 +281,8 @@ func ListTenants(ctx context.Context, pool *pgxpool.Pool, status, country, searc
 		var tenant OperatorTenant
 		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status,
 			&tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
-			&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond); err != nil {
+			&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond,
+			&tenant.CreditLimitMinor, &tenant.CreditLimitCurrency); err != nil {
 			return nil, 0, fmt.Errorf("store: scan tenant: %w", err)
 		}
 		out = append(out, tenant)
@@ -314,10 +321,11 @@ func GetTenant(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (OperatorT
 	var tenant OperatorTenant
 	err := pool.QueryRow(ctx, `
 		SELECT id, name, country, status, created_at, flagged_at, flag_reason, throttled_at,
-		       throttled_rate_per_second
+		       throttled_rate_per_second, credit_limit_minor, credit_limit_currency
 		FROM tenants WHERE id = $1`, id).Scan(&tenant.ID, &tenant.Name, &tenant.Country,
 		&tenant.Status, &tenant.CreatedAt, &tenant.FlaggedAt, &tenant.FlagReason,
-		&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond)
+		&tenant.ThrottledAt, &tenant.ThrottledRatePerSecond,
+		&tenant.CreditLimitMinor, &tenant.CreditLimitCurrency)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OperatorTenant{}, ErrNotFound
 	}

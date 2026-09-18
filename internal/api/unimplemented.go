@@ -124,6 +124,14 @@ func (Unimplemented) UnarchiveJourney(ctx context.Context, request gen.Unarchive
 	return nil, errNotImplemented("UnarchiveJourney")
 }
 
+func (Unimplemented) GetV1BillingAccountInvoices(ctx context.Context, request gen.GetV1BillingAccountInvoicesRequestObject) (gen.GetV1BillingAccountInvoicesResponseObject, error) {
+	return nil, errNotImplemented("GetV1BillingAccountInvoices")
+}
+
+func (Unimplemented) GetV1BillingAccountInvoicesExport(ctx context.Context, request gen.GetV1BillingAccountInvoicesExportRequestObject) (gen.GetV1BillingAccountInvoicesExportResponseObject, error) {
+	return nil, errNotImplemented("GetV1BillingAccountInvoicesExport")
+}
+
 func (Unimplemented) EstimateCost(ctx context.Context, request gen.EstimateCostRequestObject) (gen.EstimateCostResponseObject, error) {
 	return nil, errNotImplemented("EstimateCost")
 }
@@ -520,12 +528,36 @@ func (Unimplemented) GetTenantDetail(ctx context.Context, request gen.GetTenantD
 	return nil, errNotImplemented("GetTenantDetail")
 }
 
+func (Unimplemented) PutV1OperatorTenantsIdCreditLimit(ctx context.Context, request gen.PutV1OperatorTenantsIdCreditLimitRequestObject) (gen.PutV1OperatorTenantsIdCreditLimitResponseObject, error) {
+	return nil, errNotImplemented("PutV1OperatorTenantsIdCreditLimit")
+}
+
 func (Unimplemented) DismissFlag(ctx context.Context, request gen.DismissFlagRequestObject) (gen.DismissFlagResponseObject, error) {
 	return nil, errNotImplemented("DismissFlag")
 }
 
 func (Unimplemented) FlagTenantForAbuse(ctx context.Context, request gen.FlagTenantForAbuseRequestObject) (gen.FlagTenantForAbuseResponseObject, error) {
 	return nil, errNotImplemented("FlagTenantForAbuse")
+}
+
+func (Unimplemented) GetV1OperatorTenantsIdInvoices(ctx context.Context, request gen.GetV1OperatorTenantsIdInvoicesRequestObject) (gen.GetV1OperatorTenantsIdInvoicesResponseObject, error) {
+	return nil, errNotImplemented("GetV1OperatorTenantsIdInvoices")
+}
+
+func (Unimplemented) GetV1OperatorTenantsIdInvoicesExport(ctx context.Context, request gen.GetV1OperatorTenantsIdInvoicesExportRequestObject) (gen.GetV1OperatorTenantsIdInvoicesExportResponseObject, error) {
+	return nil, errNotImplemented("GetV1OperatorTenantsIdInvoicesExport")
+}
+
+func (Unimplemented) GetV1OperatorTenantsIdPayments(ctx context.Context, request gen.GetV1OperatorTenantsIdPaymentsRequestObject) (gen.GetV1OperatorTenantsIdPaymentsResponseObject, error) {
+	return nil, errNotImplemented("GetV1OperatorTenantsIdPayments")
+}
+
+func (Unimplemented) PostV1OperatorTenantsIdPayments(ctx context.Context, request gen.PostV1OperatorTenantsIdPaymentsRequestObject) (gen.PostV1OperatorTenantsIdPaymentsResponseObject, error) {
+	return nil, errNotImplemented("PostV1OperatorTenantsIdPayments")
+}
+
+func (Unimplemented) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Context, request gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoidRequestObject) (gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoidResponseObject, error) {
+	return nil, errNotImplemented("PostV1OperatorTenantsIdPaymentsPaymentIdVoid")
 }
 
 func (Unimplemented) ReinstateTenant(ctx context.Context, request gen.ReinstateTenantRequestObject) (gen.ReinstateTenantResponseObject, error) {
