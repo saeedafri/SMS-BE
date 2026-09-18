@@ -44,6 +44,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
+	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/platform/config"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -187,46 +188,57 @@ func creditWallet(ctx context.Context, pool *pgxpool.Pool,
 		return err
 	}
 	if len(reference) < 6 {
-		return errors.New("give the bank's transfer reference (UTR), at least 6 characters")
+		return errors.New("give your own reference for this credit, at least 6 characters")
 	}
 
 	var tenantID uuid.UUID
-	var tenantName string
+	var tenantName, country string
 	if err := pool.QueryRow(ctx, `
-		SELECT t.id, t.name FROM users u
+		SELECT t.id, t.name, t.country FROM users u
 		JOIN tenant_users tu ON tu.user_id = u.id AND tu.role = 'owner'
 		JOIN tenants t ON t.id = tu.tenant_id
-		WHERE u.email = $1`, strings.TrimSpace(email)).Scan(&tenantID, &tenantName); err != nil {
+		WHERE u.email = $1`, strings.TrimSpace(email)).Scan(&tenantID, &tenantName, &country); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%s owns no account", email)
 		}
 		return err
 	}
 
-	description := "Bank transfer " + reference
-	var booked bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM wallet_ledger
-		WHERE tenant_id = $1 AND description = $2)`, tenantID, description).Scan(&booked); err != nil {
-		return err
-	}
-	if booked {
-		return fmt.Errorf("reference %s is already credited to %s", reference, tenantName)
-	}
+	// Credit on account is one act, and this is the second door into it. The
+	// console and this command must raise the SAME invoice: a credit booked
+	// here without one would load the wallet with nothing owed for it, which is
+	// money given away that no screen and no export would ever show.
+	rate, _ := billing.TaxRateFor(country)
+	taxMinor := billing.TaxOn(minor, rate)
+	dueAt := billing.MonthEnd(time.Now(), billing.BillingLocationFor(country))
 
-	if !confirm(fmt.Sprintf("Credit %s %s to %q (%s), reference %s?",
-		currency, amount, tenantName, tenantID, reference)) {
+	if !confirm(fmt.Sprintf("Credit %s %s to %q (%s), reference %s? They will owe %s %d.%02d "+
+		"including %d%% tax, due %s.",
+		currency, amount, tenantName, tenantID, reference,
+		currency, (minor+taxMinor)/100, (minor+taxMinor)%100, rate,
+		dueAt.Format("2 January 2006"))) {
 		return errors.New("not confirmed; nothing credited")
 	}
 	// The same function the operator console's Credit button uses, so the two
-	// ways in cannot disagree about what a transfer is or book one twice.
-	entry, err := store.CreditWalletByTransfer(ctx, pool, store.Identity{TenantID: tenantID},
-		currency, minor, reference)
+	// ways in cannot disagree about what a credit is, what it costs, or book
+	// one twice. The duplicate guard is the unique index on the invoice's
+	// reference, not a read-then-write here: two operators crediting at the
+	// same moment would both pass a check and both insert.
+	entry, invoice, err := store.IssueCreditOnAccount(ctx, pool, store.Identity{TenantID: tenantID},
+		store.IssueCredit{
+			Currency: currency, AmountMinor: minor, TaxRatePercent: rate,
+			TaxMinor: taxMinor, TotalMinor: minor + taxMinor, DueAt: dueAt,
+			Reference: reference, IssuedBy: "operator-admin",
+		})
 	if errors.Is(err, store.ErrConflict) {
 		return fmt.Errorf("reference %s is already credited to %s", reference, tenantName)
 	}
 	if err != nil {
 		return err
 	}
+	fmt.Printf("invoice %s raised for %s %d.%02d, due %s\n", invoice.Number,
+		currency, invoice.TotalMinor/100, invoice.TotalMinor%100,
+		dueAt.Format("2006-01-02"))
 	fmt.Printf("credited; %s balance is now %d minor units (entry %s)\n",
 		currency, entry.BalanceAfterMinor, entry.ID)
 	return nil
