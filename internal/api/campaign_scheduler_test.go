@@ -7,6 +7,7 @@ import (
 
 // A campaign given a send time goes out when that time comes, and not before.
 func TestAScheduledCampaignLaunchesWhenDueAndNotBefore(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	due := h.seedNamedCampaign(tenant, "Due", "scheduled")

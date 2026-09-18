@@ -67,6 +67,7 @@ func linesFor(t *testing.T, conn driver.Conn, tenant uuid.UUID, at time.Time) []
 // Ask 38. Two unit prices never share a line and a price is never averaged:
 // quantity counts segments, the unit the rate card prices.
 func TestInvoiceLinesSplitByUnitPrice(t *testing.T) {
+	t.Parallel()
 	at := time.Now().UTC().Truncate(time.Second)
 	conn, tenant := seedDelivered(t, at,
 		billedMessage{1, 12}, billedMessage{1, 12}, billedMessage{1, 12},
@@ -89,6 +90,7 @@ func TestInvoiceLinesSplitByUnitPrice(t *testing.T) {
 // Ask 38. quantity * unitMinor == amountMinor on every line, and the lines sum
 // to the subtotal.
 func TestEveryInvoiceLineReconciles(t *testing.T) {
+	t.Parallel()
 	at := time.Now().UTC().Truncate(time.Second)
 	conn, tenant := seedDelivered(t, at,
 		billedMessage{1, 12}, billedMessage{1, 12}, billedMessage{1, 12},

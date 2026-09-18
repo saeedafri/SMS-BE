@@ -13,6 +13,7 @@ import (
 // and the gate said `failed`, so a client could not branch on "refused" at all.
 // Submit-time refusals are now always `rejected`.
 func TestEverySubmitTimeRefusalIsReportedAsRejected(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -66,6 +67,7 @@ func TestEverySubmitTimeRefusalIsReportedAsRejected(t *testing.T) {
 // A suppressed recipient is the gate refusing, which used to be the one that
 // said "failed".
 func TestASuppressedRecipientIsRejectedNotFailed(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -95,6 +97,7 @@ func TestASuppressedRecipientIsRejectedNotFailed(t *testing.T) {
 // the message log — whose enum has no `rejected` — still reads `failed` for a
 // refused message, because MessageStatus cannot spell it.
 func TestASendResultAndTheLogDescribeAMessageTheSameWay(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)

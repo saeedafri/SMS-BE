@@ -27,6 +27,7 @@ import (
 // the correct window includes and the old one dropped for 59 minutes out of
 // every 60.
 func TestTheTwoOperatorUsageScreensCountTheSameWindow(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()

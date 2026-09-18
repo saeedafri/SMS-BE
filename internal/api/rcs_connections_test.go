@@ -161,6 +161,7 @@ func TestRCSSecretsAreSealedAtRest(t *testing.T) {
 // Two live accounts for one operator would leave "which account sent this" to
 // chance, and a delivery report could not say.
 func TestOnlyOneAccountPerOperatorCanBeActive(t *testing.T) {
+	t.Parallel()
 	h := rcsHarness(t)
 	ctx := context.Background()
 	h.seedRCSConnection(t, "jio", "active", nil,

@@ -10,6 +10,7 @@ import (
 )
 
 func TestHealthzReportsOK(t *testing.T) {
+	t.Parallel()
 	router := api.NewRouter(&api.Server{})
 	rec := httptest.NewRecorder()
 
@@ -33,6 +34,7 @@ func TestHealthzReportsOK(t *testing.T) {
 // define is a 404 — and that 404 must still use the Error envelope, because
 // the frontend parses failures the same way regardless of status.
 func TestUnknownPathReturnsContractErrorEnvelope(t *testing.T) {
+	t.Parallel()
 	router := api.NewRouter(&api.Server{})
 	rec := httptest.NewRecorder()
 
@@ -57,6 +59,7 @@ func TestUnknownPathReturnsContractErrorEnvelope(t *testing.T) {
 // A spot-check across domains that the generated routes are actually wired.
 // If HandlerFromMux were never called these would 404 instead of 501.
 func TestContractRoutesAreRegistered(t *testing.T) {
+	t.Parallel()
 	router := api.NewRouter(&api.Server{})
 	routes := []struct {
 		method string

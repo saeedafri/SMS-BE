@@ -9,6 +9,7 @@ import (
 // happened to it. Narrowing the list to find one row was the only way, which is
 // a poor substitute and gets worse as the log grows.
 func TestASentMessageCanBeReadBackById(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -57,6 +58,7 @@ func TestASentMessageCanBeReadBackById(t *testing.T) {
 // A refused message is still readable — that is the whole reason a refusal
 // carries an id — and it carries the reason it was refused.
 func TestARefusedMessageIsReadableByIdWithItsReason(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -95,6 +97,7 @@ func TestARefusedMessageIsReadableByIdWithItsReason(t *testing.T) {
 }
 
 func TestReadingAMessageThatIsNotYoursIs404(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	mine := h.newAccount("owner")
 	theirs := h.newAccount("owner")
@@ -125,6 +128,7 @@ func TestReadingAMessageThatIsNotYoursIs404(t *testing.T) {
 
 // The same scope as the list, and enforced.
 func TestReadingOneMessageNeedsTheReadMessagesScope(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)

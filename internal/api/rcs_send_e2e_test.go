@@ -56,6 +56,7 @@ func (h *harness) approvedRCSTemplate(tenant account, name, carrierTemplateID st
 }
 
 func TestAnRCSSendReachesTheCarrierWithItsTemplateAndVariables(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -108,6 +109,7 @@ func TestAnRCSSendReachesTheCarrierWithItsTemplateAndVariables(t *testing.T) {
 // would shift every later position by one, and Airtel refuses a send with fewer
 // values than the template declares.
 func TestAMissingVariableIsSentEmptySoPositionsDoNotShift(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -153,6 +155,7 @@ func TestAMissingVariableIsSentEmptySoPositionsDoNotShift(t *testing.T) {
 // not move for a template the carrier has not approved, because the gateway
 // would refuse it after the hold was taken.
 func TestASendIsRefusedBeforeAnyMoneyMovesWhenTheCarrierHasNotApproved(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -198,6 +201,7 @@ func TestASendIsRefusedBeforeAnyMoneyMovesWhenTheCarrierHasNotApproved(t *testin
 // The other half of the send path: nothing settles without a delivery report,
 // and both carriers deliver theirs on a webhook.
 func TestADeliveryWebhookSettlesTheMessageItNames(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -238,6 +242,7 @@ func TestADeliveryWebhookSettlesTheMessageItNames(t *testing.T) {
 // Carriers retry, so the same report arrives more than once. A terminal message
 // must not move again, and it must not be charged again.
 func TestAReplayedDeliveryWebhookChangesNothing(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -277,6 +282,7 @@ func TestAReplayedDeliveryWebhookChangesNothing(t *testing.T) {
 // An expired message is refunded by both carriers, so Relay must release its
 // hold rather than keep the charge.
 func TestAnExpiredMessageWebhookReleasesTheHold(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -318,6 +324,7 @@ func TestAnExpiredMessageWebhookReleasesTheHold(t *testing.T) {
 // A report naming a message we never sent must be dropped, not applied to
 // whatever happens to be nearest.
 func TestADeliveryWebhookForAnUnknownReferenceSettlesNothing(t *testing.T) {
+	t.Parallel()
 	h := newRCSSendHarness(t, &stubRegistrar{vendor: "airtel"})
 
 	res := h.postWebhook("airtel", webhookToken, map[string]any{
@@ -335,6 +342,7 @@ func TestADeliveryWebhookForAnUnknownReferenceSettlesNothing(t *testing.T) {
 // Airtel callback carries no id of ours and the carrier reference is the only
 // way back.
 func TestSettlingAMessageKeepsItsCarrierAttribution(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
@@ -425,6 +433,7 @@ func TestTheRecordedCarrierIsTheGatewayThatActuallySent(t *testing.T) {
 // deployment without a commercial agreement — which is most of them, most of
 // the time.
 func TestWithNoRCSCarrierASendDoesNotWaitForACarriersApproval(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t) // sandbox only: no registry, no RCS carrier
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)

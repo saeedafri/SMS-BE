@@ -16,6 +16,7 @@ import (
 // collection, so paging the list without moving them server-side would narrow
 // a working filter to whatever happened to be on page one.
 func TestCampaignFiltersNarrowTheCollectionRatherThanThePage(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 

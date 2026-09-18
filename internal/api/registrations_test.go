@@ -19,6 +19,7 @@ func indiaEntityFields() map[string]any {
 }
 
 func TestCreateRegistrationStartsPendingReviewAndEchoesFields(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -46,6 +47,7 @@ func TestCreateRegistrationStartsPendingReviewAndEchoesFields(t *testing.T) {
 }
 
 func TestCreateRegistrationRejectsUnknownObjectKey(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -60,6 +62,7 @@ func TestCreateRegistrationRejectsUnknownObjectKey(t *testing.T) {
 // The UI needs to know which input to highlight, so every missing required
 // field is named.
 func TestCreateRegistrationNamesMissingRequiredFields(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -79,6 +82,7 @@ func TestCreateRegistrationNamesMissingRequiredFields(t *testing.T) {
 }
 
 func TestCreateRegistrationRejectsDuplicates(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	body := map[string]any{
@@ -97,6 +101,7 @@ func TestCreateRegistrationRejectsDuplicates(t *testing.T) {
 // A stub regime exists but registers nothing. That is a different answer from
 // "we do not operate there", and the user can act on the difference.
 func TestStubRegimeRejectsRegistrationsDistinctly(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -114,6 +119,7 @@ func TestStubRegimeRejectsRegistrationsDistinctly(t *testing.T) {
 // The US campaign cannot be filed before its brand is approved. This ordering
 // lives on the registration object, so the handler never mentions the US.
 func TestUSCampaignRequiresAnApprovedBrand(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -173,6 +179,7 @@ func TestUSCampaignRequiresAnApprovedBrand(t *testing.T) {
 }
 
 func TestRegistrationsRespectRoleAndTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	member := h.newAccount("member")
@@ -217,6 +224,7 @@ func TestRegistrationsRespectRoleAndTenant(t *testing.T) {
 }
 
 func TestGetRegistrationReturns404ForAnUnknownId(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

@@ -17,6 +17,7 @@ import (
 // that had missed it would reject every legitimate voice sender with a 422 that
 // looked like a client bug.
 func TestEnumListsCoverTheValuesTheProductActuallyUses(t *testing.T) {
+	t.Parallel()
 	mustContain := map[string][]string{
 		"channels":     {"SMS", "RCS", "WHATSAPP", "EMAIL", "VOICE"},
 		"currencies":   {"INR", "USD", "GBP", "AED"},
@@ -48,6 +49,7 @@ func TestEnumListsCoverTheValuesTheProductActuallyUses(t *testing.T) {
 
 // The values that were actually sent at the deployment when this was found.
 func TestOneOfRejectsWhatTheProbeSent(t *testing.T) {
+	t.Parallel()
 	rejected := []struct {
 		value   string
 		allowed []string
@@ -71,6 +73,7 @@ func TestOneOfRejectsWhatTheProbeSent(t *testing.T) {
 // so accepting "sms" would write a row that reads fine in an API response and
 // matches nothing in a WHERE clause.
 func TestOneOfIsCaseSensitive(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"sms", "Sms", "LIVE", "Daily", "VISA"} {
 		if oneOf(value, validChannels) || oneOf(value, validEnvironments) ||
 			oneOf(value, validFrequencies) || oneOf(value, validCardBrands) {
@@ -82,6 +85,7 @@ func TestOneOfIsCaseSensitive(t *testing.T) {
 // The message has to name the options, or the caller is left guessing at a set
 // that is public information in the contract they already hold.
 func TestEnumMessageNamesTheAllowedValues(t *testing.T) {
+	t.Parallel()
 	got := enumMessage("Channel", validChannels)
 	for _, value := range validChannels {
 		if !strings.Contains(got, value) {
@@ -102,6 +106,7 @@ func TestEnumMessageNamesTheAllowedValues(t *testing.T) {
 // contract — it fails the moment a state maps to something the frontend would
 // not recognise.
 func TestEveryMessageStateMapsToAContractStatus(t *testing.T) {
+	t.Parallel()
 	for _, state := range []messaging.State{
 		messaging.StateQueued, messaging.StateSubmitting, messaging.StateSubmitted,
 		messaging.StateAccepted, messaging.StateDelivered, messaging.StateUndelivered,
@@ -129,6 +134,7 @@ func TestEveryMessageStateMapsToAContractStatus(t *testing.T) {
 // a route demanding a scope outside the catalogue is policy no key could ever
 // satisfy — a route quietly unreachable by any API key at all.
 func TestKeyScopesAgreeWithTheContractEnum(t *testing.T) {
+	t.Parallel()
 	for _, scope := range apiScopeCatalogue {
 		if !scope.Key.Valid() {
 			t.Errorf("catalogue publishes %q, which is not an ApiKeyScope", scope.Key)

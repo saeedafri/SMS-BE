@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/saeedafri/sms-be/internal/platform/mediastore"
 	"github.com/saeedafri/sms-be/internal/platform/secrets"
 	"io"
@@ -91,6 +92,75 @@ type harness struct {
 
 // newHarnessWithInviteCode builds a server that gates self-registration, which
 // is what a public deployment looks like.
+// The datastores live in ap-south-1 behind an SSH tunnel, so a query costs
+// ~50ms and opening a pool costs a TCP handshake, a Postgres startup and a
+// ping on top of it. Opening three of them PER TEST cost about a second before
+// any test did anything, which across this package's 400-odd tests was roughly
+// seven minutes of the run spent connecting.
+//
+// So they are opened once for the package and shared. pgxpool is safe for
+// concurrent use and every test already isolates itself by tenant, so sharing
+// the handle changes nothing a test can observe — only how often we pay for it.
+var (
+	sharedPool         *pgxpool.Pool
+	sharedAdminPool    *pgxpool.Pool
+	sharedOperatorPool *pgxpool.Pool
+	sharedPoolsOpen    bool
+)
+
+// openSized opens a pool with room for the parallel run.
+func openSized(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	config.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+}
+
+func TestMain(m *testing.M) {
+	code := func() int {
+		url, adminURL := os.Getenv("TEST_DATABASE_URL"), os.Getenv("TEST_DATABASE_ADMIN_URL")
+		if url != "" && adminURL != "" {
+			ctx := context.Background()
+			var err error
+			// Sized for the parallel run. pgxpool defaults to max(4, NumCPU)
+			// connections; ten tests each holding a transaction open past that
+			// ceiling do not fail, they queue — and the queue shows up as
+			// "context deadline exceeded" in whichever test happened to be
+			// waiting, which reads as a slow query rather than as contention.
+			if sharedPool, err = openSized(ctx, url, 12); err != nil {
+				fmt.Fprintf(os.Stderr, "open app pool: %v\n", err)
+				return 1
+			}
+			defer sharedPool.Close()
+			if sharedAdminPool, err = openSized(ctx, adminURL, 12); err != nil {
+				fmt.Fprintf(os.Stderr, "open admin pool: %v\n", err)
+				return 1
+			}
+			defer sharedAdminPool.Close()
+			// Carries app.operator=on, which is what lets an operator handler
+			// read across tenants at all.
+			if sharedOperatorPool, err = store.OpenOperatorPool(ctx, url); err != nil {
+				fmt.Fprintf(os.Stderr, "open operator pool: %v\n", err)
+				return 1
+			}
+			defer sharedOperatorPool.Close()
+			sharedPoolsOpen = true
+		}
+		return m.Run()
+	}()
+	os.Exit(code)
+}
+
 func newHarnessWithInviteCode(t *testing.T, code string) *harness {
 	t.Helper()
 	h := newHarness(t)
@@ -107,35 +177,17 @@ func newHarnessWithInviteCode(t *testing.T, code string) *harness {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
-	url, adminURL := os.Getenv("TEST_DATABASE_URL"), os.Getenv("TEST_DATABASE_ADMIN_URL")
-	if url == "" || adminURL == "" {
+	if !sharedPoolsOpen {
 		t.Skip("TEST_DATABASE_URL / TEST_DATABASE_ADMIN_URL not set")
 	}
-	ctx := context.Background()
-
-	pool, err := store.Open(ctx, url)
-	if err != nil {
-		t.Fatalf("open app pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	admin, err := store.Open(ctx, adminURL)
-	if err != nil {
-		t.Fatalf("open admin pool: %v", err)
-	}
-	t.Cleanup(admin.Close)
-
-	// The operator console's pool, carrying app.operator=on.
+	// Opened once in TestMain. Not closed here: the pools outlive every test.
 	//
-	// Without it every /v1/operator route in these tests reads through the plain
-	// tenant pool, where row-level security correctly refuses cross-tenant rows —
-	// so an operator handler that works in production returns an empty queue or a
-	// 404 here, and looks like a bug in the handler rather than a missing pool.
-	operator, err := store.OpenOperatorPool(ctx, url)
-	if err != nil {
-		t.Fatalf("open operator pool: %v", err)
-	}
-	t.Cleanup(operator.Close)
+	// The operator pool carries app.operator=on. Without it every /v1/operator
+	// route in these tests reads through the plain tenant pool, where row-level
+	// security correctly refuses cross-tenant rows — so an operator handler that
+	// works in production returns an empty queue or a 404 here, and looks like a
+	// bug in the handler rather than a missing pool.
+	pool, admin, operator := sharedPool, sharedAdminPool, sharedOperatorPool
 
 	logs := &syncBuffer{}
 	h := &harness{t: t, pool: pool, admin: admin, logs: logs, operatorPool: operator}

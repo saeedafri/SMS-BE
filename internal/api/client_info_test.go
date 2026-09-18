@@ -11,6 +11,7 @@ import (
 // a naive set of independent checks reports every browser on this list as
 // Safari. Each row below is a real header that breaks a different shortcut.
 func TestParseUserAgentPicksTheMostSpecificBrowser(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name            string
 		ua              string
@@ -104,6 +105,7 @@ func TestParseUserAgentPicksTheMostSpecificBrowser(t *testing.T) {
 // rewritten from the local proxy's header where there was one. Reading a header
 // here as well would let a client forge its own address.
 func TestClientIPStripsThePortAndIgnoresForgedHeaders(t *testing.T) {
+	t.Parallel()
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.RemoteAddr = "203.0.113.9:54321"
 	request.Header.Set("X-Forwarded-For", "198.51.100.7")
@@ -122,6 +124,7 @@ func TestClientIPStripsThePortAndIgnoresForgedHeaders(t *testing.T) {
 // A handler that runs without the middleware must still produce the two
 // "Unknown" strings the frontend renders, not two empty cells.
 func TestClientInfoFromIsUnknownRatherThanEmpty(t *testing.T) {
+	t.Parallel()
 	got := clientInfoFrom(t.Context())
 	if got.Device != "Unknown" || got.Browser != "Unknown" {
 		t.Fatalf("clientInfoFrom(empty ctx) = %+v, want both Unknown", got)
@@ -132,6 +135,7 @@ func TestClientInfoFromIsUnknownRatherThanEmpty(t *testing.T) {
 // that would have caught the original bug, where issueSession passed literal
 // "Unknown" strings and no request detail ever reached the database.
 func TestWithClientInfoReachesTheHandler(t *testing.T) {
+	t.Parallel()
 	var seen clientInfo
 	handler := withClientInfo(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = clientInfoFrom(r.Context())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,6 +23,17 @@ import (
 // shows, and getting it wrong means one customer's message arriving under
 // another customer's name — visible to the recipient, invisible to us, and
 // indistinguishable from a successful send in every log and screen we have.
+
+// carrierIdentity is a carrier-issued agent id that belongs to ONE run.
+//
+// rcs_launch_carrier_identity is unique across every tenant by design — two
+// tenants sharing a carrier's agent id would each receive the other's inbound
+// messages. That makes a literal fixture value outlive its test: a run that
+// dies before cleanup leaves the row behind, and the next run fails on a
+// collision in a test that has nothing to do with the one that leaked it.
+func carrierIdentity(name string) string {
+	return fmt.Sprintf("%s_%d", name, rand.Int63())
+}
 
 // launchAgentOnCarrier gives an agent the approved launch and carrier-issued id
 // that a send resolves through. Written directly because the operator route
@@ -76,7 +88,8 @@ func TestASendResolvesTheSendersOwnAgent(t *testing.T) {
 	h := newRCSSendHarness(t, carrier)
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)
-	senderID, templateID, _ := h.agentForSend(tenant, "Acme Orders", "acme_airtel_agent")
+	identity := carrierIdentity("acme_airtel_agent")
+	senderID, templateID, _ := h.agentForSend(tenant, "Acme Orders", identity)
 
 	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
 		"senderId": senderID.String(), "templateId": templateID.String(),
@@ -89,7 +102,7 @@ func TestASendResolvesTheSendersOwnAgent(t *testing.T) {
 	if len(carrier.sawSubmissions) != 1 {
 		t.Fatalf("carrier saw %d submissions, want 1", len(carrier.sawSubmissions))
 	}
-	if got := carrier.sawSubmissions[0].AgentID; got != "acme_airtel_agent" {
+	if got := carrier.sawSubmissions[0].AgentID; got != identity {
 		t.Errorf("AgentID = %q, want the carrier id issued for THIS tenant's agent", got)
 	}
 }
@@ -136,7 +149,8 @@ func TestATenantWithAnAgentNeverFallsBackToTheSharedOne(t *testing.T) {
 			tenant := h.newAccount("owner")
 			h.fundWallet(tenant)
 
-			senderID, templateID, _ := h.agentForSend(tenant, "Acme Orders", "acme_airtel_agent")
+			senderID, templateID, _ := h.agentForSend(tenant, "Acme Orders",
+				carrierIdentity("acme_airtel_agent"))
 			var agentID uuid.UUID
 			if err := h.admin.QueryRow(context.Background(),
 				`SELECT rcs_agent_id FROM sender_ids WHERE id = $1`,
@@ -196,11 +210,13 @@ func TestAnInboundEventReachesOnlyTheTenantWhoseAgentItNames(t *testing.T) {
 
 	acmeAgent := uuid.MustParse(h.createAgent(acme, "Acme Orders").Id)
 	globexAgent := uuid.MustParse(h.createAgent(globex, "Globex Alerts").Id)
-	h.launchAgentOnCarrier(acme, acmeAgent, "AIRTEL", "acme_airtel_agent")
-	h.launchAgentOnCarrier(globex, globexAgent, "AIRTEL", "globex_airtel_agent")
+	acmeIdentity := carrierIdentity("acme_airtel_agent")
+	globexIdentity := carrierIdentity("globex_airtel_agent")
+	h.launchAgentOnCarrier(acme, acmeAgent, "AIRTEL", acmeIdentity)
+	h.launchAgentOnCarrier(globex, globexAgent, "AIRTEL", globexIdentity)
 
 	tenantID, agentID, err := store.TenantForCarrierAgent(ctx, h.operatorPool,
-		"AIRTEL", "globex_airtel_agent")
+		"AIRTEL", globexIdentity)
 	if err != nil {
 		t.Fatalf("attribute: %v", err)
 	}
@@ -219,7 +235,7 @@ func TestAnInboundEventReachesOnlyTheTenantWhoseAgentItNames(t *testing.T) {
 	// The same id on a DIFFERENT carrier is a different agent. Airtel and Vi
 	// issue ids from separate namespaces, so the carrier is half of the key.
 	if _, _, err := store.TenantForCarrierAgent(ctx, h.operatorPool,
-		"VI", "globex_airtel_agent"); !errors.Is(err, store.ErrNotFound) {
+		"VI", globexIdentity); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("same id on another carrier = %v, want ErrNotFound", err)
 	}
 }
@@ -241,13 +257,14 @@ func TestTwoTenantsCannotShareOneCarrierAgentID(t *testing.T) {
 	acmeAgent := uuid.MustParse(h.createAgent(acme, "Acme Orders").Id)
 	globexAgent := uuid.MustParse(h.createAgent(globex, "Globex Alerts").Id)
 
-	h.launchAgentOnCarrier(acme, acmeAgent, "AIRTEL", "shared_airtel_agent")
+	shared := carrierIdentity("shared_airtel_agent")
+	h.launchAgentOnCarrier(acme, acmeAgent, "AIRTEL", shared)
 
 	_, err := h.admin.Exec(ctx, `
 		INSERT INTO rcs_agent_carrier_launches
 		    (agent_id, tenant_id, carrier, status, carrier_agent_id, submitted_at)
-		VALUES ($1, $2, 'AIRTEL', 'approved', 'shared_airtel_agent', now())`,
-		globexAgent, globex.TenantID)
+		VALUES ($1, $2, 'AIRTEL', 'approved', $3, now())`,
+		globexAgent, globex.TenantID, shared)
 	if err == nil {
 		t.Fatal("two tenants took the same carrier agent id — " +
 			"each would now receive the other's inbound RCS")

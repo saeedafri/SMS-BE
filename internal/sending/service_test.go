@@ -3,7 +3,9 @@ package sending_test
 import (
 	"context"
 	"errors"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +35,62 @@ type fixture struct {
 	templateID uuid.UUID
 }
 
+// One set of handles for the package, opened once.
+//
+// The datastores are in ap-south-1 behind an SSH tunnel, so opening a pool
+// costs a handshake and a ping at ~50ms a round trip. newFixture opened three
+// of them per test; with forty-odd tests that was most of a minute spent
+// connecting before any test did anything.
+var (
+	sendPools     sync.Once
+	sendPG        *pgxpool.Pool
+	sendAdmin     *pgxpool.Pool
+	sendCH        driver.Conn
+	sendPoolsErr  error
+	sendPoolsOpen bool
+)
+
+// openSizedPool opens a pool with room for the parallel run.
+func openSizedPool(ctx context.Context, url string, maxConns int32) (*pgxpool.Pool, error) {
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, err
+	}
+	config.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+}
+
+func openSendPools(pgURL, adminURL, chURL string) error {
+	sendPools.Do(func() {
+		ctx := context.Background()
+		// Sized for the parallel run, like the api package's. pgxpool defaults
+		// to max(4, NumCPU); parallel tests holding transactions past that
+		// ceiling do not fail, they QUEUE — and the queue surfaces as
+		// "context deadline exceeded" in whichever test was waiting, which
+		// reads as a slow query rather than as contention. That is exactly how
+		// TestEveryMessageInABatchIsChargedExactlyOnce failed.
+		if sendPG, sendPoolsErr = openSizedPool(ctx, pgURL, 12); sendPoolsErr != nil {
+			return
+		}
+		if sendAdmin, sendPoolsErr = openSizedPool(ctx, adminURL, 12); sendPoolsErr != nil {
+			return
+		}
+		if sendCH, sendPoolsErr = store.OpenClickHouse(ctx, chURL); sendPoolsErr != nil {
+			return
+		}
+		sendPoolsOpen = true
+	})
+	return sendPoolsErr
+}
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	pgURL, adminURL := os.Getenv("TEST_DATABASE_URL"), os.Getenv("TEST_DATABASE_ADMIN_URL")
@@ -42,21 +100,11 @@ func newFixture(t *testing.T) *fixture {
 	}
 	ctx := context.Background()
 
-	pool, err := store.Open(ctx, pgURL)
-	if err != nil {
-		t.Fatalf("open pg: %v", err)
+	// Shared for the package and never closed here: they outlive every test.
+	if err := openSendPools(pgURL, adminURL, chURL); err != nil {
+		t.Fatalf("open datastores: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	admin, err := store.Open(ctx, adminURL)
-	if err != nil {
-		t.Fatalf("open admin: %v", err)
-	}
-	t.Cleanup(admin.Close)
-	ch, err := store.OpenClickHouse(ctx, chURL)
-	if err != nil {
-		t.Fatalf("open clickhouse: %v", err)
-	}
-	t.Cleanup(func() { _ = ch.Close() })
+	pool, admin, ch := sendPG, sendAdmin, sendCH
 
 	tenantID, senderID := uuid.New(), uuid.New()
 	if _, err := admin.Exec(ctx,

@@ -10,6 +10,7 @@ import (
 // A refused request's log line says who made it and why it was refused, so a
 // failure a customer reports can be explained from CloudWatch alone.
 func TestARefusedRequestIsLoggedWithItsCallerAndReason(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 

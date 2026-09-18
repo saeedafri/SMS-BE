@@ -10,6 +10,7 @@ import (
 // written and again before it is enabled, so an account that cannot work is
 // refused where someone is looking rather than at the first customer message.
 func TestWhatEachRCSVendorNeedsBeforeItCanSend(t *testing.T) {
+	t.Parallel()
 	airtel := map[string]string{"baseUrl": "https://iq.airtel.test", "customerId": "c", "subAccountId": "s"}
 	for name, tc := range map[string]struct {
 		vendor   string

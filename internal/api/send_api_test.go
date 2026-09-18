@@ -19,6 +19,16 @@ import (
 // carrier to submit to and a warehouse to record the message in. Without both,
 // the endpoint correctly reports that this deployment cannot send, which is a
 // different thing from the endpoint being wrong.
+var (
+	clickHouseOnce sync.Once
+	clickHousePool *store.ClickHousePool
+)
+
+func sharedClickHouse(url string) *store.ClickHousePool {
+	clickHouseOnce.Do(func() { clickHousePool = store.NewClickHousePool(url, nil) })
+	return clickHousePool
+}
+
 func newSendHarness(t *testing.T) *harness {
 	t.Helper()
 	chURL := os.Getenv("TEST_CLICKHOUSE_URL")
@@ -39,7 +49,9 @@ func newSendHarness(t *testing.T) *harness {
 	// Mutated in place rather than rebuilt: handlers are methods on the Server
 	// pointer the router already holds, so adding a dependency here needs no
 	// second copy of that literal to keep in step with newHarness.
-	pool := store.NewClickHousePool(chURL, nil)
+	// One pool for the package, like the Postgres ones: NewClickHousePool dials
+	// through the same tunnel, and a per-test handle bought nothing.
+	pool := sharedClickHouse(chURL)
 	h.server.ClickHouse = pool
 	h.server.Connector = connector.NewSandbox(0)
 	h.server.Redis = rdb
@@ -80,6 +92,7 @@ func newSendHarness(t *testing.T) *harness {
 // so every sk_live_ key a customer pasted into their integration
 // authenticated nothing.
 func TestAnApiKeyCanSendOneMessage(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -119,6 +132,7 @@ func TestAnApiKeyCanSendOneMessage(t *testing.T) {
 
 // A key's scopes have to mean something, or they are decoration on a form.
 func TestAnApiKeyWithoutTheSendScopeIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -137,6 +151,7 @@ func TestAnApiKeyWithoutTheSendScopeIsRefused(t *testing.T) {
 // handler checks scopes — so a key that authenticated the whole API would let a
 // read:messages key read the team roster and the billing history too.
 func TestAnApiKeyDoesNotAuthenticateTheRestOfTheApi(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	secret := h.apiKey(tenant, []string{"send:sms", "read:messages"})
@@ -150,6 +165,7 @@ func TestAnApiKeyDoesNotAuthenticateTheRestOfTheApi(t *testing.T) {
 }
 
 func TestSendingWithoutACredentialIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	res := h.do(http.MethodPost, "/v1/messages", "", map[string]any{
 		"senderId": "00000000-0000-4000-8000-000000000001",
@@ -162,6 +178,7 @@ func TestSendingWithoutACredentialIsRefused(t *testing.T) {
 
 // The dashboard session path, so the endpoint is usable from the product too.
 func TestASessionCanSendOneMessage(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -240,6 +257,7 @@ func (h *harness) apiKey(tenant account, scopes []string) string {
 // same tier: a limit a customer is shown and a limit that is applied have to be
 // one number.
 func TestSendsAreThrottledToTheTierTheCustomerIsShown(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("REDIS_URL") == "" {
 		t.Skip("REDIS_URL not set — the limiter fails open without Redis, by design")
 	}
@@ -291,6 +309,7 @@ func TestSendsAreThrottledToTheTierTheCustomerIsShown(t *testing.T) {
 // pending header returned 500 "an unexpected error occurred". The customer
 // cannot tell a rejected send from a broken platform, and neither can we.
 func TestSendingFromAnUnapprovedSenderIsRefusedCleanly(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)
@@ -326,6 +345,7 @@ func TestSendingFromAnUnapprovedSenderIsRefusedCleanly(t *testing.T) {
 // Every gate refusal has to come back as an answer, not a crash. Each of these
 // is a rule a customer can hit on their first integration.
 func TestEveryGateRefusalIsAnAnswerNotAFiveHundred(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)

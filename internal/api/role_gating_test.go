@@ -23,6 +23,7 @@ import (
 // was missing from all of them at once, so pinning a single route would leave
 // the same hole open on its eleven neighbours.
 func TestMemberIsRefusedMutatingRoutesInGatedAreas(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	member := h.newAccount("member")
 
@@ -70,6 +71,7 @@ func TestMemberIsRefusedMutatingRoutesInGatedAreas(t *testing.T) {
 // pass. Asserting only that the refused role is refused proves the route is
 // closed, not that it is closed to the right people.
 func TestOwnerIsNotRefusedTheSameRoutes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 

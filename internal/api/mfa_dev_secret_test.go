@@ -15,6 +15,7 @@ import (
 // DevTOTPSecret, so anyone who knew it could pass a real customer's second
 // factor. Only a fixture address may get it.
 func TestARealAccountNeverGetsThePublishedMFASecret(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t) // dev endpoints on, as on the live server today
 	acct := h.newAccount("owner")
 	if _, err := h.admin.Exec(context.Background(),
@@ -34,6 +35,7 @@ func TestARealAccountNeverGetsThePublishedMFASecret(t *testing.T) {
 
 // The browser suite still needs the fixed secret for its fixture accounts.
 func TestAFixtureAccountStillGetsTheDevMFASecret(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner") // user-…@example.test
 	var enrollment gen.MfaEnrollment

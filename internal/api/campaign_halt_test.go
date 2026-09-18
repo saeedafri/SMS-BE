@@ -72,6 +72,7 @@ type campaignBody struct {
 // The whole transition matrix in one table, because the rules are only worth
 // anything if every cell holds. Legal cells answer 200; everything else 409.
 func TestTheCampaignHaltTransitionMatrix(t *testing.T) {
+	t.Parallel()
 	legal := map[string]map[string]bool{
 		"pause":  {"sending": true, "queued": true, "scheduled": true},
 		"resume": {"paused": true},
@@ -104,6 +105,7 @@ func TestTheCampaignHaltTransitionMatrix(t *testing.T) {
 // "wrong state" — and an id that does not exist is a route that answers, not a
 // route that is missing.
 func TestHaltingACampaignThatIsNotYoursIs404BeforeAny409(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	mine := h.newAccount("owner")
 	theirs := h.newAccount("owner")
@@ -130,6 +132,7 @@ func TestHaltingACampaignThatIsNotYoursIs404BeforeAny409(t *testing.T) {
 }
 
 func TestPauseSetsPausedAtAndResumeClearsIt(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	campaign := h.seedCampaign(acct, "sending")
@@ -164,6 +167,7 @@ func TestPauseSetsPausedAtAndResumeClearsIt(t *testing.T) {
 // Cancel while paused: both instants stand, and that is legal. The earlier one
 // is the campaign's real stop time, which is why pausedAt is not cleared.
 func TestCancellingAPausedCampaignKeepsBothInstants(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	campaign := h.seedCampaign(acct, "paused")
@@ -192,6 +196,7 @@ func TestCancellingAPausedCampaignKeepsBothInstants(t *testing.T) {
 // Two halts arriving together must not both succeed at deciding the campaign's
 // fate. Exactly one 200; the rest 409.
 func TestConcurrentHaltsResolveToExactlyOneWinner(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	campaign := h.seedCampaign(acct, "sending")
@@ -229,6 +234,7 @@ func TestConcurrentHaltsResolveToExactlyOneWinner(t *testing.T) {
 // The three fields the contract made required. Always emitted, null when unset:
 // omitempty on any of them breaks the generated client.
 func TestEveryCampaignCarriesTheHaltFieldsEvenWhenUnset(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	h.seedCampaign(acct, "queued")
@@ -269,6 +275,7 @@ func TestEveryCampaignCarriesTheHaltFieldsEvenWhenUnset(t *testing.T) {
 // queued. They were never dispatched, never charged, and the funnel renders
 // queued and cancelled in the same track.
 func TestACancelledCampaignReportsItsUndispatchedRecipientsAsCancelled(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	campaign := h.seedCampaign(acct, "sending") // seeded with recipients = 100
@@ -300,6 +307,7 @@ func (h *harness) nextSenderSeq() int {
 // action it read "This campaign cannot be canceld", which shipped to production
 // before anyone said it out loud.
 func TestTheHaltConflictMessageIsSpelledCorrectly(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	// Terminal, so all three actions conflict.

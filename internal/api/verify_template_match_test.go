@@ -105,6 +105,7 @@ const acmeCopy = "{{code}} is your Acme login code. Valid 5 min."
 
 // Ask 40. India, and the sender's only approved template is unrelated.
 func TestAServiceWhoseCopyMatchesNothingIsNotLive(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -113,6 +114,7 @@ func TestAServiceWhoseCopyMatchesNothingIsNotLive(t *testing.T) {
 }
 
 func TestAServiceWhoseCopyMatchesIsLive(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -128,6 +130,7 @@ func TestAServiceWhoseCopyMatchesIsLive(t *testing.T) {
 // The 249 fillers are newer than the match, so in newest-first order the match
 // is the 250th template: past any first page.
 func TestTheMatchScansEveryApprovedTemplate(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -150,6 +153,7 @@ func TestTheMatchScansEveryApprovedTemplate(t *testing.T) {
 }
 
 func TestAnotherSendersTemplateIsNotAMatch(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -172,6 +176,7 @@ func TestAnotherSendersTemplateIsNotAMatch(t *testing.T) {
 // rest") — so "Your code is {{code}}" against "... click here" is a match on the
 // send path, and reporting otherwise would disagree with it.
 func TestAMatchIsAnchored(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -183,6 +188,7 @@ func TestAMatchIsAnchored(t *testing.T) {
 // Ask 40. A fixed digit beside the variable matches one code in ten. Two
 // renderings that share no digit must both match.
 func TestADigitBesideTheCodeIsNotAMatch(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -191,6 +197,7 @@ func TestADigitBesideTheCodeIsNotAMatch(t *testing.T) {
 }
 
 func TestAUSChannelRequiresNoTemplate(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	requireState(t, h.otpServiceWith(tenant, h.usSender(tenant), acmeCopy), false, "", "live")
@@ -199,6 +206,7 @@ func TestAUSChannelRequiresNoTemplate(t *testing.T) {
 // Ask 40, a regression guard: a US sender needs no template, so a verification
 // without one still sends once the send path decides through matchOTPTemplate.
 func TestAUSVerificationWithNoTemplateStillSends(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	h.appendTopup(tenant, "USD", 1_000_000)
@@ -211,6 +219,7 @@ func TestAUSVerificationWithNoTemplateStillSends(t *testing.T) {
 
 // Ask 40. The 422 says why as data, and the verification is dead.
 func TestAnUnsendableVerificationSaysWhyAsData(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -239,6 +248,7 @@ func TestAnUnsendableVerificationSaysWhyAsData(t *testing.T) {
 
 // Ask 40. The service's matchedTemplate is the template the send path uses.
 func TestTheServiceAndTheSendAgree(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		template string // registered on the sender; empty for none

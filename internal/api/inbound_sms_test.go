@@ -63,6 +63,7 @@ func eventually(t *testing.T, what string, check func() bool) {
 }
 
 func TestAnSMSReplyAppearsInTheInbox(t *testing.T) {
+	t.Parallel()
 	h, smsc, tenant, header := inboundHarness(t)
 	from := fmt.Sprintf("9198765%05d", rand.Intn(100000))
 
@@ -88,6 +89,7 @@ func TestAnSMSReplyAppearsInTheInbox(t *testing.T) {
 }
 
 func TestStopSuppressesTheNumberAndTheNextSendIsRefused(t *testing.T) {
+	t.Parallel()
 	h, smsc, tenant, header := inboundHarness(t)
 	suffix := rand.Intn(100000)
 	from := fmt.Sprintf("9198765%05d", suffix)
@@ -119,6 +121,7 @@ func TestStopSuppressesTheNumberAndTheNextSendIsRefused(t *testing.T) {
 
 // An ordinary reply is not an opt-out.
 func TestAReplyThatIsNotAStopKeywordDoesNotSuppress(t *testing.T) {
+	t.Parallel()
 	h, smsc, tenant, header := inboundHarness(t)
 	from := fmt.Sprintf("9198765%05d", rand.Intn(100000))
 
@@ -133,6 +136,7 @@ func TestAReplyThatIsNotAStopKeywordDoesNotSuppress(t *testing.T) {
 
 // A reply to a header no tenant holds is logged and acknowledged; the bind stays up.
 func TestAReplyToAnUnknownHeaderIsAcknowledgedAndLogged(t *testing.T) {
+	t.Parallel()
 	h, smsc, _, _ := inboundHarness(t)
 	before := smsc.acks.Load()
 

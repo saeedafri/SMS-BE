@@ -38,6 +38,7 @@ func (h *harness) seedTemplateNamed(tenant account, name string) {
 }
 
 func TestCatalogueListsFilterTheCollectionRatherThanThePage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

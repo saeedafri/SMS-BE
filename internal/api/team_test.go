@@ -19,6 +19,7 @@ func listTeam(t *testing.T, h *harness, token string) gen.TeamMemberPage {
 }
 
 func TestTeamListsTheOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -46,6 +47,7 @@ func TestTeamListsTheOwner(t *testing.T) {
 }
 
 func TestTeamForbiddenForMemberRole(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("member")
 
@@ -59,6 +61,7 @@ func TestTeamForbiddenForMemberRole(t *testing.T) {
 }
 
 func TestInviteCreatesAPendingMember(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	invitee := "invitee-" + acct.TenantID.String()[:8] + "@example.test"
@@ -93,6 +96,7 @@ func TestInviteCreatesAPendingMember(t *testing.T) {
 }
 
 func TestInviteRejectsSomeoneAlreadyOnTheTeam(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -106,6 +110,7 @@ func TestInviteRejectsSomeoneAlreadyOnTheTeam(t *testing.T) {
 // An admin promoting someone to owner would be an escalation past their own
 // level, so only an owner may do it.
 func TestOnlyAnOwnerCanCreateAnotherOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	admin := h.newAccount("admin")
 	invitee := "escalate-" + admin.TenantID.String()[:8] + "@example.test"
@@ -121,6 +126,7 @@ func TestOnlyAnOwnerCanCreateAnotherOwner(t *testing.T) {
 // Demoting the only owner would leave nobody able to promote anyone — an
 // unrecoverable state, so it must be refused rather than repaired later.
 func TestCannotDemoteTheLastOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -141,6 +147,7 @@ func TestCannotDemoteTheLastOwner(t *testing.T) {
 }
 
 func TestCannotRemoveTheLastOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -154,6 +161,7 @@ func TestCannotRemoveTheLastOwner(t *testing.T) {
 }
 
 func TestDemotingAnOwnerIsAllowedWhenAnotherExists(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	second := "second-owner-" + acct.TenantID.String()[:8] + "@example.test"
@@ -180,6 +188,7 @@ func TestDemotingAnOwnerIsAllowedWhenAnotherExists(t *testing.T) {
 // Removing someone must log them out at once, not whenever their token
 // happens to expire.
 func TestRemovingAMemberRevokesTheirSessions(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	victim := h.newAccount("member")
@@ -209,6 +218,7 @@ func TestRemovingAMemberRevokesTheirSessions(t *testing.T) {
 }
 
 func TestTeamOperationsCannotReachAnotherTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	attacker := h.newAccount("owner")
 	victim := h.newAccount("owner")
@@ -239,6 +249,7 @@ func TestTeamOperationsCannotReachAnotherTenant(t *testing.T) {
 // the same privilege escalation with one extra step — and the kind of gap that
 // survives review precisely because the neighbouring endpoint is tested.
 func TestAnAdminCannotPromoteAnExistingMemberToOwner(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	admin := h.newAccount("admin")
 	member := h.newAccount("member")

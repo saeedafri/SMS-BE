@@ -52,6 +52,7 @@ func (h *harness) invoiceIDs(acct account) []string {
 // Ask 38. Every line the invoice detail serves is in the contract: channel null
 // or a ChannelId, quantity at least 1, and no per-campaign fields.
 func TestAnInvoiceLineIsInContract(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	h.seedLastMonthDelivered(acct.TenantID, 3, 1, 12)
@@ -88,6 +89,7 @@ func TestAnInvoiceLineIsInContract(t *testing.T) {
 // Ask 38. A delivered message whose cost is not a whole number of segments is a
 // pricing defect. That tenant's invoice is not issued, and the error names it.
 func TestAMispricedMessageBlocksTheInvoice(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	h.seedLastMonthDelivered(acct.TenantID, 1, 2, 25)
@@ -104,6 +106,7 @@ func TestAMispricedMessageBlocksTheInvoice(t *testing.T) {
 // Ask 38. Reconciliation is enforced by the database, not by the one function
 // that writes lines today.
 func TestTheLineReconcilesConstraintHolds(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	invoiceID := seedInvoice(t, h, acct.TenantID, "INR", 100)

@@ -94,10 +94,23 @@ func TestOperatorSearchFiltersTheCollectionRatherThanThePage(t *testing.T) {
 	}
 
 	// Empty q filters nothing, rather than matching the empty string.
-	blank, none := get("?q="), get("")
-	if blank.Total != none.Total {
-		t.Errorf("q= total %d != unfiltered total %d — an empty search must not filter",
-			blank.Total, none.Total)
+	//
+	// Two reads of a collection every other test is adding to, so a single
+	// disagreement means a tenant was created between them, not that the empty
+	// search filtered. The bug this guards against is not subtle — an empty q
+	// treated as a literal match returns nearly zero — so it survives a retry,
+	// while a one-row race does not. Compared on a retry rather than by
+	// allowing a tolerance, because "within N" would also pass the real bug on
+	// a small fixture.
+	var blank, none page
+	agreed := false
+	for attempt := 0; attempt < 3 && !agreed; attempt++ {
+		blank, none = get("?q="), get("")
+		agreed = blank.Total == none.Total
+	}
+	if !agreed {
+		t.Errorf("q= total %d != unfiltered total %d over three reads — "+
+			"an empty search must not filter", blank.Total, none.Total)
 	}
 
 	// A match on nothing is an empty 200, not a 404.

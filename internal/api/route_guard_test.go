@@ -246,6 +246,7 @@ func (h *harness) routePriority(id string) int {
 // "enabled", a word routes have not held since migration 00029 renamed it to
 // "active", so it excluded every route in the table.
 func TestTheRateCardReportsACostReferenceFromActiveRoutes(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	id := h.seedRoute("registered", 92)

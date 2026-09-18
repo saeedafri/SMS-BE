@@ -10,6 +10,7 @@ import (
 // The dashboard layout fetches all three of these on every render and throws
 // on any non-2xx, so these three passing is what makes any screen render.
 func TestDashboardLayoutEndpointsAnswerForANewTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -65,6 +66,7 @@ func TestDashboardLayoutEndpointsAnswerForANewTenant(t *testing.T) {
 }
 
 func TestDashboardLayoutEndpointsRequireAuthentication(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for _, path := range []string{"/v1/wallet/balances", "/v1/alerts", "/v1/conversations"} {
 		if res := h.do(http.MethodGet, path, "", nil); res.Code != http.StatusUnauthorized {

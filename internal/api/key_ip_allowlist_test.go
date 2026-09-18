@@ -9,6 +9,7 @@ import (
 // used from outside it is refused; adding the caller's range lets it through,
 // immediately rather than after a cache expires.
 func TestAnApiKeyIsRefusedFromOutsideItsIpAllowlist(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	secret := h.apiKey(tenant, []string{"read:messages"})

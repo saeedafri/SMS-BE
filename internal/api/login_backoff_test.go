@@ -21,6 +21,7 @@ func lockKey(scope, email string) string {
 }
 
 func TestThreeWrongPasswordsLockFor30SecondsThenEachLockDoubles(t *testing.T) {
+	t.Parallel()
 	for _, surface := range []struct{ scope, path string }{
 		{"tenant", "/v1/auth/login"}, {"operator", "/v1/operator/login"},
 	} {
@@ -65,6 +66,7 @@ func TestThreeWrongPasswordsLockFor30SecondsThenEachLockDoubles(t *testing.T) {
 
 // A lock is a lock: the right password during it is refused too.
 func TestTheRightPasswordDuringA30SecondLockIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	if h.server.Redis == nil {
 		t.Skip("REDIS_URL not set")

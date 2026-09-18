@@ -33,6 +33,7 @@ func topUp(t *testing.T, h *harness, token, currency string, amount int, methodI
 }
 
 func TestNewTenantHasNoBalancesOrLedger(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -52,6 +53,7 @@ func TestNewTenantHasNoBalancesOrLedger(t *testing.T) {
 }
 
 func TestTopUpCreatesTheWalletAndCreditsIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	card := addCard(t, h, acct.Token, "visa", "4242")
@@ -79,6 +81,7 @@ func TestTopUpCreatesTheWalletAndCreditsIt(t *testing.T) {
 }
 
 func TestTopUpValidatesAmountAndPaymentMethod(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	card := addCard(t, h, acct.Token, "visa", "4242")
@@ -118,6 +121,7 @@ func TestTopUpValidatesAmountAndPaymentMethod(t *testing.T) {
 // notices until a wallet runs dry, so exactly one default must hold at all
 // times.
 func TestExactlyOneDefaultPaymentMethodIsMaintained(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -179,6 +183,7 @@ func assertExactlyOneDefault(t *testing.T, h *harness, token, wantDefault string
 }
 
 func TestAddPaymentMethodValidatesLast4(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -194,6 +199,7 @@ func TestAddPaymentMethodValidatesLast4(t *testing.T) {
 // Enabling auto-recharge with nothing to charge would fail at the worst
 // possible moment — when the wallet has just run dry mid-campaign.
 func TestAutoRechargeRequiresAPaymentMethodWhenEnabled(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -228,6 +234,7 @@ func TestAutoRechargeRequiresAPaymentMethodWhenEnabled(t *testing.T) {
 }
 
 func TestAutoRechargeCanBeDisabledWithoutAPaymentMethod(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -241,6 +248,7 @@ func TestAutoRechargeCanBeDisabledWithoutAPaymentMethod(t *testing.T) {
 }
 
 func TestWalletMutationsAreForbiddenForMembers(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	member := h.newAccount("member")
@@ -269,6 +277,7 @@ func TestWalletMutationsAreForbiddenForMembers(t *testing.T) {
 }
 
 func TestWalletIsTenantScoped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	other := h.newAccount("owner")
@@ -299,6 +308,7 @@ func TestWalletIsTenantScoped(t *testing.T) {
 // Spending must show up as a debit whose running balance is right, since the
 // ledger is what a customer reconciles their statement against.
 func TestLedgerShowsRunningBalanceAcrossEntries(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	card := addCard(t, h, acct.Token, "visa", "4242")

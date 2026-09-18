@@ -25,6 +25,7 @@ import (
 //
 // Asserted as a pair so the two cannot drift apart again.
 func TestDecidingASenderThatDoesNotExistIs404WhicheverDecisionItIs(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	missing := "00000000-0000-0000-0000-000000000000"
@@ -63,6 +64,7 @@ func TestDecidingASenderThatDoesNotExistIs404WhicheverDecisionItIs(t *testing.T)
 // ledger that is the number a customer actually wants.
 
 func TestTheWalletLedgerReportsATotalBeyondThePage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -98,6 +100,7 @@ func TestTheWalletLedgerReportsATotalBeyondThePage(t *testing.T) {
 // currency that reports the count of every currency is a footer that disagrees
 // with the rows above it.
 func TestTheLedgerTotalFollowsTheCurrencyFilter(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -128,6 +131,7 @@ func TestTheLedgerTotalFollowsTheCurrencyFilter(t *testing.T) {
 }
 
 func TestTheInvoiceListReportsATotal(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

@@ -20,6 +20,7 @@ import (
 // operator's filters is worse than no export, because nobody finds out until
 // they open the file.
 func TestTheAuditExportHonoursTheSameFiltersAsTheList(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	ctx := context.Background()

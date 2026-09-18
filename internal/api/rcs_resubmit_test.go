@@ -12,6 +12,7 @@ import (
 // the new submission replaces the rejected registration. While a registration
 // is pending it cannot be submitted a second time.
 func TestATemplateTheCarrierRejectedCanBeSubmittedAgain(t *testing.T) {
+	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel", issued: "01kresubmitfirst000000000a"}
 	h := newCarrierHarness(t, carrier)
 	tenant := h.newAccount("owner")

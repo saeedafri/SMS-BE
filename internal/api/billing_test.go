@@ -33,6 +33,7 @@ func seedInvoice(t *testing.T, h *harness, tenantID uuid.UUID, currency string, 
 }
 
 func TestNewTenantHasNoInvoices(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -54,6 +55,7 @@ func TestNewTenantHasNoInvoices(t *testing.T) {
 // country's tax rules are modelled, so everything else is zero rather than
 // guessed at.
 func TestInvoiceTaxIsGSTForINRAndZeroElsewhere(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -98,6 +100,7 @@ func TestInvoiceTaxIsGSTForINRAndZeroElsewhere(t *testing.T) {
 }
 
 func TestInvoicesAreTenantScoped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	other := h.newAccount("owner")
@@ -117,6 +120,7 @@ func TestInvoicesAreTenantScoped(t *testing.T) {
 }
 
 func TestBillingIsForbiddenForMembers(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	member := h.newAccount("member")
 
@@ -130,6 +134,7 @@ func TestBillingIsForbiddenForMembers(t *testing.T) {
 }
 
 func TestUsageReturnsAllThreeGroupings(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -161,6 +166,7 @@ func TestUsageReturnsAllThreeGroupings(t *testing.T) {
 // The same superseded-row hazard as the journey test below applies: WhatsApp's
 // message is written twice, delivered then read, and must still count once.
 func TestUsageSplitsSpendAcrossTheChannelsThatEarnedIt(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 
@@ -248,6 +254,7 @@ func TestUsageSplitsSpendAcrossTheChannelsThatEarnedIt(t *testing.T) {
 // So the two send steps below each get a superseded 'sent' row alongside their
 // final 'delivered' one, and the answer must still be 2.
 func TestJourneyMessageCountIsNotMultipliedByItsSteps(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 

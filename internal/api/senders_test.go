@@ -21,6 +21,7 @@ func createSender(t *testing.T, h *harness, token, header, channel, country stri
 }
 
 func TestCreateSenderStartsPendingReview(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -47,6 +48,7 @@ func TestCreateSenderStartsPendingReview(t *testing.T) {
 }
 
 func TestCreateSenderRejectsDuplicatesButAllowsOtherChannels(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	createSender(t, h, acct.Token, "DUPHDR", "SMS", "IN")
@@ -73,6 +75,7 @@ func TestCreateSenderRejectsDuplicatesButAllowsOtherChannels(t *testing.T) {
 }
 
 func TestCreateSenderValidatesCountryAndHeader(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -85,6 +88,7 @@ func TestCreateSenderValidatesCountryAndHeader(t *testing.T) {
 }
 
 func TestSenderEndpointsRespectRoleAndTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	member := h.newAccount("member")
@@ -136,6 +140,7 @@ func TestSenderEndpointsRespectRoleAndTenant(t *testing.T) {
 }
 
 func TestGetSenderReturns404ForAnUnknownId(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -147,6 +152,7 @@ func TestGetSenderReturns404ForAnUnknownId(t *testing.T) {
 }
 
 func TestVoiceVerificationRoundTrip(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "+14155550100", "VOICE", "US")
@@ -218,6 +224,7 @@ func TestVoiceVerificationRoundTrip(t *testing.T) {
 // A code must not be replayable once spent — otherwise anyone who observed it
 // once could re-verify the sender later.
 func TestVoiceCodeCannotBeReplayed(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "+14155550111", "VOICE", "US")
@@ -239,6 +246,7 @@ func TestVoiceCodeCannotBeReplayed(t *testing.T) {
 }
 
 func TestVoiceCodeBeforeAnyCallIsRejected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "+14155550122", "VOICE", "US")
@@ -251,6 +259,7 @@ func TestVoiceCodeBeforeAnyCallIsRejected(t *testing.T) {
 }
 
 func TestSenderEndpointsRequireAuthentication(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if res := h.do(http.MethodGet, "/v1/sender-ids", "", nil); res.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body = %s", res.Code, res.Body)

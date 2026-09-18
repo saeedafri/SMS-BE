@@ -9,6 +9,7 @@ import (
 )
 
 func TestCreateTemplateDerivesVariablesAndInheritsFromTheSender(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "TPLHDR", "SMS", "IN")
@@ -42,6 +43,7 @@ func TestCreateTemplateDerivesVariablesAndInheritsFromTheSender(t *testing.T) {
 }
 
 func TestCreateTemplateRejectsMalformedVariables(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "BADVAR", "SMS", "IN")
@@ -59,6 +61,7 @@ func TestCreateTemplateRejectsMalformedVariables(t *testing.T) {
 // India has disallowed public URL shorteners under DLT since Oct 2024. This is
 // the authoritative check — the frontend validating too is a convenience.
 func TestIndiaTemplateRejectsShortenedCtaUrl(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "CTAHDR", "SMS", "IN")
@@ -83,6 +86,7 @@ func TestIndiaTemplateRejectsShortenedCtaUrl(t *testing.T) {
 // The same URL under a US sender must be accepted: 10DLC carries no shortener
 // rule, and the regime — not the handler — decides.
 func TestUSTemplateAllowsShortenedCtaUrl(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "USHDR", "SMS", "US")
@@ -100,6 +104,7 @@ func TestUSTemplateAllowsShortenedCtaUrl(t *testing.T) {
 // exists somewhere. 422 says only "that sender does not exist" from the
 // caller's point of view, which is true.
 func TestTemplateCannotReferenceAnotherTenantsSender(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	other := h.newAccount("owner")
@@ -117,6 +122,7 @@ func TestTemplateCannotReferenceAnotherTenantsSender(t *testing.T) {
 }
 
 func TestCreateTemplateRejectsDuplicateNames(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "DUPTPL", "SMS", "IN")
@@ -132,6 +138,7 @@ func TestCreateTemplateRejectsDuplicateNames(t *testing.T) {
 }
 
 func TestTemplateListAndGetAreTenantScoped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	other := h.newAccount("owner")
@@ -159,6 +166,7 @@ func TestTemplateListAndGetAreTenantScoped(t *testing.T) {
 }
 
 func TestTemplateEndpointsRespectRole(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	member := h.newAccount("member")
@@ -175,6 +183,7 @@ func TestTemplateEndpointsRespectRole(t *testing.T) {
 // A template with no body still needs `variables` present as an empty array —
 // the contract makes it required, and the UI maps over it.
 func TestTemplateWithoutABodyStillReportsEmptyVariables(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	created := h.do(http.MethodPost, "/v1/sender-ids", acct.Token, map[string]string{

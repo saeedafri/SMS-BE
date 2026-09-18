@@ -10,6 +10,7 @@ import (
 )
 
 func TestAMonthsDeliveredUsageBecomesOneGSTInvoicePerCurrency(t *testing.T) {
+	t.Parallel()
 	tenant := uuid.New()
 	lines := invoiceLines([]store.BilledUsage{
 		{TenantID: tenant, Channel: "SMS", Country: "IN", Currency: "INR", Quantity: 8000, UnitMinor: 12, AmountMinor: 96000},

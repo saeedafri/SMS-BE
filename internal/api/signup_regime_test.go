@@ -16,6 +16,7 @@ import (
 // no registration objects has nothing to approve a sender against, so the
 // customer finds out after onboarding instead of before signing up.
 func TestSignupRefusesACountryWeDoNotOperateIn(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	for _, country := range []string{"GB", "AE"} {
@@ -34,6 +35,7 @@ func TestSignupRefusesACountryWeDoNotOperateIn(t *testing.T) {
 }
 
 func TestSignupStillWorksWhereWeDoOperate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	response := h.do(http.MethodPost, "/v1/auth/signup", "", map[string]any{
 		"fullName": "Real Person", "orgName": "Real Org",

@@ -12,6 +12,7 @@ import (
 // The operator console sees every customer, and it was reachable from the whole
 // internet behind one password that had been a constant in the repository.
 func TestTheOperatorConsoleIsUnreachableOffTheAllowlist(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	allowlist, err := api.ParseIPAllowlist("198.51.100.0/24, 203.0.113.7")
 	if err != nil {
@@ -56,6 +57,7 @@ func TestTheOperatorConsoleIsUnreachableOffTheAllowlist(t *testing.T) {
 // An empty allowlist is no allowlist. That is the development default, and the
 // process warns about it at startup rather than pretending it is configured.
 func TestAnEmptyAllowlistRestrictsNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	allowlist, err := api.ParseIPAllowlist("")
 	if err != nil {
@@ -77,6 +79,7 @@ func TestAnEmptyAllowlistRestrictsNothing(t *testing.T) {
 // A typo must stop the process, not quietly drop a range and leave a hole that
 // looks closed.
 func TestAMalformedAllowlistIsAnError(t *testing.T) {
+	t.Parallel()
 	for _, raw := range []string{"not-an-address", "198.51.100.0/33", "198.51.100.1, oops"} {
 		if _, err := api.ParseIPAllowlist(raw); err == nil {
 			t.Errorf("ParseIPAllowlist(%q) accepted a malformed entry", raw)

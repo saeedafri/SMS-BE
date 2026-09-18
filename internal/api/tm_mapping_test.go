@@ -26,6 +26,7 @@ func fileMapping(h *harness, token string) response {
 }
 
 func TestTheMappingNeedsAnApprovedPrincipalEntity(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -42,6 +43,7 @@ func TestTheMappingNeedsAnApprovedPrincipalEntity(t *testing.T) {
 }
 
 func TestAMappingIsFiledWithNoFieldsApprovedWithNoIdAndOnlyOnce(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -88,6 +90,7 @@ func TestAMappingIsFiledWithNoFieldsApprovedWithNoIdAndOnlyOnce(t *testing.T) {
 }
 
 func TestAHeaderCannotBeFiledBeforeTheMapping(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	h.operatorApprove(h.operatorToken(), h.createRegistration(acct.Token))
@@ -103,6 +106,7 @@ func TestAHeaderCannotBeFiledBeforeTheMapping(t *testing.T) {
 
 // A second entity-tier record must not change which PE id an SMS carries.
 func TestAnApprovedMappingLeavesThePrincipalEntityIdOnEverySMS(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()

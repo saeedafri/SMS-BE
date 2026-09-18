@@ -22,6 +22,7 @@ import (
 // channels and one bad one must be refused whole, or the caller is told nothing
 // went wrong while a fifth of what it sent was silently unusable.
 func TestAnUnknownConsentKeyIsRefusedRatherThanStored(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

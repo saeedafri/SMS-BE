@@ -30,6 +30,7 @@ import (
 // audience for this half returns an empty page; one that reads the log returns
 // all of them.
 func TestDispatchedRecipientsAreReadFromTheLogRatherThanTodaysConsent(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	listID, campaignID := h.seedOptedOutCampaign(acct, "log over consent")
@@ -89,6 +90,7 @@ func TestDispatchedRecipientsAreReadFromTheLogRatherThanTodaysConsent(t *testing
 // empty by definition — so the offset the second block is asked for never
 // mattered and a mutation that dropped it entirely stayed green.
 func TestRecipientPagesWalkBothHalvesWithoutOverlap(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 
@@ -162,6 +164,7 @@ func TestRecipientPagesWalkBothHalvesWithoutOverlap(t *testing.T) {
 // response, which made "no such campaign" indistinguishable from "a campaign
 // with nothing to show".
 func TestUnknownCampaignRecipientsIsNotAnEmptyPage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

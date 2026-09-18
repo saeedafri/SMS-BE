@@ -19,6 +19,7 @@ import "testing"
 // qualify, because that is the direction the bug ran in — a false positive here
 // hands over a real person's account, while a false negative only breaks a test.
 func TestOnlyFixtureAddressesGetTheFixedDevTokens(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		email   string
 		fixture bool
@@ -58,6 +59,7 @@ func TestOnlyFixtureAddressesGetTheFixedDevTokens(t *testing.T) {
 
 // Case must not decide whether an account can be taken over.
 func TestFixtureAddressIgnoresCase(t *testing.T) {
+	t.Parallel()
 	for _, email := range []string{"Founder@ACME.TEST", "OPS@Relay.Internal"} {
 		if !isFixtureAddress(email) {
 			t.Fatalf("isFixtureAddress(%q) = false, want true", email)

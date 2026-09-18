@@ -13,6 +13,7 @@ import (
 // 2026-08-21: a stranger could self-register, and at the time could then fund
 // their own wallet for nothing and send. This is the other half.
 func TestSignupIsGatedByAnInviteCode(t *testing.T) {
+	t.Parallel()
 	h := newHarnessWithInviteCode(t, "let-me-in-please")
 
 	body := map[string]any{
@@ -46,6 +47,7 @@ func TestSignupIsGatedByAnInviteCode(t *testing.T) {
 // An unset code leaves signup open, which is the right default for a local
 // instance and is what every other test in this package relies on.
 func TestSignupIsOpenWhenNoCodeIsConfigured(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	res := h.do(http.MethodPost, "/v1/auth/signup", "", map[string]any{
 		"fullName": "Open Signup",

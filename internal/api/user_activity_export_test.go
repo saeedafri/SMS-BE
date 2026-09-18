@@ -19,6 +19,7 @@ import (
 // filter. That is what catches an export quietly reduced to a page, which is
 // the failure a walk of the file cannot see.
 func TestTheUserActivityExportMatchesThePagedEndpoint(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")

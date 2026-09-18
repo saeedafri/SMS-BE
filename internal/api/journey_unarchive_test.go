@@ -66,6 +66,7 @@ func (h *harness) post(token, path string) int {
 
 // Case 1: never activated -> draft, activatedAt still null.
 func TestUnarchivingAJourneyThatNeverRanReturnsItToDraft(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.newJourney(tenant.Token, "Never ran")
@@ -98,6 +99,7 @@ func TestUnarchivingAJourneyThatNeverRanReturnsItToDraft(t *testing.T) {
 
 // Case 2: previously activated -> paused, activatedAt byte-identical.
 func TestUnarchivingAJourneyThatRanReturnsItToPausedAndKeepsActivatedAt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.newJourney(tenant.Token, "Already ran")
@@ -133,6 +135,7 @@ func TestUnarchivingAJourneyThatRanReturnsItToPausedAndKeepsActivatedAt(t *testi
 
 // Cases 3, 4, 5: every non-archived status is refused, and says which rule.
 func TestOnlyAnArchivedJourneyCanBeUnarchived(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 
@@ -172,6 +175,7 @@ func TestOnlyAnArchivedJourneyCanBeUnarchived(t *testing.T) {
 
 // Case 6: unknown id.
 func TestUnarchivingAnUnknownJourneyIsNotFound(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	res := h.do(http.MethodPost,
@@ -185,6 +189,7 @@ func TestUnarchivingAnUnknownJourneyIsNotFound(t *testing.T) {
 // Case 7: another tenant's journey is NOT FOUND, never forbidden — a 403 would
 // confirm the journey exists.
 func TestAnotherTenantsArchivedJourneyIsNotFoundNotForbidden(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	stranger := h.newAccount("owner")
@@ -206,6 +211,7 @@ func TestAnotherTenantsArchivedJourneyIsNotFoundNotForbidden(t *testing.T) {
 
 // Case 8: no bearer token.
 func TestUnarchivingWithoutATokenIsUnauthenticated(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	res := h.do(http.MethodPost,
 		"/v1/automation/journeys/00000000-0000-0000-0000-000000000000/unarchive", "", nil)
@@ -216,6 +222,7 @@ func TestUnarchivingWithoutATokenIsUnauthenticated(t *testing.T) {
 
 // Case 9 and 10: not idempotent, and the round trip is clean.
 func TestUnarchiveIsNotIdempotentAndRoundTripsCleanly(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.newJourney(tenant.Token, "Round trip")
@@ -241,6 +248,7 @@ func TestUnarchiveIsNotIdempotentAndRoundTripsCleanly(t *testing.T) {
 
 // Case 11: a restored journey is genuinely usable again, not just relabelled.
 func TestAJourneyRestoredToPausedCanBeResumed(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.newJourney(tenant.Token, "Resumable")
@@ -260,6 +268,7 @@ func TestAJourneyRestoredToPausedCanBeResumed(t *testing.T) {
 
 // Case 12: a journey restored to draft is editable again.
 func TestAJourneyRestoredToDraftCanBeEditedAgain(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.newJourney(tenant.Token, "Editable")

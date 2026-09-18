@@ -21,6 +21,7 @@ func randomIP() string {
 // account from another address is unaffected, and a success before the limit
 // resets the count.
 func TestRepeatedWrongPasswordsLockTheAccountForAWhile(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	if h.server.Redis == nil {
 		t.Skip("REDIS_URL not set")
@@ -52,6 +53,7 @@ func TestRepeatedWrongPasswordsLockTheAccountForAWhile(t *testing.T) {
 
 // Operators lock after three.
 func TestOperatorLoginLocksAfterThreeWrongPasswords(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	if h.server.Redis == nil {
 		t.Skip("REDIS_URL not set")

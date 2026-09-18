@@ -11,6 +11,7 @@ import (
 // P2-3. Contact.phoneSuppressed and emailSuppressed were declared and never set,
 // so the audience screen could not show who has opted out.
 func TestAContactShowsWhetherItsPhoneAndEmailAreSuppressed(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	ctx := context.Background()

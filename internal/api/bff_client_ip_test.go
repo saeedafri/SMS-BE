@@ -44,6 +44,7 @@ func (h *harness) loginFromBFF(socket, clientIP, token, email string) response {
 
 // Test 1: many users behind one BFF are not one IP.
 func TestManyUsersBehindTheDashboardAreNotOneAddress(t *testing.T) {
+	t.Parallel()
 	h := bffHarness(t)
 	socket := randomIP()
 	for i := 0; i < 20; i++ {
@@ -61,6 +62,7 @@ func TestManyUsersBehindTheDashboardAreNotOneAddress(t *testing.T) {
 
 // Test 2: one user behind the BFF is still one IP.
 func TestOneUserBehindTheDashboardIsStillLimited(t *testing.T) {
+	t.Parallel()
 	h := bffHarness(t)
 	client := randomIP()
 	for i := 0; i < 20; i++ {
@@ -73,6 +75,7 @@ func TestOneUserBehindTheDashboardIsStillLimited(t *testing.T) {
 
 // Tests 3 and 4: without the right token the header is ignored.
 func TestTheClientAddressHeaderNeedsTheBFFToken(t *testing.T) {
+	t.Parallel()
 	for name, token := range map[string]string{"no token": "", "wrong token": "not-the-token"} {
 		t.Run(name, func(t *testing.T) {
 			h := bffHarness(t)
@@ -90,6 +93,7 @@ func TestTheClientAddressHeaderNeedsTheBFFToken(t *testing.T) {
 
 // Test 5: a malformed address is ignored and the socket address counts.
 func TestAMalformedClientAddressFallsBackToTheSocket(t *testing.T) {
+	t.Parallel()
 	h := bffHarness(t)
 	socket := randomIP()
 	for i := 0; i < 20; i++ {
@@ -102,6 +106,7 @@ func TestAMalformedClientAddressFallsBackToTheSocket(t *testing.T) {
 
 // The feature is off when the server has no token, whatever the request sends.
 func TestNoServerTokenMeansNoBFFTrust(t *testing.T) {
+	t.Parallel()
 	h := bffHarness(t)
 	h.server.BFFClientIPToken = ""
 	socket := randomIP()

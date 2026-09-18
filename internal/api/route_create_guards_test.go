@@ -42,6 +42,7 @@ func routeBody(label string, extra map[string]any) map[string]any {
 // two rows carrying the same one in a corridor make the console ambiguous
 // exactly where an operator is choosing which path to disable.
 func TestASecondRouteWithTheSameLabelInACorridorIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	label := fmt.Sprintf("Videocon direct %d", rand.Int())
@@ -70,6 +71,7 @@ func TestASecondRouteWithTheSameLabelInACorridorIsRefused(t *testing.T) {
 // as a foreign key error, which the console can only show as "something went
 // wrong".
 func TestARouteNamingAConnectionThatDoesNotExistIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 

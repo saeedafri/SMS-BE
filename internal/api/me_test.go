@@ -9,6 +9,7 @@ import (
 )
 
 func TestGetMeReturnsEveryContractField(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -55,6 +56,7 @@ func TestGetMeReturnsEveryContractField(t *testing.T) {
 }
 
 func TestGetMeRejectsBadCredentials(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -79,6 +81,7 @@ func TestGetMeRejectsBadCredentials(t *testing.T) {
 // A revoked session must stop working immediately. This is the property that
 // justified opaque tokens over JWTs, so it gets a test of its own.
 func TestRevokedSessionIsRejectedImmediately(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -97,6 +100,7 @@ func TestRevokedSessionIsRejectedImmediately(t *testing.T) {
 }
 
 func TestExpiredSessionIsRejected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -112,6 +116,7 @@ func TestExpiredSessionIsRejected(t *testing.T) {
 }
 
 func TestUpdateMeChangesTheName(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -136,6 +141,7 @@ func TestUpdateMeChangesTheName(t *testing.T) {
 // The frontend's middleware gates whole areas on this role, and it fails
 // closed on a non-2xx. So a member's 403 has to be genuine, not cosmetic.
 func TestUpdateMeForbiddenForMemberRole(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("member")
 
@@ -149,6 +155,7 @@ func TestUpdateMeForbiddenForMemberRole(t *testing.T) {
 }
 
 func TestUpdateMeRejectsBlankName(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -164,6 +171,7 @@ func TestUpdateMeRejectsBlankName(t *testing.T) {
 }
 
 func TestUpdateTenantRenamesTheOrganisation(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("admin")
 
@@ -185,6 +193,7 @@ func TestUpdateTenantRenamesTheOrganisation(t *testing.T) {
 }
 
 func TestUpdateTenantForbiddenForMemberRole(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("member")
 
@@ -198,6 +207,7 @@ func TestUpdateTenantForbiddenForMemberRole(t *testing.T) {
 // this impossible, and this test is what proves the handler actually runs
 // scoped rather than reaching around it.
 func TestUpdateTenantCannotAffectAnotherTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	first := h.newAccount("owner")
 	second := h.newAccount("owner")

@@ -9,6 +9,7 @@ import (
 )
 
 func TestListPricingReturnsTheRateCard(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -32,6 +33,7 @@ func TestListPricingReturnsTheRateCard(t *testing.T) {
 }
 
 func TestEstimateMultipliesRecipientsBySegmentsByRate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -67,6 +69,7 @@ func TestEstimateMultipliesRecipientsBySegmentsByRate(t *testing.T) {
 // segment arithmetic the eventual charge will — an estimate that disagrees
 // with the invoice is exactly the opaque billing this product exists to fix.
 func TestEstimateScalesWithSegments(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -90,6 +93,7 @@ func TestEstimateScalesWithSegments(t *testing.T) {
 // doubles the bill. The estimate has to show that, or the user is surprised by
 // the invoice.
 func TestEstimateReflectsUCS2ReEncoding(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -124,6 +128,7 @@ func TestEstimateReflectsUCS2ReEncoding(t *testing.T) {
 // With an RCS→SMS fallback the contract models a range, because which
 // recipients get which channel depends on per-handset capability.
 func TestEstimateReturnsARangeWhenAFallbackIsPossible(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -152,6 +157,7 @@ func TestEstimateReturnsARangeWhenAFallbackIsPossible(t *testing.T) {
 }
 
 func TestEstimateRejectsAnUnpricedRoute(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -165,6 +171,7 @@ func TestEstimateRejectsAnUnpricedRoute(t *testing.T) {
 }
 
 func TestEstimateHandlesZeroRecipients(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

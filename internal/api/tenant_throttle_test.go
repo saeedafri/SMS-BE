@@ -24,6 +24,7 @@ func throttle(t *testing.T, h *harness, operator string, tenantID uuid.UUID, bod
 // what, which is the single most common reason to throttle anyone — honouring a
 // carrier's contracted TPS.
 func TestThrottleRecordsTheRateItApplied(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")
@@ -52,6 +53,7 @@ func TestThrottleRecordsTheRateItApplied(t *testing.T) {
 // the console reports a live ceiling on a tenant that no longer has one. This
 // walks both paths that exist rather than asserting one of them.
 func TestEveryTransitionOutOfThrottledClearsTheRate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 
@@ -91,6 +93,7 @@ func TestEveryTransitionOutOfThrottledClearsTheRate(t *testing.T) {
 // and an operator chasing a typo'd id would be told their rate was wrong. The
 // body here is invalid too, so the only way to pass is to check the id first.
 func TestAnUnknownTenantIsA404EvenWithAnInvalidRate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 
@@ -101,6 +104,7 @@ func TestAnUnknownTenantIsA404EvenWithAnInvalidRate(t *testing.T) {
 }
 
 func TestAnUnusableRateIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 
@@ -137,6 +141,7 @@ func TestAnUnusableRateIsRefused(t *testing.T) {
 // Re-throttling would silently overwrite the ceiling an earlier operator set,
 // without either of them seeing the other's number.
 func TestThrottlingAnAlreadyThrottledTenantIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")
@@ -163,6 +168,7 @@ func TestThrottlingAnAlreadyThrottledTenantIsRefused(t *testing.T) {
 // A rate limit on a suspended tenant is a number the console would display and
 // nothing would honour.
 func TestOnlyAnActiveTenantCanBeThrottled(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")
@@ -184,6 +190,7 @@ func TestOnlyAnActiveTenantCanBeThrottled(t *testing.T) {
 // keys silently, so a body carrying `status` would be accepted and the operator
 // would reasonably believe it had done something.
 func TestAThrottleBodyCannotSmuggleAStatusChange(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")
@@ -205,6 +212,7 @@ func TestAThrottleBodyCannotSmuggleAStatusChange(t *testing.T) {
 // "Throttled Acme" does not tell a later reader what ceiling was applied, which
 // is the only thing they will want to know.
 func TestTheAuditEntryNamesTheCeiling(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	operator := h.operatorToken()
 	acct := h.newAccount("owner")

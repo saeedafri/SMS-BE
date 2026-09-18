@@ -96,6 +96,7 @@ func statusKey(code int) string {
 // implements, in both a success and a failure shape, and validates each
 // response against openapi.json.
 func TestImplementedOperationsMatchTheContract(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	validate := newContractValidator(t)
 

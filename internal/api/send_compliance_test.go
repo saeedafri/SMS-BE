@@ -16,6 +16,7 @@ import (
 // charged, and came back "sent". The browser checks too, but a client-side rule
 // is a hint; anyone reading our own API docs could step around it.
 func TestASendCarryingABannedShortenerIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	sender := h.approvedSender(acct)
@@ -78,6 +79,7 @@ func TestASendCarryingABannedShortenerIsRefused(t *testing.T) {
 // into the regime's own remediation text and enforced nowhere, so this string
 // was accepted and sat in review looking like a real submission.
 func TestAnIndiaHeaderMustLookLikeADltHeader(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -121,6 +123,7 @@ func TestAnIndiaHeaderMustLookLikeADltHeader(t *testing.T) {
 // import, both of which are far less likely to be retried than a single OTP
 // whose response timed out.
 func TestARetriedSendWithTheSameKeyIsNotChargedTwice(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 	sender := h.approvedSender(acct)

@@ -31,6 +31,7 @@ func (h *harness) otpService(tenant account, sender string) string {
 // path under the customer's registered OTP template, checkable with the code
 // that went to the handset, and written to no log.
 func TestAVerificationSendsItsCodeAndNeverLogsIt(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -71,6 +72,7 @@ func TestAVerificationSendsItsCodeAndNeverLogsIt(t *testing.T) {
 // The caller must hear that, and the challenge must not stay open for a code
 // nobody received.
 func TestAVerificationThatCannotBeSentIsRefusedAndDead(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)

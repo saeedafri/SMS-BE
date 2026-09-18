@@ -20,6 +20,7 @@ func signupBody(email string) map[string]any {
 }
 
 func TestSignupCreatesTenantOwnerAndSession(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	email := "signup-owner@example.test"
 	h.trackTenant(email)
@@ -57,6 +58,7 @@ func TestSignupCreatesTenantOwnerAndSession(t *testing.T) {
 }
 
 func TestSignupRejectsDuplicateEmail(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	email := "dupe-owner@example.test"
 	h.trackTenant(email)
@@ -74,6 +76,7 @@ func TestSignupRejectsDuplicateEmail(t *testing.T) {
 }
 
 func TestSignupValidatesInput(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 
 	cases := []struct {
@@ -100,6 +103,7 @@ func TestSignupValidatesInput(t *testing.T) {
 }
 
 func TestLoginReturnsASession(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -132,6 +136,7 @@ func TestLoginReturnsASession(t *testing.T) {
 // differ in status or body, the login form becomes an account-enumeration
 // oracle.
 func TestLoginDoesNotRevealWhetherAnAccountExists(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -155,6 +160,7 @@ func TestLoginDoesNotRevealWhetherAnAccountExists(t *testing.T) {
 }
 
 func TestLogoutRevokesTheCallersSession(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -167,6 +173,7 @@ func TestLogoutRevokesTheCallersSession(t *testing.T) {
 }
 
 func TestListSessionsMarksExactlyOneCurrent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -202,6 +209,7 @@ func TestListSessionsMarksExactlyOneCurrent(t *testing.T) {
 }
 
 func TestRevokeSessionInvalidatesThatTokenOnly(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -242,6 +250,7 @@ func TestRevokeSessionInvalidatesThatTokenOnly(t *testing.T) {
 
 // Revoking by guessing another tenant's session id must reveal nothing.
 func TestRevokeSessionCannotTouchAnotherTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	victim := h.newAccount("owner")
 	attacker := h.newAccount("owner")
@@ -263,6 +272,7 @@ func TestRevokeSessionCannotTouchAnotherTenant(t *testing.T) {
 }
 
 func TestSessionEndpointsRequireAuthentication(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	if res := h.do(http.MethodGet, "/v1/sessions", "", nil); res.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /v1/sessions unauthenticated: status = %d, want 401", res.Code)
@@ -276,6 +286,7 @@ func TestSessionEndpointsRequireAuthentication(t *testing.T) {
 // Sanity check that the seeded password actually round-trips through login,
 // which the rest of these tests depend on.
 func TestSeededAccountCanLogIn(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("member")
 

@@ -54,6 +54,7 @@ func (h *harness) keyAllowlistedTo(cidr string) string {
 // harness's own peer is 192.0.2.1, which is not a proxy, so every header here is
 // text the caller wrote.
 func TestAHeaderCannotChooseTheCallersAddress(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	secret := h.keyAllowlistedTo("203.0.113.0/24")
 

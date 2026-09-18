@@ -25,6 +25,7 @@ var allWebhookEvents = []string{
 // The UI offers all of them, so an event the backend silently rejected — or
 // accepted and never recognised — would be a checkbox that does nothing.
 func TestEveryEventInTheCatalogueCanBeSubscribedTo(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -56,6 +57,7 @@ func TestEveryEventInTheCatalogueCanBeSubscribedTo(t *testing.T) {
 // A typo'd event is a subscription that silently never fires, which from the
 // customer's side is indistinguishable from a broken integration.
 func TestAnUnknownWebhookEventIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -79,6 +81,7 @@ func TestAnUnknownWebhookEventIsRefused(t *testing.T) {
 // unreachable endpoint still records the attempt, which is the behaviour a
 // customer debugging a missed event depends on.
 func TestAnInboundMessageIsDeliveredOnlyToSubscribers(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

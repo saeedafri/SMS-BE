@@ -25,6 +25,7 @@ import (
 //
 // The gap on production was 10,226 rows reachable by no filter at all.
 func TestEveryMessageStatusFilterPartitionsTheLog(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 

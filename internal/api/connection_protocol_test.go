@@ -57,6 +57,7 @@ func (h *harness) protocolConnection(operator string, protocol map[string]any) s
 // Ask 34 A1 §3.1. A required response field that is never filled compiles and
 // serves zeros. The defaults must be what a connection with no overrides reads.
 func TestAConnectionWithNoOverridesReadsTheDefaults(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	h.server.DLTChain = platformChain
 	operator := h.operatorToken()

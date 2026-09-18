@@ -22,6 +22,7 @@ import (
 // tenant's live and test keys are different collections, and a total that
 // counts both while the rows show one is wrong in a way every page agrees with.
 func TestDeveloperListsAnswerAPagedEnvelope(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	ctx := context.Background()

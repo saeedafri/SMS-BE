@@ -38,6 +38,7 @@ func importRows(t *testing.T, h *harness, token, listID string, rows []map[strin
 }
 
 func TestContactListLifecycle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -77,6 +78,7 @@ func TestContactListLifecycle(t *testing.T) {
 }
 
 func TestImportCreatesContactsAndCountsThem(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	list := createList(t, h, acct.Token, "Import target")
@@ -120,6 +122,7 @@ func TestImportCreatesContactsAndCountsThem(t *testing.T) {
 // Re-importing the same number updates rather than duplicating. A duplicate
 // contact means sending the same person twice and billing for both.
 func TestImportUpsertsRatherThanDuplicating(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	list := createList(t, h, acct.Token, "Upsert target")
@@ -143,6 +146,7 @@ func TestImportUpsertsRatherThanDuplicating(t *testing.T) {
 // A resubmitted import must not run twice — duplicate contacts mean duplicate
 // sends and duplicate charges, so this is a correctness control.
 func TestImportIsIdempotent(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	list := createList(t, h, acct.Token, "Idempotent target")
@@ -164,6 +168,7 @@ func TestImportIsIdempotent(t *testing.T) {
 // guessed from array position — the contract is explicit about this because
 // the client may have compacted the array while filtering.
 func TestImportReportsConflictsWithRealProvenance(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	list := createList(t, h, acct.Token, "Conflict target")
@@ -217,6 +222,7 @@ func TestImportReportsConflictsWithRealProvenance(t *testing.T) {
 // The product's core promise: someone who opted out stays out. A suppressed
 // number must never enter a sendable list.
 func TestImportSkipsSuppressedNumbers(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	list := createList(t, h, acct.Token, "Suppression target")
@@ -244,6 +250,7 @@ func TestImportSkipsSuppressedNumbers(t *testing.T) {
 }
 
 func TestSuppressionLifecycle(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -294,6 +301,7 @@ func TestSuppressionLifecycle(t *testing.T) {
 }
 
 func TestAudienceIsTenantScoped(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	owner := h.newAccount("owner")
 	other := h.newAccount("owner")
@@ -325,6 +333,7 @@ func TestAudienceIsTenantScoped(t *testing.T) {
 }
 
 func TestAudienceRequiresAuthentication(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	for _, path := range []string{"/v1/contact-lists", "/v1/contacts", "/v1/suppressions"} {
 		if res := h.do(http.MethodGet, path, "", nil); res.Code != http.StatusUnauthorized {

@@ -62,6 +62,7 @@ func inrBalance(t *testing.T, h *harness, token string) int64 {
 }
 
 func TestAnOperatorCreditsATenantAndTheTenantSeesTheMoney(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -108,6 +109,7 @@ func TestAnOperatorCreditsATenantAndTheTenantSeesTheMoney(t *testing.T) {
 
 // The reference is what makes the button safe to press twice.
 func TestTheSameReferenceIsCreditedOnlyOnce(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -127,6 +129,7 @@ func TestTheSameReferenceIsCreditedOnlyOnce(t *testing.T) {
 }
 
 func TestACreditOutsideTheRulesIsRefusedAndMovesNothing(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -163,6 +166,7 @@ func TestACreditOutsideTheRulesIsRefusedAndMovesNothing(t *testing.T) {
 }
 
 func TestOnlyAnOperatorCanCreditAndOnlyATenantThatExists(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	body := map[string]any{"currency": "INR", "amountMinor": 1000, "reference": fmt.Sprintf("UTR%d", rand.Int63())}
@@ -180,6 +184,7 @@ func TestOnlyAnOperatorCanCreditAndOnlyATenantThatExists(t *testing.T) {
 
 // An operator has to see the balance before deciding to credit, and after.
 func TestAnOperatorReadsATenantsBalances(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()

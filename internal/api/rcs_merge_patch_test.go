@@ -16,6 +16,7 @@ import (
 // indistinguishable from "change the phone number and leave everything else",
 // and there would be no way at all to empty an optional field once set.
 func TestClearingAnAgentFieldIsDistinctFromOmittingIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	h.approveRegistration(acct, "IN")
@@ -63,6 +64,7 @@ func TestClearingAnAgentFieldIsDistinctFromOmittingIt(t *testing.T) {
 // cleared the field while the record still held it. That is a success report
 // for something that did not happen, and it is a 422 now.
 func TestANullNameOrUseCaseIsRefusedRatherThanIgnored(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	h.approveRegistration(acct, "IN")

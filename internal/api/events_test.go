@@ -15,6 +15,7 @@ import (
 // point of this test is that neither case leaves the connection hanging open,
 // which is what an unauthenticated stream would look like from the client.
 func TestEventStreamRefusesAnonymousCallers(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	res := h.do(http.MethodGet, "/v1/events", "", nil)
 	if res.Code != http.StatusUnauthorized && res.Code != http.StatusServiceUnavailable {
@@ -28,6 +29,7 @@ func TestEventStreamRefusesAnonymousCallers(t *testing.T) {
 // Without this the test above passes just as happily against an endpoint that
 // refuses everyone, which proves nothing about who may listen.
 func TestEventStreamDoesNotRefuseAnAuthenticatedTenant(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	account := h.newAccount("owner")
 	res := h.do(http.MethodGet, "/v1/events", account.Token, nil)

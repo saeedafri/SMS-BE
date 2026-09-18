@@ -29,6 +29,7 @@ func newSender(t *testing.T, h *harness, token, header, channel, country string)
 
 // A typo in a header was permanent for the life of the account.
 func TestAnUnverifiedSenderCanBeCorrected(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := newSender(t, h, acct.Token, "ACMERT", "SMS", "IN")
@@ -47,6 +48,7 @@ func TestAnUnverifiedSenderCanBeCorrected(t *testing.T) {
 
 // An empty object asks for nothing and is not an error.
 func TestAnEmptyPatchIsANoOp(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := newSender(t, h, acct.Token, "NOOPHD", "SMS", "IN")
@@ -67,6 +69,7 @@ func TestAnEmptyPatchIsANoOp(t *testing.T) {
 // Changing it would leave the platform sending under a header no registry
 // approved.
 func TestAVerifiedSenderCannotBeEdited(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -88,6 +91,7 @@ func TestAVerifiedSenderCannotBeEdited(t *testing.T) {
 // displayName is a WhatsApp Business concept. Storing it on an SMS sender
 // records a field that channel has no meaning for.
 func TestDisplayNameIsWhatsAppOnly(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sms := newSender(t, h, acct.Token, "SMSHDR", "SMS", "IN")
@@ -110,6 +114,7 @@ func TestDisplayNameIsWhatsAppOnly(t *testing.T) {
 // pointer. Where the regime issues a registration id, clearing it must be
 // refused — otherwise an edit reaches a state the create path would refuse.
 func TestClearingARequiredRegistrationIdIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	sender := newSender(t, h, acct.Token, "DLTHDR", "SMS", "IN")
@@ -137,6 +142,7 @@ func TestClearingARequiredRegistrationIdIsRefused(t *testing.T) {
 // A sender nothing uses can be retired, including a verified one: what gates
 // delete is use, not standing.
 func TestAVerifiedSenderNothingUsesCanBeDeleted(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -165,6 +171,7 @@ func TestAVerifiedSenderNothingUsesCanBeDeleted(t *testing.T) {
 // all three at once. So every case here builds a sender referenced by exactly
 // one thing, and deleting the journey branch fails the journey case only.
 func TestDeleteIsRefusedByEachKindOfReferenceOnItsOwn(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	ctx := context.Background()

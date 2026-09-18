@@ -12,6 +12,7 @@ import (
 // 401 to the same key that had just been charged for a send a second earlier.
 
 func TestAnApiKeyCanReadMessagesWithTheReadScope(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -58,6 +59,7 @@ func TestAnApiKeyCanReadMessagesWithTheReadScope(t *testing.T) {
 // the credential is real, the permission is not, and a client that retries a
 // 401 by re-authenticating loops forever on a 403 wearing the wrong number.
 func TestAKeyWithoutTheReadScopeIsForbiddenNotUnauthenticated(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	secret := h.apiKey(tenant, []string{"send:sms"})
@@ -82,6 +84,7 @@ func TestAKeyWithoutTheReadScopeIsForbiddenNotUnauthenticated(t *testing.T) {
 // a deliberately read-only key to a third party. That key must not be able to
 // spend their wallet.
 func TestAReadOnlyKeyCannotSpendTheWallet(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -102,6 +105,7 @@ func TestAReadOnlyKeyCannotSpendTheWallet(t *testing.T) {
 
 // send:sms and send:rcs are separate scopes for a reason.
 func TestTheSmsScopeDoesNotAuthoriseAnRcsSend(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	rcsSender := h.approvedSenderOn(tenant, "RCS")
@@ -119,6 +123,7 @@ func TestTheSmsScopeDoesNotAuthoriseAnRcsSend(t *testing.T) {
 // Widening key auth must not have widened it to everything. The team roster,
 // billing history and tenant settings are session-only and stay that way.
 func TestAKeyIsStillNotACredentialOnSessionOnlyRoutes(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	secret := h.apiKey(tenant, []string{"send:sms", "read:messages",
@@ -143,6 +148,7 @@ func TestAKeyIsStillNotACredentialOnSessionOnlyRoutes(t *testing.T) {
 
 // A key is tenant-scoped exactly as a session is.
 func TestAKeyCannotReadAnotherTenantsMessages(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	mine := h.newAccount("owner")
 	theirs := h.newAccount("owner")
@@ -178,6 +184,7 @@ func TestAKeyCannotReadAnotherTenantsMessages(t *testing.T) {
 // service accepted "messages:write" — a scope that appears nowhere in the six
 // it publishes two paths away — stored it verbatim and echoed it back forever.
 func TestAScopeOutsideTheCatalogueIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -204,6 +211,7 @@ func TestAScopeOutsideTheCatalogueIsRefused(t *testing.T) {
 }
 
 func TestEveryPublishedScopeIsAcceptedOnCreation(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -237,6 +245,7 @@ func TestEveryPublishedScopeIsAcceptedOnCreation(t *testing.T) {
 // out which templates they have and which senders are approved to carry them.
 // Handing them a rule and no way to obey it is the hole these four close.
 func TestAKeyCanDiscoverTheConfigurationItsSendsAreValidatedAgainst(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	h.approvedSender(tenant)
@@ -263,6 +272,7 @@ func TestAKeyCanDiscoverTheConfigurationItsSendsAreValidatedAgainst(t *testing.T
 // Widening the allowlist must not have widened the scopes. Each of the four
 // still needs the scope it was mapped to.
 func TestTheDiscoveryRoutesStillRequireTheirScope(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sendOnly := h.apiKey(tenant, []string{"send:sms"})

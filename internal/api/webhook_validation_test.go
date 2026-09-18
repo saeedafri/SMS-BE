@@ -14,6 +14,7 @@ import (
 // an empty one rather than to an error — so the requiredness has to be checked
 // in the handler, exactly where `environment` already was.
 func TestCreatingAWebhookSubscribedToNothingIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -31,6 +32,7 @@ func TestCreatingAWebhookSubscribedToNothingIsRefused(t *testing.T) {
 }
 
 func TestCreatingAWebhookWithEventsStillWorks(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -54,6 +56,7 @@ func TestCreatingAWebhookWithEventsStillWorks(t *testing.T) {
 // A webhook can be silenced by editing it just as easily as by creating it
 // wrong, and update did not check either rule the create path checks.
 func TestAWebhookCannotBeSilencedOrCorruptedByAnUpdate(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

@@ -1,4 +1,4 @@
-.PHONY: build vet test check generate db-setup migrate-up migrate-test tunnel-up tunnel-down
+.PHONY: build vet test test-race check generate db-setup migrate-up migrate-test tunnel-up tunnel-down
 
 # Every target that touches a datastore sources .env: the URLs live there and
 # nowhere else. Without it goose falls back to libpq's defaults and tries to
@@ -17,11 +17,24 @@ build:
 vet:
 	go vet ./...
 
-# -timeout well above go's 10m default: the datastores are on the VPS, so every
-# query in a database-backed test pays a round trip through the SSH tunnel and
-# the api package alone runs about ten minutes under -race.
+# The fast loop, and the one to run before a push.
+#
+# The datastores are in ap-south-1 behind an SSH tunnel, so a query costs ~50ms
+# and the suite is latency-bound, not CPU-bound: it used to take 25 minutes with
+# nine of ten cores idle. Two changes fixed that — the pools are opened once per
+# package in TestMain rather than three times per test, and every test that owns
+# its own tenant calls t.Parallel(). Tests that share a row (the RCS carrier
+# launch identities, the corridor tables, the SMPP binds) keep their own lane.
+#
+# -v so the run says which test it is on. A package prints nothing until it
+# finishes, which made a 25-minute run indistinguishable from a hung one.
 test:
-	$(ENV) && go test ./... -race -count=1 -timeout 40m
+	$(ENV) && go test ./... -count=1 -timeout 15m
+
+# Same suite under the race detector. Slower, so it is the pre-push gate rather
+# than the loop you sit and watch.
+test-race:
+	$(ENV) && go test ./... -race -count=1 -timeout 30m
 
 # ONE document for the UI team: the narrative from
 # docs/api-reference-preamble.md, then every operation and schema read out of the

@@ -71,6 +71,7 @@ func heldUntilOf(t *testing.T, res response) (string, bool) {
 // Ask 41 §2.1. A campaign held by the window says when it will launch: a fact
 // about its schedule, the same on every read.
 func TestAHeldCampaignSaysWhenItWillLaunch(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)
@@ -109,6 +110,7 @@ func TestAHeldCampaignSaysWhenItWillLaunch(t *testing.T) {
 // Ask 41 §2.3. "Send now" outside the window would be refused message by
 // message; it is refused whole, before anything is created or held.
 func TestSendNowOutsideTheWindowIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	h.fundWallet(tenant)
@@ -148,6 +150,7 @@ func TestSendNowOutsideTheWindowIsRefused(t *testing.T) {
 // Ask 41 §2.4. Resuming a paused promotional campaign outside the window is
 // refused, and it stays paused.
 func TestResumeOutsideTheWindowIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	campaign := h.seedCampaign(tenant, "paused")
@@ -187,6 +190,7 @@ func (h *harness) campaignMessages(tenant account, campaign string) int {
 // Ask 41 §2.2. Held campaigns are not due, so they are never selected and cannot
 // fill the scheduler's page ahead of a campaign that is.
 func TestHeldCampaignsDoNotBlockTheQueue(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	ctx := context.Background()

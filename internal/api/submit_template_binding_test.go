@@ -54,6 +54,7 @@ func (h *harness) sendIndia(tenant account, payload map[string]any) sendOutcome 
 
 // The gap the document opens with: an India send needed no template at all.
 func TestAnIndiaSendWithNoTemplateIsRefusedAtZeroCost(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -86,6 +87,7 @@ func TestAnIndiaSendWithNoTemplateIsRefusedAtZeroCost(t *testing.T) {
 // The second probe in the document: a templateId that is carried but whose
 // registered text has nothing to do with the body being sent.
 func TestABodyThatIsNotAnInstantiationOfItsTemplateIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -113,6 +115,7 @@ func TestABodyThatIsNotAnInstantiationOfItsTemplateIsRefused(t *testing.T) {
 // A substring check is not enough: a message that merely opens with the
 // template's words is a different message, and the operator drops it.
 func TestAMessageThatMerelyOpensWithTheTemplateIsStillRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -134,6 +137,7 @@ func TestAMessageThatMerelyOpensWithTheTemplateIsStillRefused(t *testing.T) {
 
 // And the case that must keep working, or the gate is just an outage.
 func TestALegalInstantiationOfARegisteredTemplateSends(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -157,6 +161,7 @@ func TestALegalInstantiationOfARegisteredTemplateSends(t *testing.T) {
 // A template approved for one sender header is not approved for another: on
 // DLT they are separate registrations.
 func TestATemplateRegisteredForAnotherSenderIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -175,6 +180,7 @@ func TestATemplateRegisteredForAnotherSenderIsRefused(t *testing.T) {
 
 // A template belonging to somebody else is not a template.
 func TestATemplateFromAnotherTenantIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	mine := h.newAccount("owner")
 	theirs := h.newAccount("owner")
@@ -195,6 +201,7 @@ func TestATemplateFromAnotherTenantIsRefused(t *testing.T) {
 // The rule is a property of the regime, not a global one. A country whose
 // regulator does not register templates must be unaffected.
 func TestACountryWithoutTheRuleStillSendsWithNoTemplate(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	var sender string
@@ -224,6 +231,7 @@ func TestACountryWithoutTheRuleStillSendsWithNoTemplate(t *testing.T) {
 // they were not built. Both are in fact accepted on create and stored verbatim
 // — the fixtures they read simply had no value in either.
 func TestATemplatesDltIdentifiersRoundTripThroughTheApi(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)
@@ -286,6 +294,7 @@ func TestATemplatesDltIdentifiersRoundTripThroughTheApi(t *testing.T) {
 // returned — no such sender, no rate, content the country bans. The contract
 // makes currency a required non-null string, so a refusal has to name one.
 func TestARefusalStillNamesACurrency(t *testing.T) {
+	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
 	sender := h.approvedSender(tenant)

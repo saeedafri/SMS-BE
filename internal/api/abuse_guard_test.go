@@ -43,6 +43,7 @@ func retryAfter(t *testing.T, res response) time.Duration {
 }
 
 func TestAnAddressOverItsLimitIsBannedAndOthersAreNot(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 5, 0)
 	attacker, bystander := randomIP(), randomIP()
 
@@ -72,6 +73,7 @@ func TestAnAddressOverItsLimitIsBannedAndOthersAreNot(t *testing.T) {
 }
 
 func TestAnAddressBannedAgainIsBannedLonger(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 3, 0)
 	attacker := randomIP()
 	var bans []time.Duration
@@ -91,6 +93,7 @@ func TestAnAddressBannedAgainIsBannedLonger(t *testing.T) {
 }
 
 func TestOneCredentialIsLimitedAcrossAddresses(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 0, 5)
 	tenant := h.newAccount("owner")
 	for i := 0; i < 5; i++ {
@@ -107,6 +110,7 @@ func TestOneCredentialIsLimitedAcrossAddresses(t *testing.T) {
 // Behind the dashboard, the ban falls on the user's own address, never on the
 // dashboard server every customer shares.
 func TestABanBehindTheDashboardFallsOnTheUser(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 5, 0)
 	h.server.BFFClientIPToken = bffToken
 	socket, user, neighbour := randomIP(), randomIP(), randomIP()
@@ -126,6 +130,7 @@ func TestABanBehindTheDashboardFallsOnTheUser(t *testing.T) {
 }
 
 func TestCarrierWebhooksAndHealthAreNeverLimited(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 2, 0)
 	carrier := randomIP()
 	for i := 0; i < 6; i++ {
@@ -141,6 +146,7 @@ func TestCarrierWebhooksAndHealthAreNeverLimited(t *testing.T) {
 }
 
 func TestAnIgnoredNetworkIsNeverLimited(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 2, 0)
 	_, office, _ := net.ParseCIDR("198.51.100.0/24")
 	h.server.Abuse.Ignore = []*net.IPNet{office}
@@ -153,6 +159,7 @@ func TestAnIgnoredNetworkIsNeverLimited(t *testing.T) {
 
 // Unbanning, as the operator CLI does it.
 func TestUnbanLiftsABanAtOnce(t *testing.T) {
+	t.Parallel()
 	h := guardHarness(t, 2, 0)
 	attacker := randomIP()
 	for i := 0; i < 3; i++ {

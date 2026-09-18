@@ -19,6 +19,7 @@ import (
 // test hook that substitutes for a missing feature makes the gap invisible
 // exactly where you would look for it.
 func TestApprovalQueueIncludesRegistrations(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -73,6 +74,7 @@ func TestApprovalQueueIncludesRegistrations(t *testing.T) {
 }
 
 func TestOperatorCanApproveARegistrationAndTheTenantSeesIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -95,6 +97,7 @@ func TestOperatorCanApproveARegistrationAndTheTenantSeesIt(t *testing.T) {
 }
 
 func TestRejectingARegistrationNeedsAReasonTheCustomerCanActOn(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -129,6 +132,7 @@ func TestRejectingARegistrationNeedsAReasonTheCustomerCanActOn(t *testing.T) {
 
 // A tenant must not be able to approve their own compliance submission.
 func TestARegistrationDecisionIsOperatorOnly(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	id := h.createRegistration(tenant.Token)

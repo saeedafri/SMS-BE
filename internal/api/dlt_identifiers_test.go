@@ -16,6 +16,7 @@ import (
 // tenant submit under a content-template id that does not exist on DLT, which
 // is how a telemarketer registration gets pulled.
 func TestASuppliedDltIdSurvivesApprovalByteForByte(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -75,6 +76,7 @@ func TestASuppliedDltIdSurvivesApprovalByteForByte(t *testing.T) {
 
 // No id supplied means no id, forever — not "until approval mints one".
 func TestApprovalNeverInventsADltId(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -122,6 +124,7 @@ func TestApprovalNeverInventsADltId(t *testing.T) {
 // entered. Leaving a copy behind would give one value two homes that a later
 // edit could pull apart, and every reader downstream uses the column.
 func TestRegistrationLiftsTheDltIdOutOfTheFieldsBag(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -163,6 +166,7 @@ func TestRegistrationLiftsTheDltIdOutOfTheFieldsBag(t *testing.T) {
 // it without a word: the customer typed their DLT id, the form said saved, and
 // the column stayed null.
 func TestRegistrationAcceptsATopLevelDltId(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 
@@ -194,6 +198,7 @@ func TestRegistrationAcceptsATopLevelDltId(t *testing.T) {
 // stored. A mis-filed template is not rejected by us — it is scrubbed by the
 // carrier, after the customer believes they are live.
 func TestAnInvalidDltCategoryIsRefused(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	acct := h.newAccount("owner")
 

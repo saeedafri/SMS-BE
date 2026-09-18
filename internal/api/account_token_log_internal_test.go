@@ -21,6 +21,7 @@ func (acceptAll) RoundTrip(*http.Request) (*http.Response, error) {
 // With real mail configured, a verification or reset token never reaches the
 // log: logs are shipped off the box, and the token is an account takeover.
 func TestAnIssuedTokenIsNotLoggedWhenMailIsReallySent(t *testing.T) {
+	t.Parallel()
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
 	s := &Server{Logger: logger, Mail: &mailer.Mailer{APIKey: "re_test", From: "Relay <r@x.test>",
