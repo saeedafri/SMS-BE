@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,7 @@ func recordPayment(t *testing.T, h *harness, operator, tenantID string,
 // An invoice is raised for every credit, and it falls due at the end of the
 // month it was issued in — in the tenant's own time, not UTC.
 func TestIssuingCreditRaisesAnInvoiceDueAtTheEndOfTheMonth(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -131,6 +133,7 @@ func daysIn(year int, month time.Month) int {
 // An absent rate means "the tenant country's own"; a supplied 0 means "no tax
 // on this credit". They are different answers and must not be conflated.
 func TestAnAbsentTaxRateIsNotTheSameAsAZeroOne(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -153,6 +156,7 @@ func TestAnAbsentTaxRateIsNotTheSameAsAZeroOne(t *testing.T) {
 
 // One transfer, recorded once, settling several invoices oldest-first.
 func TestOnePaymentSettlesSeveralInvoicesOldestFirst(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -221,6 +225,7 @@ func TestOnePaymentSettlesSeveralInvoicesOldestFirst(t *testing.T) {
 
 // Money left over is held against the account, and the next invoice absorbs it.
 func TestOverpaidMoneyIsHeldAndTheNextInvoiceAbsorbsIt(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -253,6 +258,7 @@ func TestOverpaidMoneyIsHeldAndTheNextInvoiceAbsorbsIt(t *testing.T) {
 
 // Voiding reverses without deleting.
 func TestVoidingAPaymentGivesTheInvoiceItsDebtBackAndStaysOnTheRecord(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -323,6 +329,7 @@ func TestVoidingAPaymentGivesTheInvoiceItsDebtBackAndStaysOnTheRecord(t *testing
 // The credit limit caps what a tenant may owe, and the refusal names the
 // shortfall rather than leaving an operator to guess.
 func TestACreditPastTheLimitIsRefusedAndTheRefusalNamesTheShortfall(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -388,6 +395,7 @@ func TestACreditPastTheLimitIsRefusedAndTheRefusalNamesTheShortfall(t *testing.T
 // claimed. Measuring a proposed credit against outstanding alone refuses credit
 // they have already paid for.
 func TestAnOverpayingTenantIsNotBlockedByTheirOwnCreditLimit(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -418,6 +426,7 @@ func TestAnOverpayingTenantIsNotBlockedByTheirOwnCreditLimit(t *testing.T) {
 
 // The customer reads their own invoices and never the operator's notes.
 func TestTheCustomerSeesTheirInvoicesButNeverTheOperatorsNote(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -464,6 +473,7 @@ func TestTheCustomerSeesTheirInvoicesButNeverTheOperatorsNote(t *testing.T) {
 
 // Totals are computed over the whole filtered set, never over the page.
 func TestTotalsCoverEveryMatchingInvoiceNotJustThePage(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -517,6 +527,7 @@ func TestTotalsCoverEveryMatchingInvoiceNotJustThePage(t *testing.T) {
 // The export is built from the same filter the paged route uses, and the
 // customer's file is a strict prefix of the operator's.
 func TestTheExportMatchesTheScreenAndWithholdsTheSameColumns(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -580,6 +591,7 @@ func TestTheExportMatchesTheScreenAndWithholdsTheSameColumns(t *testing.T) {
 // Every one of these routes needs an operator, a tenant that exists and a page
 // inside the bounds.
 func TestThePostpaidRoutesRefuseTheUsualThreeWays(t *testing.T) {
+	t.Parallel()
 	h := newHarness(t)
 	tenant := h.newAccount("owner")
 	operator := h.operatorToken()
@@ -661,4 +673,75 @@ func operatorInvoices(t *testing.T, h *harness, operator, tenantID, filter strin
 	}
 	res.decode(t, &page)
 	return page
+}
+
+// An invoice status the contract does not declare is REFUSED, not guessed at.
+//
+// It used to fall through to `due`: ?status=ovedue, one letter out, answered
+// with the late invoices plus every invoice comfortably inside its terms, with
+// no error and nothing on screen to say the question had not been understood.
+// An operator asking "who is late" would have chased customers who were not.
+// Returning everything would also be wrong, but wrong in a way that LOOKS
+// wrong; this looked right. BACKEND_REQUEST_invoice-status-filter-fallthrough.
+func TestAnUndeclaredInvoiceStatusIsRefusedRatherThanReadAsDue(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	tenant := h.newAccount("owner")
+	operator := h.operatorToken()
+	id := tenant.TenantID.String()
+
+	// Two invoices: one late, one not. A filter that silently means `due`
+	// returns both, so the count alone distinguishes a refusal from a guess.
+	past := time.Now().AddDate(0, 0, -40).UTC().Format(time.RFC3339)
+	future := time.Now().AddDate(0, 2, 0).UTC().Format(time.RFC3339)
+	issueCredit(t, h, operator, id, map[string]any{
+		"currency": "INR", "amountMinor": 100000, "reference": utr(),
+		"taxRatePercent": 0, "dueAt": past,
+	})
+	issueCredit(t, h, operator, id, map[string]any{
+		"currency": "INR", "amountMinor": 100000, "reference": utr(),
+		"taxRatePercent": 0, "dueAt": future,
+	})
+
+	routes := []struct{ path, token string }{
+		{"/v1/operator/tenants/" + id + "/invoices", operator},
+		{"/v1/operator/tenants/" + id + "/invoices/export", operator},
+		{"/v1/billing/account-invoices", tenant.Token},
+		{"/v1/billing/account-invoices/export", tenant.Token},
+	}
+
+	for _, route := range routes {
+		for _, bad := range []string{"pad", "ovedue", "OVERDUE", "Due", "due ", "", "overdue,paid"} {
+			res := h.do(http.MethodGet, route.path+"?status="+url.QueryEscape(bad), route.token, nil)
+			if res.Code != http.StatusUnprocessableEntity {
+				t.Errorf("GET %s?status=%q = %d %s, want 422",
+					route.path, bad, res.Code, res.Body)
+				continue
+			}
+			// The refusal has to NAME the field. A bare 422 would pass a build
+			// where the status was fine and something else was refused.
+			if !strings.Contains(string(res.Body), "Status must be one of due, overdue or paid.") {
+				t.Errorf("GET %s?status=%q = %s, want the refusal to name the field",
+					route.path, bad, res.Body)
+			}
+		}
+		// The three declared values still answer, on every one of the four.
+		for _, good := range []string{"due", "overdue", "paid"} {
+			if res := h.do(http.MethodGet, route.path+"?status="+good, route.token, nil); res.Code != http.StatusOK {
+				t.Errorf("GET %s?status=%s = %d %s, want 200", route.path, good, res.Code, res.Body)
+			}
+		}
+		// And no filter at all is still "everything".
+		if res := h.do(http.MethodGet, route.path, route.token, nil); res.Code != http.StatusOK {
+			t.Errorf("GET %s with no status = %d %s, want 200", route.path, res.Code, res.Body)
+		}
+	}
+
+	// The distinguishing assertion: a refusal is not the Due list wearing a
+	// different name. Each declared filter returns its own count.
+	for filter, want := range map[string]int{"": 2, "due": 2, "overdue": 1, "paid": 0} {
+		if got := operatorInvoices(t, h, operator, id, filter).Total; got != want {
+			t.Errorf("status=%q returned %d invoices, want %d", filter, got, want)
+		}
+	}
 }

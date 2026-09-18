@@ -37,6 +37,64 @@ import (
 // so a mistyped extra zero is refused rather than banked.
 const maxPaymentMinor = 1_000_000_000
 
+// invoiceStatusFilter reads the status parameter, refusing anything the
+// contract does not declare.
+//
+// Refused rather than ignored, and refused rather than quietly treated as the
+// default. An undeclared status used to reach MatchesFilter's default branch
+// and be answered as `due` — so `?status=ovedue`, one letter out, returned the
+// late invoices PLUS every invoice comfortably inside its terms, with no error
+// and nothing on screen to say so. An operator asking "who is late" would have
+// chased customers who were not.
+//
+// Returning everything would have been wrong too, but wrong in a way that looks
+// wrong. This looked right, which is why it is worth a 422.
+func invoiceStatusFilter(status *string) (string, bool) {
+	if status == nil {
+		return "", true
+	}
+	switch *status {
+	case billing.StatusDue, billing.StatusOverdue, billing.StatusPaid:
+		return *status, true
+	}
+	// Case included: OVERDUE is refused, not folded to overdue. A contract enum
+	// is a set of exact strings, and guessing at a near miss is how the silent
+	// wrong answer above got there in the first place.
+	return "", false
+}
+
+// invoiceStatusRefusal is the one sentence every route gives for it, so the
+// console can render it without knowing which route it came from.
+const invoiceStatusRefusal = "Status must be one of due, overdue or paid."
+
+// The two export routes declare no 422 in the contract, but an undeclared
+// status has to be refused there too: an export is built from the same filter
+// as the screen that offered it, so accepting `?status=pad` would hand an
+// operator a file of Due invoices under a filename saying something else.
+//
+// The frontend's own mock already answers 422 here, so this matches the
+// behaviour they built against — their CONTRACT is the thing that disagrees
+// with it, and we have asked them to declare it. Until they do, these two
+// types serve the refusal the route cannot express.
+type invoiceStatusRefusalResponse struct{}
+
+func (invoiceStatusRefusalResponse) write(w http.ResponseWriter) error {
+	writeError(w, http.StatusUnprocessableEntity, codeValidation, invoiceStatusRefusal)
+	return nil
+}
+
+type tenantInvoicesStatusRefused struct{ invoiceStatusRefusalResponse }
+
+func (r tenantInvoicesStatusRefused) VisitExportTenantInvoicesResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
+type accountInvoicesStatusRefused struct{ invoiceStatusRefusalResponse }
+
+func (r accountInvoicesStatusRefused) VisitExportAccountInvoicesResponse(w http.ResponseWriter) error {
+	return r.write(w)
+}
+
 // ---------------------------------------------------------------- projection
 
 func accountInvoiceResponse(row billing.Row, operatorView bool) gen.AccountInvoice {
@@ -330,12 +388,12 @@ func money(minor int64, currency string) string {
 
 // -------------------------------------------------------- operator: invoices
 
-func (s *Server) GetV1OperatorTenantsIdInvoices(ctx context.Context,
-	request gen.GetV1OperatorTenantsIdInvoicesRequestObject) (
-	gen.GetV1OperatorTenantsIdInvoicesResponseObject, error) {
+func (s *Server) ListTenantInvoices(ctx context.Context,
+	request gen.ListTenantInvoicesRequestObject) (
+	gen.ListTenantInvoicesResponseObject, error) {
 
 	if _, err := s.requireOperator(ctx); err != nil {
-		return gen.GetV1OperatorTenantsIdInvoices401JSONResponse(
+		return gen.ListTenantInvoices401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -343,32 +401,33 @@ func (s *Server) GetV1OperatorTenantsIdInvoices(ctx context.Context,
 		return nil, err
 	}
 	if !found {
-		return gen.GetV1OperatorTenantsIdInvoices404JSONResponse(
+		return gen.ListTenantInvoices404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
 	page, ok := pageNumber(request.Params.Page)
 	if !ok {
-		return gen.GetV1OperatorTenantsIdInvoices422JSONResponse(
+		return gen.ListTenantInvoices422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	limit, limitOK := pageSize(request.Params.Limit)
 	if !limitOK {
-		return gen.GetV1OperatorTenantsIdInvoices422JSONResponse(
+		return gen.ListTenantInvoices422JSONResponse(
 			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 	if limit == 0 {
 		limit = 20
 	}
-	filter := ""
-	if request.Params.Status != nil {
-		filter = string(*request.Params.Status)
+	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
+	if !statusOK {
+		return gen.ListTenantInvoices422JSONResponse(
+			errorBody(codeValidation, invoiceStatusRefusal)), nil
 	}
 
 	rows, err := s.accountInvoiceRows(ctx, s.operatorPool(), tenantID, filter)
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetV1OperatorTenantsIdInvoices200JSONResponse(
+	return gen.ListTenantInvoices200JSONResponse(
 		invoicePage(rows, page, limit, true)), nil
 }
 
@@ -405,13 +464,13 @@ func invoicePage(rows []billing.Row, page, limit int, operatorView bool) gen.Acc
 
 type invoicesCSV struct{ csvDownload }
 
-func (r invoicesCSV) VisitGetV1OperatorTenantsIdInvoicesExportResponse(w http.ResponseWriter) error {
+func (r invoicesCSV) VisitExportTenantInvoicesResponse(w http.ResponseWriter) error {
 	return r.write(w)
 }
 
 type accountInvoicesCSV struct{ csvDownload }
 
-func (r accountInvoicesCSV) VisitGetV1BillingAccountInvoicesExportResponse(w http.ResponseWriter) error {
+func (r accountInvoicesCSV) VisitExportAccountInvoicesResponse(w http.ResponseWriter) error {
 	return r.write(w)
 }
 
@@ -479,12 +538,12 @@ func streamInvoicesCSV(rows []billing.Row, operatorView bool) io.Reader {
 	return reader
 }
 
-func (s *Server) GetV1OperatorTenantsIdInvoicesExport(ctx context.Context,
-	request gen.GetV1OperatorTenantsIdInvoicesExportRequestObject) (
-	gen.GetV1OperatorTenantsIdInvoicesExportResponseObject, error) {
+func (s *Server) ExportTenantInvoices(ctx context.Context,
+	request gen.ExportTenantInvoicesRequestObject) (
+	gen.ExportTenantInvoicesResponseObject, error) {
 
 	if _, err := s.requireOperator(ctx); err != nil {
-		return gen.GetV1OperatorTenantsIdInvoicesExport401JSONResponse(
+		return gen.ExportTenantInvoices401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -492,12 +551,12 @@ func (s *Server) GetV1OperatorTenantsIdInvoicesExport(ctx context.Context,
 		return nil, err
 	}
 	if !found {
-		return gen.GetV1OperatorTenantsIdInvoicesExport404JSONResponse(
+		return gen.ExportTenantInvoices404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
-	filter := ""
-	if request.Params.Status != nil {
-		filter = string(*request.Params.Status)
+	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
+	if !statusOK {
+		return tenantInvoicesStatusRefused{}, nil
 	}
 	// Built from the same rows the paged route serves, under the identical
 	// filter, so the file and the screen that offered it can never disagree.
@@ -517,12 +576,12 @@ func (s *Server) GetV1OperatorTenantsIdInvoicesExport(ctx context.Context,
 
 // -------------------------------------------------------- operator: payments
 
-func (s *Server) GetV1OperatorTenantsIdPayments(ctx context.Context,
-	request gen.GetV1OperatorTenantsIdPaymentsRequestObject) (
-	gen.GetV1OperatorTenantsIdPaymentsResponseObject, error) {
+func (s *Server) ListTenantPayments(ctx context.Context,
+	request gen.ListTenantPaymentsRequestObject) (
+	gen.ListTenantPaymentsResponseObject, error) {
 
 	if _, err := s.requireOperator(ctx); err != nil {
-		return gen.GetV1OperatorTenantsIdPayments401JSONResponse(
+		return gen.ListTenantPayments401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -530,17 +589,17 @@ func (s *Server) GetV1OperatorTenantsIdPayments(ctx context.Context,
 		return nil, err
 	}
 	if !found {
-		return gen.GetV1OperatorTenantsIdPayments404JSONResponse(
+		return gen.ListTenantPayments404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
 	page, ok := pageNumber(request.Params.Page)
 	if !ok {
-		return gen.GetV1OperatorTenantsIdPayments422JSONResponse(
+		return gen.ListTenantPayments422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	limit, limitOK := pageSize(request.Params.Limit)
 	if !limitOK {
-		return gen.GetV1OperatorTenantsIdPayments422JSONResponse(
+		return gen.ListTenantPayments422JSONResponse(
 			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 	if limit == 0 {
@@ -563,7 +622,7 @@ func (s *Server) GetV1OperatorTenantsIdPayments(ctx context.Context,
 	for _, payment := range payments[offset:end] {
 		entries = append(entries, tenantPaymentResponse(payment, settlement))
 	}
-	return gen.GetV1OperatorTenantsIdPayments200JSONResponse(gen.TenantPaymentPage{
+	return gen.ListTenantPayments200JSONResponse(gen.TenantPaymentPage{
 		Entries: entries, Total: len(payments),
 	}), nil
 }
@@ -580,13 +639,13 @@ func (s *Server) settledPayments(ctx context.Context, tenantID uuid.UUID) (
 	return ledger.Payments, billing.Settle(ledger.Invoices, ledger.Payments), nil
 }
 
-func (s *Server) PostV1OperatorTenantsIdPayments(ctx context.Context,
-	request gen.PostV1OperatorTenantsIdPaymentsRequestObject) (
-	gen.PostV1OperatorTenantsIdPaymentsResponseObject, error) {
+func (s *Server) RecordTenantPayment(ctx context.Context,
+	request gen.RecordTenantPaymentRequestObject) (
+	gen.RecordTenantPaymentResponseObject, error) {
 
 	operator, err := s.requireOperator(ctx)
 	if err != nil {
-		return gen.PostV1OperatorTenantsIdPayments401JSONResponse(
+		return gen.RecordTenantPayment401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -594,7 +653,7 @@ func (s *Server) PostV1OperatorTenantsIdPayments(ctx context.Context,
 		return nil, err
 	}
 	if !found {
-		return gen.PostV1OperatorTenantsIdPayments404JSONResponse(
+		return gen.RecordTenantPayment404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
 	tenant, err := store.GetTenant(ctx, s.operatorPool(), tenantID)
@@ -604,23 +663,23 @@ func (s *Server) PostV1OperatorTenantsIdPayments(ctx context.Context,
 
 	body := request.Body
 	if body == nil {
-		return gen.PostV1OperatorTenantsIdPayments422JSONResponse(errorBody(codeValidation,
+		return gen.RecordTenantPayment422JSONResponse(errorBody(codeValidation,
 			"A payment needs a currency, an amount, the bank's reference and when it landed.")), nil
 	}
 	currency := string(body.Currency)
 	reference := strings.TrimSpace(body.Reference)
 	switch {
 	case !oneOf(currency, validCurrencies):
-		return gen.PostV1OperatorTenantsIdPayments422JSONResponse(errorBody(codeValidation,
+		return gen.RecordTenantPayment422JSONResponse(errorBody(codeValidation,
 			enumMessage("currency", validCurrencies))), nil
 	case body.AmountMinor < 1 || body.AmountMinor > maxPaymentMinor:
-		return gen.PostV1OperatorTenantsIdPayments422JSONResponse(errorBody(codeValidation,
+		return gen.RecordTenantPayment422JSONResponse(errorBody(codeValidation,
 			"amountMinor must be between 1 and 1,000,000,000 minor units.")), nil
 	case len(reference) < 6 || len(reference) > 64:
-		return gen.PostV1OperatorTenantsIdPayments422JSONResponse(errorBody(codeValidation,
+		return gen.RecordTenantPayment422JSONResponse(errorBody(codeValidation,
 			"reference must be the bank's transfer reference (UTR), 6 to 64 characters.")), nil
 	case body.ReceivedAt.IsZero():
-		return gen.PostV1OperatorTenantsIdPayments422JSONResponse(errorBody(codeValidation,
+		return gen.RecordTenantPayment422JSONResponse(errorBody(codeValidation,
 			"receivedAt must say when the money landed, per the bank.")), nil
 	}
 
@@ -630,7 +689,7 @@ func (s *Server) PostV1OperatorTenantsIdPayments(ctx context.Context,
 			Reference: reference, ReceivedAt: body.ReceivedAt, RecordedBy: operator.Email,
 		})
 	if errors.Is(err, store.ErrConflict) {
-		return gen.PostV1OperatorTenantsIdPayments409JSONResponse(errorBody(codeConflict,
+		return gen.RecordTenantPayment409JSONResponse(errorBody(codeConflict,
 			fmt.Sprintf("Reference %s has already been recorded for %s.",
 				reference, tenant.Name))), nil
 	}
@@ -661,18 +720,18 @@ func (s *Server) PostV1OperatorTenantsIdPayments(ctx context.Context,
 				money(int64(body.AmountMinor), currency), tenant.Name, what)); err != nil {
 			return nil, err
 		}
-		return gen.PostV1OperatorTenantsIdPayments201JSONResponse(settled), nil
+		return gen.RecordTenantPayment201JSONResponse(settled), nil
 	}
 	return nil, fmt.Errorf("api: payment %s vanished between write and read", id)
 }
 
-func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Context,
-	request gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoidRequestObject) (
-	gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoidResponseObject, error) {
+func (s *Server) VoidTenantPayment(ctx context.Context,
+	request gen.VoidTenantPaymentRequestObject) (
+	gen.VoidTenantPaymentResponseObject, error) {
 
 	operator, err := s.requireOperator(ctx)
 	if err != nil {
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid401JSONResponse(
+		return gen.VoidTenantPayment401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -680,7 +739,7 @@ func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Contex
 		return nil, err
 	}
 	if !found {
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid404JSONResponse(
+		return gen.VoidTenantPayment404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
 	tenant, err := store.GetTenant(ctx, s.operatorPool(), tenantID)
@@ -696,7 +755,7 @@ func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Contex
 	// this is money. Checked before the already-voided case only in that both
 	// precede any write.
 	if len(reason) < 3 || len(reason) > 200 {
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid422JSONResponse(
+		return gen.VoidTenantPayment422JSONResponse(
 			errorBody(codeValidation, "A reason of 3 to 200 characters is required.")), nil
 	}
 
@@ -704,10 +763,10 @@ func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Contex
 		request.PaymentId, reason, operator.Email)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid404JSONResponse(
+		return gen.VoidTenantPayment404JSONResponse(
 			errorBody(codeNotFound, "No such payment.")), nil
 	case errors.Is(err, store.ErrConflict):
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid409JSONResponse(
+		return gen.VoidTenantPayment409JSONResponse(
 			errorBody(codeConflict, "This payment has already been voided.")), nil
 	case err != nil:
 		return nil, err
@@ -727,7 +786,7 @@ func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Contex
 				money(payment.AmountMinor, payment.Currency), tenant.Name, reason)); err != nil {
 			return nil, err
 		}
-		return gen.PostV1OperatorTenantsIdPaymentsPaymentIdVoid200JSONResponse(
+		return gen.VoidTenantPayment200JSONResponse(
 			tenantPaymentResponse(payment, settlement)), nil
 	}
 	return nil, fmt.Errorf("api: payment %s vanished after voiding", request.PaymentId)
@@ -735,13 +794,13 @@ func (s *Server) PostV1OperatorTenantsIdPaymentsPaymentIdVoid(ctx context.Contex
 
 // ----------------------------------------------------- operator: credit limit
 
-func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
-	request gen.PutV1OperatorTenantsIdCreditLimitRequestObject) (
-	gen.PutV1OperatorTenantsIdCreditLimitResponseObject, error) {
+func (s *Server) SetTenantCreditLimit(ctx context.Context,
+	request gen.SetTenantCreditLimitRequestObject) (
+	gen.SetTenantCreditLimitResponseObject, error) {
 
 	operator, err := s.requireOperator(ctx)
 	if err != nil {
-		return gen.PutV1OperatorTenantsIdCreditLimit401JSONResponse(
+		return gen.SetTenantCreditLimit401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
 	}
 	tenantID, found, err := s.operatorTenantID(ctx, request.Id.String())
@@ -749,7 +808,7 @@ func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
 		return nil, err
 	}
 	if !found {
-		return gen.PutV1OperatorTenantsIdCreditLimit404JSONResponse(
+		return gen.SetTenantCreditLimit404JSONResponse(
 			errorBody(codeNotFound, "No such tenant.")), nil
 	}
 	tenant, err := store.GetTenant(ctx, s.operatorPool(), tenantID)
@@ -757,7 +816,7 @@ func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
 		return nil, err
 	}
 	if request.Body == nil {
-		return gen.PutV1OperatorTenantsIdCreditLimit422JSONResponse(errorBody(codeValidation,
+		return gen.SetTenantCreditLimit422JSONResponse(errorBody(codeValidation,
 			"creditLimitMinor is required; null removes the limit.")), nil
 	}
 
@@ -765,7 +824,7 @@ func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
 	if request.Body.CreditLimitMinor != nil {
 		value := int64(*request.Body.CreditLimitMinor)
 		if value < 0 || value > maxOperatorCreditMinor {
-			return gen.PutV1OperatorTenantsIdCreditLimit422JSONResponse(errorBody(codeValidation,
+			return gen.SetTenantCreditLimit422JSONResponse(errorBody(codeValidation,
 				"creditLimitMinor must be a whole number of minor units from 0 to "+
 					"1,000,000,000, or null for no limit.")), nil
 		}
@@ -780,14 +839,14 @@ func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
 		currency = regime.Currency()
 	}
 	if limit != nil && currency == "" {
-		return gen.PutV1OperatorTenantsIdCreditLimit422JSONResponse(errorBody(codeValidation,
+		return gen.SetTenantCreditLimit422JSONResponse(errorBody(codeValidation,
 			fmt.Sprintf("We have no confirmed currency for %s, so a credit limit there would "+
 				"cap nothing. Set the tenant's country first.", tenant.Country))), nil
 	}
 
 	if err := store.SetCreditLimit(ctx, s.operatorPool(), tenantID, limit, currency); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return gen.PutV1OperatorTenantsIdCreditLimit404JSONResponse(
+			return gen.SetTenantCreditLimit404JSONResponse(
 				errorBody(codeNotFound, "No such tenant.")), nil
 		}
 		return nil, err
@@ -806,36 +865,37 @@ func (s *Server) PutV1OperatorTenantsIdCreditLimit(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return gen.PutV1OperatorTenantsIdCreditLimit200JSONResponse(toTenantDetail(updated)), nil
+	return gen.SetTenantCreditLimit200JSONResponse(toTenantDetail(updated)), nil
 }
 
 // ------------------------------------------------------- customer: invoices
 
-func (s *Server) GetV1BillingAccountInvoices(ctx context.Context,
-	request gen.GetV1BillingAccountInvoicesRequestObject) (
-	gen.GetV1BillingAccountInvoicesResponseObject, error) {
+func (s *Server) ListAccountInvoices(ctx context.Context,
+	request gen.ListAccountInvoicesRequestObject) (
+	gen.ListAccountInvoicesResponseObject, error) {
 
 	identity, ok := identityFrom(ctx)
 	if !ok {
-		return gen.GetV1BillingAccountInvoices401JSONResponse(
+		return gen.ListAccountInvoices401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
 	page, pageOK := pageNumber(request.Params.Page)
 	if !pageOK {
-		return gen.GetV1BillingAccountInvoices422JSONResponse(
+		return gen.ListAccountInvoices422JSONResponse(
 			errorBody(codeValidation, pageTooLow)), nil
 	}
 	limit, limitOK := pageSize(request.Params.Limit)
 	if !limitOK {
-		return gen.GetV1BillingAccountInvoices422JSONResponse(
+		return gen.ListAccountInvoices422JSONResponse(
 			errorBody(codeValidation, limitOutOfRange)), nil
 	}
 	if limit == 0 {
 		limit = 20
 	}
-	filter := ""
-	if request.Params.Status != nil {
-		filter = string(*request.Params.Status)
+	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
+	if !statusOK {
+		return gen.ListAccountInvoices422JSONResponse(
+			errorBody(codeValidation, invoiceStatusRefusal)), nil
 	}
 
 	// The tenant's own pool, so row-level security is the second lock on this
@@ -845,22 +905,22 @@ func (s *Server) GetV1BillingAccountInvoices(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetV1BillingAccountInvoices200JSONResponse(
+	return gen.ListAccountInvoices200JSONResponse(
 		invoicePage(rows, page, limit, false)), nil
 }
 
-func (s *Server) GetV1BillingAccountInvoicesExport(ctx context.Context,
-	request gen.GetV1BillingAccountInvoicesExportRequestObject) (
-	gen.GetV1BillingAccountInvoicesExportResponseObject, error) {
+func (s *Server) ExportAccountInvoices(ctx context.Context,
+	request gen.ExportAccountInvoicesRequestObject) (
+	gen.ExportAccountInvoicesResponseObject, error) {
 
 	identity, ok := identityFrom(ctx)
 	if !ok {
-		return gen.GetV1BillingAccountInvoicesExport401JSONResponse(
+		return gen.ExportAccountInvoices401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
 	}
-	filter := ""
-	if request.Params.Status != nil {
-		filter = string(*request.Params.Status)
+	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
+	if !statusOK {
+		return accountInvoicesStatusRefused{}, nil
 	}
 	rows, err := s.accountInvoiceRows(ctx, s.DB, identity.TenantID, filter)
 	if err != nil {

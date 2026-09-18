@@ -397,9 +397,16 @@ func CreditHeadroom(outstandingMinor, unappliedMinor, proposedTotalMinor, limitM
 //
 // `due` means "not fully settled", overdue included: an overdue invoice is
 // still money owed, and an operator asking what is outstanding must not have to
-// ask twice. `overdue` narrows that to the late ones — the operator's real
-// question, which the contract's enum does not yet offer but which costs
-// nothing to answer for when it does.
+// ask twice. `overdue` narrows that to the late ones — a SUBSET of due, never a
+// sibling, so the two counts are never added together.
+//
+// Every case is named and the default is unreachable. It used to be the `due`
+// branch, which meant every undeclared string — `pad`, `OVERDUE`, a one-letter
+// typo — was answered as `due`: the late invoices plus every invoice still
+// comfortably inside its terms, with nothing on screen to say the question had
+// not been understood. The filter is now validated at the HTTP edge
+// (invoiceStatusFilter), so anything reaching here has already been checked,
+// and the default refuses rather than guessing.
 func MatchesFilter(status, filter string) bool {
 	switch filter {
 	case "":
@@ -408,7 +415,13 @@ func MatchesFilter(status, filter string) bool {
 		return status == StatusPaid
 	case StatusOverdue:
 		return status == StatusOverdue
-	default: // "due"
+	case StatusDue:
 		return status != StatusPaid
+	default:
+		// Unreachable: the edge refuses an undeclared filter with a 422. If it
+		// is ever reached, matching nothing is the safe direction — an empty
+		// list reads as "no rows", which is visibly a question worth re-asking,
+		// where a full-looking list does not.
+		return false
 	}
 }

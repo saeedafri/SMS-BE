@@ -392,6 +392,16 @@ func TestDueMeansNotFullySettledAndOverdueNarrowsItToTheLateOnes(t *testing.T) {
 		"paid drops overdue":          {billing.StatusOverdue, "paid", false},
 		"overdue keeps only the late": {billing.StatusOverdue, "overdue", true},
 		"overdue drops partly paid":   {billing.StatusPartlyPaid, "overdue", false},
+		// The default branch used to be `due`, so every undeclared string was
+		// answered as due — `?status=ovedue`, one letter out, returned the late
+		// invoices PLUS every invoice comfortably inside its terms, and looked
+		// like a working answer. The filter is validated at the HTTP edge now,
+		// and if anything still reaches here it matches nothing: an empty list
+		// reads as a question worth re-asking, a full-looking list does not.
+		"a typo matches nothing":   {billing.StatusOverdue, "ovedue", false},
+		"a typo does not mean due": {billing.StatusDue, "ovedue", false},
+		"case is not folded":       {billing.StatusOverdue, "OVERDUE", false},
+		"nonsense matches nothing": {billing.StatusPaid, "pad", false},
 	} {
 		if got := billing.MatchesFilter(tc.status, tc.filter); got != tc.want {
 			t.Errorf("%s: MatchesFilter(%q, %q) = %v, want %v",
