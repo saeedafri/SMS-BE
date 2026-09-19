@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/store"
 )
@@ -23,6 +23,16 @@ type CampaignEstimate struct {
 	CostMinorMin          int64
 	CostMinorMax          int64
 	Currency              string
+	// VariableSkipped counts the reachable contacts this template cannot be
+	// personalised for, and VariableSkippedByName says which slot each was
+	// missing. Recipients and both costs are already REDUCED by it: quoting for
+	// somebody who is never sent to is the same defect as sending them a hole
+	// in a sentence, seen from the billing side.
+	//
+	// Counted only when there is a list to walk. A body with no slots skips
+	// nobody, which is the common case and costs nothing to answer.
+	VariableSkipped       int
+	VariableSkippedByName map[string]int
 }
 
 // EstimateCampaign prices a campaign against its real audience.
@@ -65,7 +75,21 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	// variables tips by two segments rather than one.
 	minSegments, maxSegments := billing.SegmentBounds(body)
 
+	// Who the template cannot be personalised for. Counted with the same rule
+	// the fan-out skips by, walking the same list, so the number quoted before
+	// the send is the number the send acts on. A count that disagreed with the
+	// send would be worse than none, because it would be believed.
+	skipped, byName, err := s.countUnpersonalisable(ctx, identity, listID, channel, body)
+	if err != nil {
+		return CampaignEstimate{}, err
+	}
+	if total -= skipped; total < 0 {
+		total = 0
+	}
+
 	return CampaignEstimate{
+		VariableSkipped:       skipped,
+		VariableSkippedByName: byName,
 		Recipients:            total,
 		SegmentsPerMessageMin: minSegments,
 		SegmentsPerMessageMax: maxSegments,
@@ -126,6 +150,20 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
 	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel, rcsCarrier)
 
+	// The list's own columns, joined to the template's slots. Absent for a
+	// campaign with no list, and an empty mapping is fine: a file whose headers
+	// already match a template's slots resolves without one.
+	mapping := map[string]string{}
+	if campaign.ListID != nil {
+		loaded, err := store.ListVariableMapping(ctx, s.DB, identity, *campaign.ListID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return 0, 0, err
+		}
+		if loaded != nil {
+			mapping = loaded
+		}
+	}
+
 	campaignID := campaign.ID
 	batch := batchContext{
 		sender: sender, templateID: campaign.TemplateID,
@@ -135,6 +173,11 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		balance: balance, campaignID: &campaignID,
 		carrier: carrier, routeID: routeID,
 		rcsCarrier: rcsCarrier, agentID: agentID,
+		// Whatever the estimate said would be skipped must ACTUALLY be skipped
+		// here, not merely counted there. The same mapping and the same rule,
+		// so the two cannot drift.
+		variableMapping: mapping,
+		skipped:         &skipTally{},
 	}
 
 	if err := store.MarkCampaignSending(ctx, s.DB, identity, campaign.ID); err != nil {
@@ -236,16 +279,66 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	return sent, failed, nil
 }
 
-// personalise substitutes {{field}} placeholders from the contact's own fields.
-// An unknown placeholder is left as-is rather than blanked: sending "Hi {{name}}"
-// is an obvious bug a user will report, while sending "Hi " looks deliberate and
-// ships to the whole list unnoticed.
-func personalise(body string, contact store.Contact) string {
-	if !strings.Contains(body, "{{") {
-		return body
-	}
-	for key, value := range contact.Fields {
-		body = strings.ReplaceAll(body, "{{"+key+"}}", value)
-	}
-	return body
+// personalise substitutes a template's slots from one contact's own columns,
+// and reports the slots it could not fill.
+//
+// The rule is audience.ResolveField, shared with the campaign wizard's preview.
+// If the two ever differ the customer is shown one message and a handset
+// receives another, which is the one failure neither side can detect alone.
+//
+// A contact with any unresolved slot is SKIPPED by the caller rather than sent
+// a message with a hole in it. Before this, walking the contact's fields meant
+// a slot with no value was never visited at all: on the live system 999 of
+// 1,000 contacts had no first name, so "Dear {{firstName}}," would have gone
+// out literally on 999 handsets in 1,000 — and where the value was present but
+// blank it read "Dear ," instead, which is the same defect wearing a
+// grammatically plausible disguise.
+func personalise(body string, contact store.Contact, mapping map[string]string) (string, []string) {
+	filled := audience.Fill(body, contact.Fields, mapping)
+	return filled.Text, filled.Missing
 }
+
+// countUnpersonalisable walks a list and counts who the body cannot be filled
+// for, by the same rule the fan-out skips by.
+//
+// A body with no slots returns zero without reading anything: that is the
+// common case and it must not cost a walk of the audience.
+func (s *Service) countUnpersonalisable(ctx context.Context, identity store.Identity,
+	listID *uuid.UUID, channel, body string) (int, map[string]int, error) {
+
+	if listID == nil || len(audience.SlotsIn(body)) == 0 {
+		return 0, nil, nil
+	}
+	mapping, err := store.ListVariableMapping(ctx, s.DB, identity, *listID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return 0, nil, err
+	}
+
+	tally := &skipTally{}
+	// Paged with the same cursor the fan-out uses, and narrowed to the contacts
+	// this channel can actually reach — so the count explains the same audience
+	// the estimate is quoting for, not a wider one.
+	cursor := ""
+	for {
+		contacts, next, err := store.ListContactsAfter(
+			ctx, s.DB, identity, listID, channel, cursor, estimateScanPage)
+		if err != nil {
+			return 0, nil, err
+		}
+		for _, contact := range contacts {
+			if _, missing := personalise(body, contact, mapping); len(missing) > 0 {
+				tally.add(missing)
+			}
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return tally.Total, tally.ByName, nil
+}
+
+// estimateScanPage is how many contacts the estimate reads at a time. Larger
+// than the console's page because this walk is ours and pays a round trip per
+// page over a link where that is the dominant cost.
+const estimateScanPage = 500

@@ -30,15 +30,19 @@ import (
 // Values below are copied from the generated contract types, which are the
 // authority. Where the database also constrains a column the two agree.
 var (
-	validChannels     = []string{"SMS", "RCS", "WHATSAPP", "EMAIL", "VOICE"}
-	validCurrencies   = []string{"INR", "USD", "GBP", "AED"}
-	validEnvironments = []string{"live", "test"}
-	validBindTypes    = []string{"transmitter", "receiver", "transceiver"}
-	validFrequencies  = []string{"daily", "weekly", "monthly"}
-	validCardBrands   = []string{"visa", "mastercard", "amex"}
-	validRoles        = []string{"owner", "admin", "member"}
-	validCountries    = []string{"IN", "US", "GB", "AE"}
-	validStandings    = []string{"registered", "grey"}
+	validChannels = []string{"SMS", "RCS", "WHATSAPP", "EMAIL", "VOICE"}
+	// The three answers a person can have given about a channel. "unknown" is
+	// one of them, not the absence of one: a recorded "we do not know" is a
+	// different fact from never having asked.
+	validConsentStates = []string{"opted_in", "opted_out", "unknown"}
+	validCurrencies    = []string{"INR", "USD", "GBP", "AED"}
+	validEnvironments  = []string{"live", "test"}
+	validBindTypes     = []string{"transmitter", "receiver", "transceiver"}
+	validFrequencies   = []string{"daily", "weekly", "monthly"}
+	validCardBrands    = []string{"visa", "mastercard", "amex"}
+	validRoles         = []string{"owner", "admin", "member"}
+	validCountries     = []string{"IN", "US", "GB", "AE"}
+	validStandings     = []string{"registered", "grey"}
 	// The webhook catalogue, in lifecycle order. message.inbound leads it
 	// because it is the only one that makes a class of integration possible
 	// rather than improving an existing one: without it a customer's systems

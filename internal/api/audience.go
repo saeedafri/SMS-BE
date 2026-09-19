@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,7 +28,7 @@ func contactListResponse(l store.ContactList) gen.ContactList {
 	// answer: nobody on this list can be messaged freely on WhatsApp right now.
 	// Omitting it would let the wizard read "unknown" as "no restriction".
 	waSessionActive := l.WaSessionActive
-	return gen.ContactList{
+	list := gen.ContactList{
 		Id:              l.ID,
 		Name:            l.Name,
 		ContactCount:    l.ContactCount,
@@ -35,6 +36,18 @@ func contactListResponse(l store.ContactList) gen.ContactList {
 		WaSessionActive: &waSessionActive,
 		CreatedAt:       l.CreatedAt,
 	}
+	// Which of this list's columns feeds which template slot. Omitted rather
+	// than sent empty when nothing is mapped: "no mapping" and "a mapping of
+	// nothing" read the same to a screen, but only the first is true of a list
+	// whose headers already match the template's slots.
+	if len(l.VariableMapping) > 0 {
+		mapping := make(map[string]string, len(l.VariableMapping))
+		for slot, column := range l.VariableMapping {
+			mapping[slot] = column
+		}
+		list.VariableMapping = &mapping
+	}
+	return list
 }
 
 func (s *Server) ListContactLists(ctx context.Context, request gen.ListContactListsRequestObject) (gen.ListContactListsResponseObject, error) {
@@ -108,29 +121,80 @@ func (s *Server) GetContactList(ctx context.Context, request gen.GetContactListR
 	return gen.GetContactList200JSONResponse(contactListResponse(list)), nil
 }
 
-func (s *Server) RenameContactList(ctx context.Context, request gen.RenameContactListRequestObject) (gen.RenameContactListResponseObject, error) {
+// UpdateContactList renames a list, records which column feeds which template
+// slot, or both.
+//
+// The mapping belongs here rather than on a campaign because it is a fact about
+// that spreadsheet — customer_name holds the name whatever is being sent — and
+// because a campaign is sent by handing us a list id, so the fan-out has
+// nowhere campaign-shaped to read one from.
+func (s *Server) UpdateContactList(ctx context.Context, request gen.UpdateContactListRequestObject) (
+	gen.UpdateContactListResponseObject, error) {
+
 	identity, ok := identityFrom(ctx)
 	if !ok {
-		return gen.RenameContactList401JSONResponse(
+		return gen.UpdateContactList401JSONResponse(
 			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
-	}
-	name := strings.TrimSpace(request.Body.Name)
-	if name == "" {
-		return gen.RenameContactList404JSONResponse(
-			errorBody(codeValidation, "A list name is required.")), nil
 	}
 	listID, err := uuid.Parse(request.Id)
 	if err != nil {
-		return gen.RenameContactList404JSONResponse(errorBody(codeNotFound, "No such list.")), nil
+		return gen.UpdateContactList404JSONResponse(errorBody(codeNotFound, "No such list.")), nil
 	}
-	list, err := store.RenameContactList(ctx, s.DB, identity, listID, name)
-	if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrConflict) {
-		return gen.RenameContactList404JSONResponse(errorBody(codeNotFound, "No such list.")), nil
+	body := request.Body
+	if body == nil || (body.Name == nil && body.VariableMapping == nil) {
+		return gen.UpdateContactList422JSONResponse(errorBody(codeValidation,
+			"Send a name, a variableMapping, or both.")), nil
+	}
+
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" {
+			return gen.UpdateContactList422JSONResponse(
+				errorBody(codeValidation, "A list name is required.")), nil
+		}
+		if _, err := store.RenameContactList(ctx, s.DB, identity, listID, name); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return gen.UpdateContactList404JSONResponse(
+					errorBody(codeNotFound, "No such list.")), nil
+			}
+			if errors.Is(err, store.ErrConflict) {
+				return gen.UpdateContactList422JSONResponse(errorBody(codeValidation,
+					"Another list already has that name.")), nil
+			}
+			return nil, err
+		}
+	}
+
+	if body.VariableMapping != nil {
+		mapping := map[string]string{}
+		for slot, column := range *body.VariableMapping {
+			slot, column = strings.TrimSpace(slot), strings.TrimSpace(column)
+			// A slot mapped to nothing is the mapping being REMOVED, which is
+			// the only way to say "this slot uses the column spelled like it
+			// again" — storing a blank would resolve to nothing instead and
+			// skip every contact.
+			if slot == "" || column == "" {
+				continue
+			}
+			mapping[slot] = column
+		}
+		if err := store.SetListVariableMapping(ctx, s.DB, identity, listID, mapping); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return gen.UpdateContactList404JSONResponse(
+					errorBody(codeNotFound, "No such list.")), nil
+			}
+			return nil, err
+		}
+	}
+
+	list, err := store.GetContactList(ctx, s.DB, identity, listID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateContactList404JSONResponse(errorBody(codeNotFound, "No such list.")), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return gen.RenameContactList200JSONResponse(contactListResponse(list)), nil
+	return gen.UpdateContactList200JSONResponse(contactListResponse(list)), nil
 }
 
 func (s *Server) DeleteContactList(ctx context.Context, request gen.DeleteContactListRequestObject) (gen.DeleteContactListResponseObject, error) {
@@ -195,14 +259,13 @@ func contactResponse(c store.Contact) gen.Contact {
 	for channel, state := range c.Consent {
 		contact.Consent[channel] = gen.ConsentState(state)
 	}
-	if first, ok := c.Fields["firstName"]; ok && first != "" {
-		contact.Fields.FirstName = &first
-	}
-	if last, ok := c.Fields["lastName"]; ok && last != "" {
-		contact.Fields.LastName = &last
-	}
-	if city, ok := c.Fields["city"]; ok && city != "" {
-		contact.Fields.City = &city
+	// Every column the customer's own file carried, under their own header
+	// text. It used to be three fixed names, so a spreadsheet with "Order ID"
+	// lost the column somewhere between the browser and the database and a
+	// template could never be filled from it.
+	contact.Fields = map[string]string{}
+	for key, value := range c.Fields {
+		contact.Fields[key] = value
 	}
 	// When each channel's consent was granted. This drives WhatsApp's 24-hour
 	// service window: outside it a business may only send a pre-approved
@@ -258,7 +321,26 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 		limit = 50
 	}
 
-	contacts, total, err := store.ListContacts(ctx, s.DB, identity, listID, page, limit)
+	// Per-column search. A column is msisdn, email, or any of the customer's
+	// own fields keys. An unknown column matches nothing and is NOT an error: a
+	// list can lose a column between one import and the next, and a 4xx there
+	// would break a bookmarked URL.
+	//
+	// A blank term is dropped rather than matched, so `?filter[City]=` — what
+	// an emptied search box sends — means "no filter on City" instead of
+	// "every contact whose City contains nothing", which is all of them and
+	// reads as the search having been ignored.
+	filter := store.ContactFilter{}
+	if request.Params.Filter != nil {
+		for column, term := range *request.Params.Filter {
+			if strings.TrimSpace(term) != "" {
+				filter[column] = term
+			}
+		}
+	}
+
+	contacts, total, fieldNames, err := store.FilterContacts(
+		ctx, s.DB, identity, listID, filter, page, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +349,11 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 	for _, contact := range contacts {
 		out = append(out, contactResponse(contact))
 	}
-	result := gen.ContactPage{Contacts: out, Total: total}
+	// Every distinct column across the WHOLE filtered set, not this page. The
+	// table renders one column per name, so deriving them from the rows in hand
+	// drops a column whose only values sit on page 84 — it would disappear for
+	// a reader on page 1 and reappear later, which looks like data loss.
+	result := gen.ContactPage{Contacts: out, Total: total, FieldNames: &fieldNames}
 	return gen.ListContacts200JSONResponse(result), nil
 }
 
@@ -396,14 +482,14 @@ func (s *Server) ImportContacts(ctx context.Context, request gen.ImportContactsR
 		}
 
 		imported := store.ImportRow{Msisdn: msisdn, Line: line}
-		if row.FirstName != nil {
-			imported.FirstName = *row.FirstName
-		}
-		if row.LastName != nil {
-			imported.LastName = *row.LastName
-		}
-		if row.City != nil {
-			imported.City = *row.City
+		// The row's whole map, keys exactly as the customer's file spells them.
+		// Stored verbatim — "Order ID" stays "Order ID" — because they are shown
+		// back to the customer as their own column names, and normalising here
+		// would make the screen disagree with their spreadsheet. A template slot
+		// is joined to a key through the list's variableMapping, never by
+		// assuming the two are spelled alike.
+		if row.Fields != nil {
+			imported.Fields = *row.Fields
 		}
 		if row.Email != nil {
 			if normalised, ok := audience.NormaliseEmail(*row.Email); ok {
@@ -636,4 +722,150 @@ func channelIDs() []string {
 		string(gen.ChannelIdWHATSAPP)}
 	sort.Strings(out)
 	return out
+}
+
+// UpdateContact corrects one contact.
+//
+// The other door into contacts is a spreadsheet upload, so before this, fixing
+// one misspelt city meant re-uploading a file.
+//
+// fields REPLACES the stored map rather than merging. A merge cannot express a
+// deletion, and a customer who empties a box on screen means it — the exact
+// mirror of the import, where a blank cell means "I did not fill this in" and
+// must never erase. The two doors mean opposite things by a blank, deliberately.
+func (s *Server) UpdateContact(ctx context.Context, request gen.UpdateContactRequestObject) (
+	gen.UpdateContactResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return gen.UpdateContact401JSONResponse(
+			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
+	}
+	contactID := request.Id
+	body := request.Body
+	_, emailSent := bodyValue(ctx, "email")
+	if body == nil || (body.Msisdn == nil && !emailSent && body.Fields == nil) {
+		// An empty body is a 422, never a 200 to a no-op: a save that reports
+		// success having changed nothing is the screen lying about the one
+		// thing it exists to do.
+		return gen.UpdateContact422JSONResponse(errorBody(codeValidation,
+			"Send a msisdn, an email or fields — an empty change is not a change.")), nil
+	}
+
+	existing, err := store.GetContact(ctx, s.DB, identity, contactID)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateContact404JSONResponse(errorBody(codeNotFound, "No such contact.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	change := store.ContactUpdate{}
+	if body.Fields != nil {
+		change.Fields = *body.Fields
+	}
+	if body.Msisdn != nil {
+		// Normalised as the import does, so a customer can type "98765 00011".
+		normalised, valid := audience.NormaliseMsisdn(*body.Msisdn, existing.Country)
+		if !valid {
+			return gen.UpdateContact422JSONResponse(errorBody(codeValidation,
+				"That is not a valid phone number for this contact's country.")), nil
+		}
+		change.Msisdn = &normalised
+	}
+	// Present-and-null CLEARS the address; present-with-a-value sets it; absent
+	// leaves it. The first two are the same nil pointer in the generated
+	// struct, so the body's own keys are the only place the difference
+	// survives — the same asymmetry the RCS agent PATCH hit.
+	if raw, sent := bodyValue(ctx, "email"); sent {
+		var address *string
+		if !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			if body.Email == nil {
+				return gen.UpdateContact422JSONResponse(errorBody(codeValidation,
+					"email must be an address or null.")), nil
+			}
+			normalised, valid := audience.NormaliseEmail(*body.Email)
+			if !valid {
+				return gen.UpdateContact422JSONResponse(errorBody(codeValidation,
+					"That is not a valid email address.")), nil
+			}
+			address = &normalised
+		}
+		change.Email = &address
+	}
+
+	updated, err := store.UpdateContact(ctx, s.DB, identity, contactID, change)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return gen.UpdateContact404JSONResponse(errorBody(codeNotFound, "No such contact.")), nil
+	case errors.Is(err, store.ErrConflict):
+		// Refused by the unique index inside the same statement, so nothing is
+		// written. A guard written above the mutation it gates would store the
+		// bad value and then report an error about it.
+		return gen.UpdateContact409JSONResponse(errorBody(codeConflict,
+			"Another contact already has that phone number or email address.")), nil
+	case err != nil:
+		return nil, err
+	}
+	return gen.UpdateContact200JSONResponse(contactResponse(updated)), nil
+}
+
+// RecordContactConsent records that a list's contacts agreed to a channel.
+//
+// Before this, POST /v1/contacts/import was the only door in the whole API that
+// could write consent — so an audience that agreed to RCS in March had to
+// re-upload February's spreadsheet, or do nothing.
+func (s *Server) RecordContactConsent(ctx context.Context, request gen.RecordContactConsentRequestObject) (
+	gen.RecordContactConsentResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return gen.RecordContactConsent401JSONResponse(
+			errorBody(codeUnauthenticated, "Missing or invalid bearer token")), nil
+	}
+	body := request.Body
+	if body == nil {
+		return gen.RecordContactConsent422JSONResponse(errorBody(codeValidation,
+			"A consent record needs a list, a channel, a state and a declaration.")), nil
+	}
+
+	declaration := strings.TrimSpace(body.Declaration)
+	switch {
+	case !oneOf(string(body.Channel), validChannels):
+		return gen.RecordContactConsent422JSONResponse(errorBody(codeValidation,
+			enumMessage("channel", validChannels))), nil
+	case !oneOf(string(body.State), validConsentStates):
+		return gen.RecordContactConsent422JSONResponse(errorBody(codeValidation,
+			enumMessage("state", validConsentStates))), nil
+	case declaration == "" || len(declaration) > 500:
+		// The declaration is the whole point of the record. This is the one
+		// click in the product that makes a legal claim about thousands of
+		// people, and when a complaint arrives the first question is who said
+		// they agreed — a record saying only that somebody ticked a box answers
+		// nothing.
+		return gen.RecordContactConsent422JSONResponse(errorBody(codeValidation,
+			"A declaration of 1 to 500 characters is required.")), nil
+	}
+
+	// Defaults to true, and this default is the one that matters: a person who
+	// has explicitly opted OUT is not opted back in because somebody ticked a
+	// box about a list they happen to be on.
+	onlyUnknown := true
+	if body.OnlyUnknown != nil {
+		onlyUnknown = *body.OnlyUnknown
+	}
+
+	record, err := store.RecordConsent(ctx, s.DB, identity, store.ConsentRecord{
+		ListID: body.ListId, Channel: string(body.Channel), State: string(body.State),
+		OnlyUnknown: onlyUnknown, Declaration: declaration, RecordedBy: identity.Email,
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.RecordContactConsent404JSONResponse(errorBody(codeNotFound, "No such list.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.RecordContactConsent200JSONResponse(gen.ContactConsentResult{
+		Updated: record.Updated, RecordedAt: record.RecordedAt, RecordedBy: record.RecordedBy,
+	}), nil
 }

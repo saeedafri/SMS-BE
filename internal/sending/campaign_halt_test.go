@@ -20,6 +20,15 @@ import (
 // raced against a running one, because a test that depends on winning a race
 // against a five-hundred-recipient page proves nothing on a slow machine.
 
+// seedList makes a list whose contacts carry the one column the fixture
+// template needs.
+//
+// The fixture's template body is "{{message}}" — its whole body is one
+// variable. The fan-out now SKIPS a contact it cannot personalise rather than
+// delivering the raw "{{message}}" to a handset, so a list of contacts with no
+// columns produces no messages at all and every test downstream of it fails
+// looking for one. Giving them the column keeps each test about the thing it is
+// actually about: receipts, holds and refusals.
 func (f *fixture) seedList(name string, contacts int) (uuid.UUID, []string) {
 	f.t.Helper()
 	listID := uuid.New()
@@ -38,7 +47,8 @@ func (f *fixture) seedList(name string, contacts int) (uuid.UUID, []string) {
 				contactID := uuid.New()
 				if _, err := tx.Exec(context.Background(), `
 					INSERT INTO contacts (id, tenant_id, msisdn, country, fields, consent)
-					VALUES ($1, $2, $3, 'IN', '{}'::jsonb, '{"SMS":"opted_in"}'::jsonb)`,
+					VALUES ($1, $2, $3, 'IN', '{"message":"Your order has shipped."}'::jsonb,
+					        '{"SMS":"opted_in"}'::jsonb)`,
 					contactID, f.identity.TenantID, msisdn); err != nil {
 					return err
 				}

@@ -286,7 +286,14 @@ func NewRouter(s *Server) http.Handler {
 		// a void body carrying voidedAt answered 200 having ignored it.
 		"POST /v1/operator/tenants/{id}/payments/{id}/void": {"reason"},
 		"PUT /v1/operator/tenants/{id}/credit-limit":        {"creditLimitMinor"},
-		"PATCH /v1/sender-ids/{id}":                         {"header", "displayName", "registrationId"},
+		// The contacts doors, all three declaring additionalProperties: false.
+		// PATCH /v1/contacts/{id} is also registered for the SECOND thing this
+		// middleware does — recording which keys the caller actually sent, so
+		// "email": null (clear it) can be told from omitting email (leave it).
+		"PATCH /v1/contacts/{id}":      {"msisdn", "email", "fields"},
+		"PATCH /v1/contact-lists/{id}": {"name", "variableMapping"},
+		"POST /v1/contacts/consent":    {"listId", "channel", "state", "onlyUnknown", "declaration"},
+		"PATCH /v1/sender-ids/{id}":    {"header", "displayName", "registrationId"},
 		// Registered for the SECOND thing this middleware does: recording which
 		// keys the caller actually sent. An agent PATCH is JSON Merge Patch —
 		// an omitted key leaves the value alone, an explicit null clears it —

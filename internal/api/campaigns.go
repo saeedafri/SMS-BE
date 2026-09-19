@@ -435,7 +435,24 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		CostMinorMin:          int(estimate.CostMinorMin),
 		CostMinorMax:          int(estimate.CostMinorMax),
 		Currency:              gen.CurrencyCode(estimate.Currency),
+		// Optional in the contract on purpose: an ABSENT count means "this
+		// server cannot tell yet", which the screen says in those words. We can
+		// tell, so we always send it — a zero here is a measured zero.
+		VariableSkipped:       &estimate.VariableSkipped,
+		VariableSkippedByName: skippedByName(estimate.VariableSkippedByName),
 	}), nil
+}
+
+// skippedByName is the per-slot breakdown, omitted when nothing was skipped.
+//
+// "12 skipped" is a fact; "12 have no first name" is an instruction. Sending an
+// empty object beside a zero would say the same thing twice and invite a screen
+// to render an empty list where it should render nothing.
+func skippedByName(counts map[string]int) *map[string]int {
+	if len(counts) == 0 {
+		return nil
+	}
+	return &counts
 }
 
 func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampaignMessagesRequestObject) (gen.ListCampaignMessagesResponseObject, error) {

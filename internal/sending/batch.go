@@ -102,7 +102,16 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			continue
 		}
 
-		body := personalise(context.body, contact)
+		// A contact the template cannot be personalised for is SKIPPED: no
+		// message, no charge, counted. Third gate, after addressability and
+		// before the send gate — somebody already excluded for opting out must
+		// not ALSO be counted as missing a first name, which would explain one
+		// person twice in two different numbers.
+		body, missing := personalise(context.body, contact, context.variableMapping)
+		if len(missing) > 0 {
+			context.skipped.add(missing)
+			continue
+		}
 		segments := billing.SegmentCount(body)
 		cost := int64(segments) * context.rate.PerSegmentMinor
 
@@ -345,8 +354,18 @@ type batchContext struct {
 	templateSender string
 	// template carries the carrier's registration — its id and its separate
 	// approval. Resolved once with everything else identical across recipients.
-	template     store.Template
-	body         string
+	template store.Template
+	body     string
+	// variableMapping joins a template's slots to the customer's own column
+	// names. It belongs to the LIST, and the fan-out is handed a list id, which
+	// is precisely why the skip has to live here: only the code that walks the
+	// list can decide who it cannot personalise.
+	variableMapping map[string]string
+	// skipped accumulates who could not be personalised, across every page of
+	// the fan-out. A pointer because batchContext is copied per page and the
+	// campaign wants one total; nil on the single-send path, which has no list
+	// to walk and refuses at the gate instead.
+	skipped      *skipTally
 	rate         store.PricingRate
 	tenantStatus string
 	balance      int64
@@ -405,4 +424,28 @@ func (c batchContext) carrierTemplateID() string {
 		return ""
 	}
 	return *c.template.CarrierTemplateID
+}
+
+// skipTally counts the contacts a campaign could not personalise, and why.
+//
+// "12 skipped" is a fact; "12 have no first name" is an instruction — so the
+// names are kept, not just the number. A contact missing two slots counts once
+// in Total and once under each name, because Total counts people and the names
+// explain them.
+type skipTally struct {
+	Total  int
+	ByName map[string]int
+}
+
+func (t *skipTally) add(missing []string) {
+	if t == nil {
+		return
+	}
+	t.Total++
+	if t.ByName == nil {
+		t.ByName = map[string]int{}
+	}
+	for _, slot := range missing {
+		t.ByName[slot]++
+	}
 }

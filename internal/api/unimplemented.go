@@ -200,8 +200,8 @@ func (Unimplemented) GetContactList(ctx context.Context, request gen.GetContactL
 	return nil, errNotImplemented("GetContactList")
 }
 
-func (Unimplemented) RenameContactList(ctx context.Context, request gen.RenameContactListRequestObject) (gen.RenameContactListResponseObject, error) {
-	return nil, errNotImplemented("RenameContactList")
+func (Unimplemented) UpdateContactList(ctx context.Context, request gen.UpdateContactListRequestObject) (gen.UpdateContactListResponseObject, error) {
+	return nil, errNotImplemented("UpdateContactList")
 }
 
 func (Unimplemented) RemoveContactListMember(ctx context.Context, request gen.RemoveContactListMemberRequestObject) (gen.RemoveContactListMemberResponseObject, error) {
@@ -212,8 +212,16 @@ func (Unimplemented) ListContacts(ctx context.Context, request gen.ListContactsR
 	return nil, errNotImplemented("ListContacts")
 }
 
+func (Unimplemented) RecordContactConsent(ctx context.Context, request gen.RecordContactConsentRequestObject) (gen.RecordContactConsentResponseObject, error) {
+	return nil, errNotImplemented("RecordContactConsent")
+}
+
 func (Unimplemented) ImportContacts(ctx context.Context, request gen.ImportContactsRequestObject) (gen.ImportContactsResponseObject, error) {
 	return nil, errNotImplemented("ImportContacts")
+}
+
+func (Unimplemented) UpdateContact(ctx context.Context, request gen.UpdateContactRequestObject) (gen.UpdateContactResponseObject, error) {
+	return nil, errNotImplemented("UpdateContact")
 }
 
 func (Unimplemented) ListConversations(ctx context.Context, request gen.ListConversationsRequestObject) (gen.ListConversationsResponseObject, error) {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,8 @@ import (
 )
 
 type ContactList struct {
+	// VariableMapping joins this spreadsheet's columns to a template's slots.
+	VariableMapping map[string]string
 	ID              uuid.UUID
 	Name            string
 	ContactCount    int
@@ -42,7 +46,8 @@ const listWithCounts = `
 	SELECT l.id, l.name, l.created_at,
 	       coalesce(m.total, 0),
 	       coalesce(m.consented, '{}'::jsonb),
-	       coalesce(w.in_session, 0)
+	       coalesce(w.in_session, 0),
+	       l.variable_mapping
 	FROM contact_lists l
 	LEFT JOIN LATERAL (
 	    -- now() - 24 hours, evaluated per query rather than cached: the window
@@ -80,14 +85,18 @@ const listWithCounts = `
 
 func scanList(row pgx.Row) (ContactList, error) {
 	var list ContactList
-	var consented []byte
+	var consented, mapping []byte
 	if err := row.Scan(&list.ID, &list.Name, &list.CreatedAt, &list.ContactCount,
-		&consented, &list.WaSessionActive); err != nil {
+		&consented, &list.WaSessionActive, &mapping); err != nil {
 		return ContactList{}, err
 	}
 	list.ConsentedCounts = map[string]int{}
 	if len(consented) > 0 {
 		_ = json.Unmarshal(consented, &list.ConsentedCounts)
+	}
+	list.VariableMapping = map[string]string{}
+	if len(mapping) > 0 {
+		_ = json.Unmarshal(mapping, &list.VariableMapping)
 	}
 	return list, nil
 }
@@ -374,13 +383,29 @@ func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
 }
 
 // ImportRow is one CSV row after client-side normalisation.
+//
+// Fields carries the customer's WHOLE row, keyed by their file's own header
+// text — "First Name", "Order ID", "Loyalty Tier". It used to be three fixed
+// names, so a column the customer actually had could never reach a template.
 type ImportRow struct {
-	Msisdn    string
-	Email     *string
-	FirstName string
-	LastName  string
-	City      string
-	Line      *int
+	Msisdn string
+	Email  *string
+	Fields map[string]string
+	Line   *int
+}
+
+// filledFields drops the keys a row left blank, so a merge cannot erase.
+//
+// Whitespace-only counts as blank, matching audience.ResolveField: a value that
+// would not be substituted is not a value worth storing over one that would.
+func filledFields(fields map[string]string) map[string]string {
+	kept := make(map[string]string, len(fields))
+	for key, value := range fields {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			kept[key] = trimmed
+		}
+	}
+	return kept
 }
 
 // ImportOutcome reports what happened to each row.
@@ -414,9 +439,18 @@ func ImportContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
 
 	err = WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		for _, row := range rows {
-			fields, err := json.Marshal(map[string]string{
-				"firstName": row.FirstName, "lastName": row.LastName, "city": row.City,
-			})
+			// Only the keys this row actually carried, blanks dropped.
+			//
+			// The three names used to be marshalled unconditionally, so a file
+			// with no name column sent "firstName": "" — and `||` is a
+			// right-biased merge, so the blank won and every stored name was
+			// replaced with an empty string. No error, no count, nothing on
+			// screen; the customer found out when a campaign read "Dear ,".
+			//
+			// A blank cell in a spreadsheet means "I did not fill this in",
+			// never "delete what you know". Clearing a value deliberately is
+			// what PATCH /v1/contacts/{id} is for, where fields REPLACES.
+			fields, err := json.Marshal(filledFields(row.Fields))
 			if err != nil {
 				return err
 			}
@@ -745,4 +779,337 @@ func ContactIDsForIdentities(ctx context.Context, pool *pgxpool.Pool, id Identit
 		return nil, fmt.Errorf("store: contact ids for identities: %w", err)
 	}
 	return out, nil
+}
+
+// ContactFilter narrows a contact listing by the customer's own columns.
+//
+// A column is "msisdn", "email", or any key of the fields map. An unknown
+// column matches nothing and is NOT an error: a list can lose a column between
+// one import and the next, and a 4xx there would break a bookmarked URL.
+type ContactFilter map[string]string
+
+// contactFilterSQL builds the WHERE fragment and arguments for a filter.
+//
+// Every term is a case-insensitive substring and they AND together. The column
+// name is never interpolated — it is passed as a parameter and looked up inside
+// the jsonb, so a customer whose header row says `'; DROP` is a column name and
+// not a problem.
+func contactFilterSQL(filter ContactFilter, args *[]any) string {
+	if len(filter) == 0 {
+		return ""
+	}
+	// Sorted so the same filter always produces the same statement, which is
+	// what lets Postgres reuse a plan and what makes a slow query log readable.
+	columns := make([]string, 0, len(filter))
+	for column := range filter {
+		columns = append(columns, column)
+	}
+	sort.Strings(columns)
+
+	var clauses strings.Builder
+	for _, column := range columns {
+		value := filter[column]
+		switch column {
+		case "msisdn":
+			*args = append(*args, value)
+			fmt.Fprintf(&clauses, " AND c.msisdn ILIKE '%%' || $%d || '%%'", len(*args))
+		case "email":
+			*args = append(*args, value)
+			fmt.Fprintf(&clauses, " AND c.email ILIKE '%%' || $%d || '%%'", len(*args))
+		default:
+			*args = append(*args, column, value)
+			fmt.Fprintf(&clauses,
+				" AND c.fields ->> $%d ILIKE '%%' || $%d || '%%'", len(*args)-1, len(*args))
+		}
+	}
+	return clauses.String()
+}
+
+// FilterContacts pages contacts under a filter, and reports the total and the
+// column names over the WHOLE filtered collection.
+//
+// Total and fieldNames are both computed over everything matching, never over
+// the page: a total summed from the page is a count of the page, and a column
+// whose only values sit on page 84 would vanish for a reader on page 1 and
+// reappear later, which looks like data loss.
+func FilterContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, filter ContactFilter, page, limit int) (
+	[]Contact, int, []string, error) {
+
+	if limit <= 0 || limit > maxContactPage {
+		limit = 50
+	}
+	offset := pageOffset(page, limit)
+
+	where := `WHERE ($1::uuid IS NULL OR EXISTS (
+	              SELECT 1 FROM contact_list_members m
+	              WHERE m.contact_id = c.id AND m.list_id = $1))`
+	args := []any{listID}
+	where += contactFilterSQL(filter, &args)
+
+	var contacts []Contact
+	var total int
+	names := []string{}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM contacts c `+where, args...).Scan(&total); err != nil {
+			return err
+		}
+		// Every distinct key across the filtered set. jsonb_object_keys over the
+		// matching rows rather than over the page.
+		keys, err := tx.Query(ctx,
+			`SELECT DISTINCT k FROM contacts c, jsonb_object_keys(c.fields) k `+where+
+				` ORDER BY k`, args...)
+		if err != nil {
+			return err
+		}
+		for keys.Next() {
+			var name string
+			if err := keys.Scan(&name); err != nil {
+				keys.Close()
+				return err
+			}
+			names = append(names, name)
+		}
+		keys.Close()
+		if err := keys.Err(); err != nil {
+			return err
+		}
+
+		paged := append(append([]any{}, args...), limit, offset)
+		rows, err := tx.Query(ctx,
+			`SELECT `+contactColumns+` FROM contacts c `+where+
+				fmt.Sprintf(` ORDER BY c.created_at DESC, c.id DESC LIMIT $%d OFFSET $%d`,
+					len(paged)-1, len(paged)), paged...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			contact, err := scanContact(rows)
+			if err != nil {
+				return err
+			}
+			contacts = append(contacts, contact)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("store: filter contacts: %w", err)
+	}
+	return contacts, total, names, nil
+}
+
+// ContactUpdate is the change PATCH /v1/contacts/{id} applies. A nil pointer
+// means the caller did not mention the field; the distinction matters because
+// email's own null CLEARS it.
+type ContactUpdate struct {
+	Msisdn *string
+	// Email is a two-level pointer on purpose: nil means "not mentioned",
+	// a pointer to nil means "clear it", and a pointer to a value sets it.
+	Email  **string
+	Fields map[string]string
+}
+
+// UpdateContact corrects one contact.
+//
+// Fields REPLACES the stored map rather than merging. A merge cannot express a
+// deletion, and a customer who empties a box on screen means it — which is the
+// mirror of the import, where a blank cell means "not filled in" and must NOT
+// erase. The two doors mean opposite things by a blank, deliberately.
+//
+// ErrConflict when the new number or address already belongs to another
+// contact, with NOTHING written: the uniqueness is enforced by the index inside
+// the same statement rather than by a check above it, so a guard cannot store
+// the bad value and then report an error about it.
+func UpdateContact(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	contactID uuid.UUID, change ContactUpdate) (Contact, error) {
+
+	var contact Contact
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		sets := []string{"updated_at = now()"}
+		args := []any{contactID}
+		if change.Msisdn != nil {
+			args = append(args, *change.Msisdn)
+			sets = append(sets, fmt.Sprintf("msisdn = $%d", len(args)))
+		}
+		if change.Email != nil {
+			args = append(args, *change.Email)
+			sets = append(sets, fmt.Sprintf("email = $%d", len(args)))
+		}
+		if change.Fields != nil {
+			encoded, err := json.Marshal(filledFields(change.Fields))
+			if err != nil {
+				return err
+			}
+			args = append(args, encoded)
+			sets = append(sets, fmt.Sprintf("fields = $%d", len(args)))
+		}
+
+		row := tx.QueryRow(ctx, `
+			UPDATE contacts c SET `+strings.Join(sets, ", ")+`
+			WHERE c.id = $1
+			RETURNING `+contactColumns, args...)
+		updated, err := scanContact(row)
+		if isUniqueViolation(err) {
+			return ErrConflict
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		contact = updated
+		return nil
+	})
+	if err != nil {
+		return Contact{}, err
+	}
+	return contact, nil
+}
+
+// SetListVariableMapping records which column feeds which template slot.
+func SetListVariableMapping(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID uuid.UUID, mapping map[string]string) error {
+
+	encoded, err := json.Marshal(mapping)
+	if err != nil {
+		return err
+	}
+	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE contact_lists SET variable_mapping = $2 WHERE id = $1`, listID, encoded)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+// ListVariableMapping reads one list's mapping. The fan-out needs it for every
+// page it walks, so it is its own small read rather than part of a wider one.
+func ListVariableMapping(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID uuid.UUID) (map[string]string, error) {
+
+	mapping := map[string]string{}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var raw []byte
+		if err := tx.QueryRow(ctx,
+			`SELECT variable_mapping FROM contact_lists WHERE id = $1`, listID).Scan(&raw); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		return json.Unmarshal(raw, &mapping)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mapping, nil
+}
+
+// ConsentRecord is one declaration that a list's contacts agreed to a channel.
+type ConsentRecord struct {
+	ListID      uuid.UUID
+	Channel     string
+	State       string
+	OnlyUnknown bool
+	Declaration string
+	RecordedBy  string
+	Updated     int
+	RecordedAt  time.Time
+}
+
+// RecordConsent writes consent for every contact in a list, and files the
+// declaration that says who claimed it.
+//
+// onlyUnknown is the safe default and the one that matters: a person who has
+// explicitly opted OUT is not opted back in because somebody ticked a box about
+// a list they happen to be on. Only "unknown" is filled.
+//
+// consented_at is stamped only where the state NEWLY becomes opted_in. The
+// session clocks — the WhatsApp 24h window — start at that moment, and
+// re-stamping somebody already opted in would restart a clock that never
+// stopped.
+//
+// Consent belongs to the PERSON, not to the membership: opting in the members
+// of one list opts those same people in wherever else they appear, because a
+// person either agreed or did not.
+func RecordConsent(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	record ConsentRecord) (ConsentRecord, error) {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM contact_lists WHERE id = $1)`,
+			record.ListID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+
+		// Only rows whose state actually CHANGES are touched, so `updated`
+		// counts people rather than attempts and an unchanged contact keeps the
+		// timestamp it already had. RowsAffected is that count — deriving it
+		// afterwards by counting everyone now in the state would include the
+		// ones who were already there, and report a number nobody did.
+		tag, err := tx.Exec(ctx, `
+			UPDATE contacts c
+			SET consent = c.consent || jsonb_build_object($2::text, $3::text),
+			    consented_at = CASE
+			        WHEN $3 = 'opted_in'
+			        THEN c.consented_at || jsonb_build_object($2::text, to_jsonb(now()))
+			        ELSE c.consented_at
+			    END,
+			    updated_at = now()
+			WHERE EXISTS (SELECT 1 FROM contact_list_members m
+			              WHERE m.contact_id = c.id AND m.list_id = $1)
+			  AND coalesce(c.consent ->> $2, 'unknown') <> $3
+			  AND (NOT $4::boolean OR coalesce(c.consent ->> $2, 'unknown') = 'unknown')`,
+			record.ListID, record.Channel, record.State, record.OnlyUnknown)
+		if err != nil {
+			return err
+		}
+		record.Updated = int(tag.RowsAffected())
+
+		return tx.QueryRow(ctx, `
+			INSERT INTO contact_consent_records
+			    (tenant_id, list_id, channel, state, only_unknown, declaration, updated, recorded_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING recorded_at`,
+			id.TenantID, record.ListID, record.Channel, record.State, record.OnlyUnknown,
+			record.Declaration, record.Updated, record.RecordedBy).Scan(&record.RecordedAt)
+	})
+	if err != nil {
+		return ConsentRecord{}, err
+	}
+	return record, nil
+}
+
+// GetContact reads one contact. The edit path needs the country before it can
+// normalise a phone number, because "98765 00011" is only a number once you
+// know where it is.
+func GetContact(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	contactID uuid.UUID) (Contact, error) {
+
+	var contact Contact
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, `SELECT `+contactColumns+` FROM contacts c WHERE c.id = $1`, contactID)
+		found, err := scanContact(row)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		contact = found
+		return nil
+	})
+	return contact, err
 }
