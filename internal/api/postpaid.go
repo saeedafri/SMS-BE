@@ -63,37 +63,14 @@ func invoiceStatusFilter(status *string) (string, bool) {
 	return "", false
 }
 
-// invoiceStatusRefusal is the one sentence every route gives for it, so the
-// console can render it without knowing which route it came from.
-const invoiceStatusRefusal = "Status must be one of due, overdue or paid."
-
-// The two export routes declare no 422 in the contract, but an undeclared
-// status has to be refused there too: an export is built from the same filter
-// as the screen that offered it, so accepting `?status=pad` would hand an
-// operator a file of Due invoices under a filename saying something else.
+// invoiceStatusRefusal is the one sentence all four reads give, so the console
+// can render it without knowing which route it came from.
 //
-// The frontend's own mock already answers 422 here, so this matches the
-// behaviour they built against — their CONTRACT is the thing that disagrees
-// with it, and we have asked them to declare it. Until they do, these two
-// types serve the refusal the route cannot express.
-type invoiceStatusRefusalResponse struct{}
-
-func (invoiceStatusRefusalResponse) write(w http.ResponseWriter) error {
-	writeError(w, http.StatusUnprocessableEntity, codeValidation, invoiceStatusRefusal)
-	return nil
-}
-
-type tenantInvoicesStatusRefused struct{ invoiceStatusRefusalResponse }
-
-func (r tenantInvoicesStatusRefused) VisitExportTenantInvoicesResponse(w http.ResponseWriter) error {
-	return r.write(w)
-}
-
-type accountInvoicesStatusRefused struct{ invoiceStatusRefusalResponse }
-
-func (r accountInvoicesStatusRefused) VisitExportAccountInvoicesResponse(w http.ResponseWriter) error {
-	return r.write(w)
-}
+// The two exports used to have no 422 in the contract and the refusal was
+// served through a response type of our own; the contract declares it now, and
+// a test on their side fails if a route ever offers the status enum without
+// declaring the refusal for it.
+const invoiceStatusRefusal = "Status must be one of due, overdue or paid."
 
 // ---------------------------------------------------------------- projection
 
@@ -556,7 +533,8 @@ func (s *Server) ExportTenantInvoices(ctx context.Context,
 	}
 	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
 	if !statusOK {
-		return tenantInvoicesStatusRefused{}, nil
+		return gen.ExportTenantInvoices422JSONResponse(
+			errorBody(codeValidation, invoiceStatusRefusal)), nil
 	}
 	// Built from the same rows the paged route serves, under the identical
 	// filter, so the file and the screen that offered it can never disagree.
@@ -920,7 +898,8 @@ func (s *Server) ExportAccountInvoices(ctx context.Context,
 	}
 	filter, statusOK := invoiceStatusFilter((*string)(request.Params.Status))
 	if !statusOK {
-		return accountInvoicesStatusRefused{}, nil
+		return gen.ExportAccountInvoices422JSONResponse(
+			errorBody(codeValidation, invoiceStatusRefusal)), nil
 	}
 	rows, err := s.accountInvoiceRows(ctx, s.DB, identity.TenantID, filter)
 	if err != nil {
