@@ -79,6 +79,21 @@ const listWithCounts = `
 	        JOIN contacts c ON c.id = cm.contact_id
 	        LEFT JOIN LATERAL jsonb_each_text(c.consent) AS consent(key, value)
 	             ON consent.value = 'opted_in'
+	             -- Suppression beats consent, and it beats it HERE rather than
+	             -- only at the send gate. Somebody the send path correctly
+	             -- refuses was still being counted as reachable on the four
+	             -- screens that show this number, so a list of 1,000 with 200
+	             -- STOPs read as 1,000 consented right up until the campaign
+	             -- report said otherwise.
+	             --
+	             -- An opt-in is usually OLDER than the STOP that followed it,
+	             -- which is why the order is this way round and not the other:
+	             -- a "never contact" is the more recent instruction and the
+	             -- only one with a legal consequence for ignoring it.
+	             AND NOT EXISTS (
+	                 SELECT 1 FROM suppressions s
+	                 WHERE s.identity = CASE WHEN consent.key = 'EMAIL'
+	                                         THEN c.email ELSE c.msisdn END)
 	        WHERE cm.list_id = l.id
 	    ) counted
 	) m ON true`
@@ -712,7 +727,14 @@ const reachableOnChannel = `
 	  -- Consent is per channel and stored as a jsonb map. A channel the contact
 	  -- has never answered on is 'unknown', which is not consent: only an
 	  -- explicit opt-in counts.
-	  AND coalesce(c.consent ->> $3, '') = 'opted_in'`
+	  AND coalesce(c.consent ->> $3, '') = 'opted_in'
+	  -- And suppression overrides all of it. Without this the estimate quoted
+	  -- for people the gate then refused one by one: the customer approved a
+	  -- number, was charged nothing for the refusals, and read a delivery rate
+	  -- that counted them as failures.
+	  AND NOT EXISTS (
+	      SELECT 1 FROM suppressions s
+	      WHERE s.identity = CASE WHEN $2::boolean THEN c.email ELSE c.msisdn END)`
 
 func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	listID *uuid.UUID, channel string) (int, error) {
@@ -733,6 +755,44 @@ func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("store: count reachable contacts: %w", err)
+	}
+	return total, nil
+}
+
+// SuppressedOnChannel counts the contacts a list would otherwise reach on a
+// channel who have opted out of being contacted at all.
+//
+// It exists so a reduced recipient count has a reason printed beside it.
+// ReachableOnChannel now subtracts these people, and a recipient total that
+// drops with nothing explaining the drop reads as a bug in the estimate — the
+// customer approves a smaller number than the list they just uploaded and has
+// no way to tell whether it is right.
+//
+// Counted with the same consent and addressability rules, so the two numbers
+// partition the same audience rather than overlapping it.
+func SuppressedOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, channel string) (int, error) {
+
+	byEmail := channel == "EMAIL"
+	var total int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*) FROM contacts c
+			WHERE ($1::uuid IS NULL OR EXISTS (
+			        SELECT 1 FROM contact_list_members m
+			        WHERE m.contact_id = c.id AND m.list_id = $1))
+			  AND CASE WHEN $2::boolean
+			           THEN c.email IS NOT NULL AND c.email <> ''
+			           ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
+			      END
+			  AND coalesce(c.consent ->> $3, '') = 'opted_in'
+			  AND EXISTS (
+			      SELECT 1 FROM suppressions s
+			      WHERE s.identity = CASE WHEN $2::boolean THEN c.email ELSE c.msisdn END)`,
+			listID, byEmail, channel).Scan(&total)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: count suppressed contacts: %w", err)
 	}
 	return total, nil
 }

@@ -131,8 +131,11 @@ func (s *Server) EstimateCost(ctx context.Context, request gen.EstimateCostReque
 		CostMinorMin:          int(minCost),
 		CostMinorMax:          int(maxCost),
 		Currency:              gen.CurrencyCode(rate.Currency),
-		// Suppression lists arrive in Stage 4; until then nothing is excluded,
-		// and reporting zero is accurate rather than a placeholder.
+		// Zero because this endpoint is given a recipient COUNT, not a list:
+		// there is no audience here to check against the suppression table, so
+		// nothing can have been excluded from the number the caller supplied.
+		// The campaign wizard's own estimate, which is handed a list id, does
+		// report the real figure — see sending.EstimateCampaign.
 		SuppressedExcluded: 0,
 	}), nil
 }

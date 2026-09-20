@@ -34,12 +34,13 @@ type sendPlan struct {
 	body     string
 	cost     int64
 	segments int
-	// fields are the contact's own values, kept so an RCS submission can fill
-	// the CARRIER's template with the same values that personalised the body.
-	// Without them a campaign renders "Hi Priya" in the log and sends the
-	// handset "Hi " — the carrier holds the template, and it fills the slots
-	// from what we pass, not from the body.
-	fields map[string]string
+	// message is this recipient's whole message, filled: the body above, the
+	// rich document, and the template's declared slots resolved for them. Kept
+	// so an RCS submission can fill the CARRIER's template with the same values
+	// that personalised the body — without them a campaign renders "Hi Priya"
+	// in the log and sends the handset "Hi ", because the carrier holds the
+	// template and fills the slots from what we pass, not from the body.
+	message renderedMessage
 	// refusal is set when the gate refused this recipient. Refused messages
 	// are still recorded — a tenant asking "why didn't this arrive" deserves an
 	// answer — but no money is held for them.
@@ -107,18 +108,25 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		// before the send gate — somebody already excluded for opting out must
 		// not ALSO be counted as missing a first name, which would explain one
 		// person twice in two different numbers.
-		body, missing := personalise(context.body, contact, context.variableMapping)
-		if len(missing) > 0 {
-			context.skipped.add(missing)
+		//
+		// One walk over the WHOLE message, not just its body: an RCS template
+		// leaves body null on purpose and keeps its words in a card, so reading
+		// the body alone found no slots and skipped nobody on exactly the
+		// channel where the carrier renders from what we pass.
+		message := renderMessage(context.template, context.body, contact.Fields,
+			context.variableMapping)
+		if len(message.missing) > 0 {
+			context.skipped.add(message.missing)
 			continue
 		}
+		body := message.body
 		segments := billing.SegmentCount(body)
 		cost := int64(segments) * context.rate.PerSegmentMinor
 
 		email := contactEmail(contact)
 		plan := sendPlan{
 			messageID: uuid.New(), msisdn: msisdn, email: email, body: body,
-			cost: cost, segments: segments, fields: contact.Fields,
+			cost: cost, segments: segments, message: message,
 		}
 
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
@@ -143,6 +151,12 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			DNDCheckUnavailable:        dndUnavailable,
 			TemplateBody:               templateBody(context.template),
 			Body:                       body,
+			// The dispatch invariant, and the last thing standing between an
+			// unfilled {{token}} and a handset. The skip above already refused
+			// this recipient, so in a working system it never fires — it reads
+			// the rendered strings rather than that skip's own verdict, because
+			// a bug in the fill is what it is here to catch.
+			UnresolvedVariables: message.unresolved(),
 			// The balance check uses the running total for this batch, so a
 			// wallet that runs dry mid-page refuses the rest instead of going
 			// negative.
@@ -203,9 +217,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		} else {
 			submissions = append(submissions, connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
-				Sender: context.sender.Header,
-				Body: rcsText(context.sender.Channel, plan.body,
-					context.template, plan.fields),
+				Sender:  context.sender.Header,
+				Body:    plan.message.text(context.sender.Channel),
 				Channel: context.sender.Channel, Country: context.sender.Country,
 				Carrier:           context.carrier,
 				Promotional:       context.template.DltCategory != nil && *context.template.DltCategory == "PROMOTIONAL",
@@ -218,7 +231,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 				// a campaign that personalises its body and sends the carrier
 				// nothing would put "Hi Priya" in our log and "Hi " on the
 				// handset.
-				TemplateVariables: TemplateVariables(context.template, plan.fields),
+				TemplateVariables: TemplateVariables(context.template, plan.message.variables),
 			})
 		}
 		record := store.MessageRecord{

@@ -319,6 +319,12 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 
 	dndBlocked, dndUnavailable := s.dndStatus(ctx, sender.Channel, msisdn, template)
 
+	// The whole message, filled from the variables this send named. The caller
+	// already speaks slot names here — there is no list and so no column
+	// mapping — but it is the same walk over the same strings the fan-out uses,
+	// so a single send and a campaign of one cannot fill differently.
+	rendered := renderMessage(template, request.Body, request.Variables, nil)
+
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
@@ -333,6 +339,12 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		DNDCheckUnavailable:        dndUnavailable,
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
+		// Nothing leaves with a hole in it. A single send names its own
+		// variables, so an unfilled slot here is the caller's omission rather
+		// than a missing column — and refusing it, with a code that says which
+		// it was, is better than an operator matching "Dear ," against the
+		// registered template and scrubbing the traffic silently.
+		UnresolvedVariables: rendered.unresolved(),
 		// Required only where a real RCS gateway is configured. With none, the
 		// message goes to the sandbox and no handset sees a brand at all, so
 		// demanding an agent would refuse every send on a deployment that has
@@ -402,14 +414,14 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	entityID, dltTemplateID := s.dltIDs(ctx, identity, sender.Channel, sender.Country, template)
 	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
-		Body:    rcsText(sender.Channel, request.Body, template, request.Variables),
+		Body:    rendered.text(sender.Channel),
 		Channel: sender.Channel, Country: sender.Country,
 		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
 		Priority:          request.Priority,
 		Promotional:       template.DltCategory != nil && *template.DltCategory == "PROMOTIONAL",
 		CarrierTemplateID: carrierTemplateID,
 		AgentID:           agentID,
-		TemplateVariables: TemplateVariables(template, request.Variables),
+		TemplateVariables: TemplateVariables(template, rendered.variables),
 	}})
 	if err != nil {
 		return SendResult{}, fmt.Errorf("sending: submit: %w", err)
@@ -837,44 +849,6 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
-}
-
-// rcsText is the text an RCS submission carries.
-//
-// A campaign's body is empty on RCS, because Airtel and Vi hold the template
-// and render it themselves. The operators that do not — Google, and Jio, which
-// reviews the assistant rather than the message — are handed nothing to show
-// and refuse the send body_required. So the template's own text is rendered
-// here, from the SAME contact values that fill a carrier-held template, and
-// only when the caller supplied no body of its own.
-//
-// Billing is untouched on purpose: the cost was priced from what the caller
-// sent, and rendering text for a carrier is not a reason to charge for more
-// segments.
-func rcsText(channel, body string, template store.Template, fields map[string]string) string {
-	if channel == "RCS" && strings.TrimSpace(body) == "" {
-		return fillSlots(templateBody(template), fields)
-	}
-	// Every other channel carries the text itself, so a slot left in it goes
-	// out literally: an operator matching it against the registered DLT
-	// template delivers "Dear ," and nothing anywhere says why. Filling it here
-	// is the same substitution a campaign does from a contact's fields, applied
-	// to the values a single send named instead.
-	return fillSlots(body, fields)
-}
-
-// fillSlots replaces {{name}} with the value given for name. A slot with no
-// value is left alone rather than blanked: the gate refuses a body that no
-// longer instantiates its template, which is a visible failure instead of a
-// message with a hole in it.
-func fillSlots(text string, fields map[string]string) string {
-	for name, value := range fields {
-		if value == "" {
-			continue
-		}
-		text = strings.ReplaceAll(text, "{{"+name+"}}", value)
-	}
-	return text
 }
 
 // templateBody is the registered text a submitted body must instantiate.

@@ -294,16 +294,8 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		if err != nil {
 			return nil, err
 		}
-		templateBody := ""
-		if template.Body != nil {
-			templateBody = *template.Body
-		}
-		templateCategory := ""
-		if template.Category != nil {
-			templateCategory = *template.Category
-		}
 		estimate, err := service.EstimateCampaign(ctx, identity, campaign.ListID,
-			campaign.Country, campaign.Channel, templateBody, templateCategory)
+			campaign.Country, campaign.Channel, template)
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
 			campaign.SegmentsPerMessageMin = estimate.SegmentsPerMessageMin
@@ -397,30 +389,23 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		listID = &parsed
 	}
 
-	templateBody := ""
-	templateCategory := ""
+	// The template is handed over whole. It carries the body, the category —
+	// which is what Email, WhatsApp and Voice are actually priced on, so an
+	// estimate that ignored it quoted the wrong rate — and, for RCS, the card
+	// that holds the variables instead of a body.
+	var template store.Template
 	if body.TemplateId != "" {
 		templateID, err := uuid.Parse(body.TemplateId)
 		if err != nil {
 			return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation, "templateId must be a uuid")), nil
 		}
-		template, err := store.GetTemplate(ctx, s.DB, identity, templateID)
-		if err == nil {
-			if template.Body != nil {
-				templateBody = *template.Body
-			}
-			// The category is what Email, WhatsApp and Voice are actually
-			// priced on, so an estimate that ignored it quoted the wrong rate
-			// — or, where the corridor had no channel-level row at all, failed
-			// outright.
-			if template.Category != nil {
-				templateCategory = *template.Category
-			}
+		if loaded, err := store.GetTemplate(ctx, s.DB, identity, templateID); err == nil {
+			template = loaded
 		}
 	}
 
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
-		string(body.Country), string(body.Channel), templateBody, templateCategory)
+		string(body.Country), string(body.Channel), template)
 	if errors.Is(err, sending.ErrNoRate) {
 		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
 			"We do not have a rate for that country and channel yet.")), nil
@@ -435,6 +420,7 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		CostMinorMin:          int(estimate.CostMinorMin),
 		CostMinorMax:          int(estimate.CostMinorMax),
 		Currency:              gen.CurrencyCode(estimate.Currency),
+		SuppressedExcluded:    estimate.SuppressedExcluded,
 		// Optional in the contract on purpose: an ABSENT count means "this
 		// server cannot tell yet", which the screen says in those words. We can
 		// tell, so we always send it — a zero here is a measured zero.

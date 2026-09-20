@@ -68,6 +68,25 @@ var (
 
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
+
+	// ErrVariableUnresolved is a message that still carries a {{token}} nobody
+	// filled, caught on its way out.
+	//
+	// The fan-out already skips a contact it cannot personalise, so in a
+	// working system this never fires. That is what it is for. It reads the
+	// RENDERED strings rather than trusting the list of missing values the fill
+	// reported, because a bug in the fill is the thing it exists to catch — and
+	// a fill broken enough to leave a token behind is broken enough to report
+	// nothing missing.
+	//
+	// It matters most on RCS. Today an RCS send is not refused for this: it
+	// goes to the sandbox, is charged, is logged as sent and is seen by nobody,
+	// which is correct for a deployment with no carrier. The day credentials
+	// are configured, every one of those guards flips at once, and an
+	// unsubstituted {{first_name}} reaches a handset with everybody watching
+	// RCS work and nobody watching for it.
+	ErrVariableUnresolved = errors.New(
+		"messaging: the message still contains a variable nothing filled")
 )
 
 // GateInput is everything the gate needs to decide. It is a plain struct with
@@ -122,6 +141,13 @@ type GateInput struct {
 	// OutsidePromotionalWindow is a promotional message sent when its
 	// destination forbids promotional traffic.
 	OutsidePromotionalWindow bool
+
+	// UnresolvedVariables says a {{token}} survived into the rendered message
+	// — any of its strings, not only the body. Set by the caller, which is the
+	// only layer that can see every string a message is made of: the text, an
+	// RCS card's title and description, and each suggestion's own label and
+	// link.
+	UnresolvedVariables bool
 }
 
 // Check runs the gate. Order matters and is deliberate: compliance failures
@@ -170,6 +196,13 @@ func Check(input GateInput) error {
 			!MatchesTemplate(input.TemplateBody, input.Body) {
 			return ErrTemplateBodyMismatch
 		}
+	}
+	// Nothing leaves with a hole in it. Placed with the other content rules and
+	// before every carrier check, because this is the one refusal that is about
+	// the message itself rather than about who may send it — and the only one
+	// whose failure mode is a delivered message rather than a refused one.
+	if input.UnresolvedVariables {
+		return ErrVariableUnresolved
 	}
 	// After our own approval, because a template neither side has approved
 	// should say so in the order the customer would fix it: our review first,
@@ -237,6 +270,7 @@ var refusals = []error{
 	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 	ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
 	ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
+	ErrVariableUnresolved,
 }
 
 func GateFailureCode(err error) string {
@@ -259,6 +293,8 @@ func GateFailureCode(err error) string {
 		return "rcs_agent_not_resolved"
 	case errors.Is(err, ErrTemplateBodyMismatch):
 		return "template_body_mismatch"
+	case errors.Is(err, ErrVariableUnresolved):
+		return "variable_unresolved"
 	case errors.Is(err, ErrOutsidePromotionalWindow):
 		return "outside_promotional_window"
 	case errors.Is(err, ErrSuppressed):

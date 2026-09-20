@@ -145,3 +145,35 @@ func TestTheAgentCheckCostsNothingAndOnlyBindsWhereACarrierExists(t *testing.T) 
 		t.Errorf("a resolved agent was refused: %v", err)
 	}
 }
+
+// The dispatch invariant: nothing leaves with a hole in it.
+//
+// The fan-out already skips a contact it cannot personalise, so this refusal
+// never fires in a working system. That is what it is for — it is the check
+// that still holds when the fill is the thing that broke.
+func TestAMessageWithAnUnfilledVariableIsRefused(t *testing.T) {
+	input := validInput()
+	input.UnresolvedVariables = true
+	if err := messaging.Check(input); !errors.Is(err, messaging.ErrVariableUnresolved) {
+		t.Fatalf("Check = %v, want ErrVariableUnresolved", err)
+	}
+	if code := messaging.GateFailureCode(messaging.ErrVariableUnresolved); code != "variable_unresolved" {
+		t.Fatalf("code = %q, want variable_unresolved", code)
+	}
+	if !messaging.IsRefusal(messaging.ErrVariableUnresolved) {
+		t.Fatal("an unfilled variable is a refusal, not a fault: it must not read as a 500")
+	}
+}
+
+// Refused before the carrier's own verdict, so the reason a customer reads is
+// the one they can act on. A template the carrier has not approved and a
+// variable nothing filled are two different fixes, and only the second would
+// otherwise be DELIVERED rather than refused.
+func TestAnUnfilledVariableIsReportedBeforeTheCarriersVerdict(t *testing.T) {
+	input := validInput()
+	input.UnresolvedVariables = true
+	input.CarrierTemplateStatus = "pending"
+	if err := messaging.Check(input); !errors.Is(err, messaging.ErrVariableUnresolved) {
+		t.Fatalf("Check = %v, want ErrVariableUnresolved", err)
+	}
+}

@@ -139,6 +139,23 @@ func TestAnUnreachableCarrierIsListedRatherThanHidden(t *testing.T) {
 		if launch.CarrierAgentId != nil {
 			t.Errorf("%s has a carrier id before anything was submitted", launch.Carrier)
 		}
+		// And the row says WHY it is at not_submitted. "Nobody has submitted
+		// it yet" and "we cannot reach that network at all" are the same
+		// status and different things to tell a customer: the first is a
+		// button, the second is an explanation. Without it a screen decided
+		// from its own list of adapters and offered a Submit that the launch
+		// endpoint answers 409 to.
+		if launch.Reachable == nil {
+			t.Errorf("%s does not say whether this deployment can reach it", launch.Carrier)
+			continue
+		}
+		// This harness configures no RCS carrier, which is the state of every
+		// deployment before credentials arrive — and the state ask 57 has to
+		// land in front of.
+		if *launch.Reachable {
+			t.Errorf("%s reads as reachable on a deployment holding no RCS credentials",
+				launch.Carrier)
+		}
 	}
 }
 
@@ -150,6 +167,7 @@ type agentBody struct {
 		Carrier        string  `json:"carrier"`
 		Status         string  `json:"status"`
 		CarrierAgentId *string `json:"carrierAgentId"`
+		Reachable      *bool   `json:"reachable"`
 	} `json:"carrierLaunches"`
 	Verification struct {
 		Status          string  `json:"status"`

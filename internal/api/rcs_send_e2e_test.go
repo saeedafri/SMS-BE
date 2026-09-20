@@ -105,10 +105,21 @@ func TestAnRCSSendReachesTheCarrierWithItsTemplateAndVariables(t *testing.T) {
 	}
 }
 
-// A variable the caller forgot is sent empty rather than dropped. Dropping it
-// would shift every later position by one, and Airtel refuses a send with fewer
-// values than the template declares.
-func TestAMissingVariableIsSentEmptySoPositionsDoNotShift(t *testing.T) {
+// A variable the caller forgot is REFUSED, not sent empty.
+//
+// This test used to assert the opposite, and the behaviour it asserted is the
+// defect this whole batch exists to remove: a caller omits first_name, the
+// empty value is substituted, and a handset reads "Hi , your order A-2
+// shipped." — a grammatically plausible sentence with a hole in it, no error
+// anywhere, and the operator matching it against the registered DLT template
+// none the wiser.
+//
+// The positional rule it was really protecting is a different rule and still
+// holds: when values ARE sent, a slot keeps its place so Airtel's {{1}} and
+// {{2}} do not slide. That is asserted directly on TemplateVariables below,
+// which is where it belongs — proving it by dispatching a holed message was
+// always the wrong way to prove it.
+func TestAMissingVariableIsRefusedRatherThanSentEmpty(t *testing.T) {
 	t.Parallel()
 	carrier := &stubRegistrar{vendor: "airtel"}
 	h := newRCSSendHarness(t, carrier)
@@ -118,36 +129,28 @@ func TestAMissingVariableIsSentEmptySoPositionsDoNotShift(t *testing.T) {
 
 	res := h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
 		"senderId": senderID.String(), "templateId": templateID.String(),
-		// The instantiation with an empty first_name, spaces and all. India's
-		// regime now requires the body to be a legal instantiation of the
-		// registered template, and "Hi, your order shipped." is not one — the
-		// template's fixed text is "Hi " then the name then ", your order ".
 		"to": "9876543211", "body": "Hi , your order A-2 shipped.",
 		"variables": map[string]string{"order_id": "A-2"},
 	})
 	if res.Code != http.StatusAccepted {
 		t.Fatalf("status = %d; body = %s", res.Code, res.Body)
 	}
-	// Asserted before reaching into the carrier's submissions, so a refusal
-	// reports the reason instead of panicking on an empty slice.
 	var sent gen.SendMessageResult
 	res.decode(t, &sent)
-	if sent.Status != "sent" && sent.Status != "accepted" {
-		t.Fatalf("status = %q; body = %s", sent.Status, res.Body)
+	if sent.Status != "rejected" {
+		t.Fatalf("status = %q, want rejected; body = %s", sent.Status, res.Body)
 	}
-	if len(carrier.sawSubmissions) == 0 {
-		t.Fatal("nothing reached the carrier")
+	if sent.ErrorCode == nil || string(*sent.ErrorCode) != "variable_unresolved" {
+		t.Errorf("errorCode = %v, want variable_unresolved", sent.ErrorCode)
 	}
-
-	submission := carrier.sawSubmissions[0]
-	if len(submission.TemplateVariables) != 2 {
-		t.Fatalf("TemplateVariables = %v, want both slots present", submission.TemplateVariables)
+	// A refusal is never charged for. The same shape as every other code
+	// beside it.
+	if sent.CostMinor != 0 {
+		t.Errorf("costMinor = %d, want 0; nothing left, so nothing is owed", sent.CostMinor)
 	}
-	if submission.TemplateVariables[0].Value != "" {
-		t.Errorf("slot 1 = %q, want empty", submission.TemplateVariables[0].Value)
-	}
-	if submission.TemplateVariables[1].Value != "A-2" {
-		t.Errorf("slot 2 = %q, want the value that WAS supplied", submission.TemplateVariables[1].Value)
+	if len(carrier.sawSubmissions) != 0 {
+		t.Fatalf("%d submissions reached the carrier; a message with a hole in it "+
+			"must not be dispatched", len(carrier.sawSubmissions))
 	}
 }
 

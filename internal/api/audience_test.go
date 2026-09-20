@@ -341,3 +341,56 @@ func TestAudienceRequiresAuthentication(t *testing.T) {
 		}
 	}
 }
+
+// consentedCounts used to count people who had replied STOP.
+//
+// The tally joined consent and nothing else, so somebody the send path
+// correctly refuses still read as reachable on the four screens that show this
+// number. Suppression is the FIRST gate and it overrides consent: an opt-in is
+// usually older than the STOP that followed it, and it is the STOP that has a
+// legal consequence for ignoring it.
+func TestConsentedCountsExcludesPeopleWhoRepliedStop(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	list := createList(t, h, acct.Token, "Consent versus suppression")
+
+	importRows(t, h, acct.Token, list.Id.String(), []map[string]any{
+		{"msisdn": "9876500001", "line": 2},
+		{"msisdn": "9876500002", "line": 3},
+		{"msisdn": "9876500003", "line": 4},
+	}, "consent-suppression-key")
+
+	before := fetchList(t, h, acct.Token, list.Id.String())
+	if before.ConsentedCounts["SMS"] != 3 {
+		t.Fatalf("consentedCounts before = %v, want SMS: 3", before.ConsentedCounts)
+	}
+
+	added := h.do(http.MethodPost, "/v1/suppressions", acct.Token, map[string]any{
+		"msisdns": []string{"+919876500002"}, "reason": "opted_out_keyword",
+	})
+	if added.Code != http.StatusOK {
+		t.Fatalf("add suppression: status = %d; body = %s", added.Code, added.Body)
+	}
+
+	after := fetchList(t, h, acct.Token, list.Id.String())
+	if after.ConsentedCounts["SMS"] != 2 {
+		t.Fatalf("consentedCounts after a STOP = %v, want SMS: 2", after.ConsentedCounts)
+	}
+	// Membership is not consent. The person is still on the list — they are
+	// just not someone we may message.
+	if after.ContactCount != 3 {
+		t.Fatalf("contactCount = %d, want 3; suppression is not removal", after.ContactCount)
+	}
+}
+
+func fetchList(t *testing.T, h *harness, token, listID string) gen.ContactList {
+	t.Helper()
+	res := h.do(http.MethodGet, "/v1/contact-lists/"+listID, token, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("get list: status = %d; body = %s", res.Code, res.Body)
+	}
+	var list gen.ContactList
+	res.decode(t, &list)
+	return list
+}

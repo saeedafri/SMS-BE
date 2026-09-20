@@ -230,6 +230,11 @@ type mixedPlan struct {
 	carrier        string
 	routeID        *string
 
+	// message is this send's whole message, filled from the variables it named.
+	// Rendered once with the plan for the same reason the brand is: the gate
+	// and the submission must not disagree about what was actually sent.
+	message renderedMessage
+
 	// rcsCarrier is the gateway RCS has to itself, empty when there is none,
 	// and agentID the brand this message's sender goes out under on it.
 	// Resolved with the plan so the gate and the submission cannot disagree
@@ -300,6 +305,10 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			DNDCheckUnavailable:        plan.dndUnavailable,
 			TemplateBody:               templateBody(plan.template),
 			Body:                       plan.pending.request.Body,
+			// The dispatch invariant, applied identically to the batched path
+			// for the same reason the template binding is: a gate that is
+			// weaker when messages arrive in company is not a gate.
+			UnresolvedVariables: plan.message.unresolved(),
 			// The balance already committed to earlier messages in this batch is
 			// subtracted, so a wallet that runs dry mid-batch refuses the rest
 			// instead of going negative — the same running total SendBatch keeps.
@@ -429,6 +438,11 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 			}
 			plan.template = template
 		}
+
+		// One walk over the whole message, the same one the fan-out and the
+		// single send use. A caller here names its own variables, so there is
+		// no column mapping to join them through.
+		plan.message = renderMessage(plan.template, request.Body, request.Variables, nil)
 
 		plan.rcsCarrier, plan.agentID = s.rcsPath(ctx, identity, sender)
 		// Keyed by operator too: two RCS senders in one corridor can go out
@@ -624,9 +638,8 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 		byChannel[plan.sender.Channel] = append(byChannel[plan.sender.Channel],
 			connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
-				Sender: plan.sender.Header,
-				Body: rcsText(plan.sender.Channel, plan.pending.request.Body,
-					plan.template, plan.pending.request.Variables),
+				Sender:  plan.sender.Header,
+				Body:    plan.message.text(plan.sender.Channel),
 				Channel: plan.sender.Channel, Country: plan.sender.Country,
 				Carrier:           plan.carrier,
 				DLTEntityID:       entityID,
@@ -635,8 +648,7 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 				Promotional:       plan.template.DltCategory != nil && *plan.template.DltCategory == "PROMOTIONAL",
 				CarrierTemplateID: carrierTemplateID,
 				AgentID:           plan.agentID,
-				TemplateVariables: TemplateVariables(plan.template,
-					plan.pending.request.Variables),
+				TemplateVariables: TemplateVariables(plan.template, plan.message.variables),
 			})
 	}
 

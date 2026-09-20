@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/store"
 )
@@ -33,6 +32,13 @@ type CampaignEstimate struct {
 	// nobody, which is the common case and costs nothing to answer.
 	VariableSkipped       int
 	VariableSkippedByName map[string]int
+
+	// SuppressedExcluded is how many of the list's otherwise-reachable contacts
+	// have opted out of being contacted. Recipients is already reduced by it,
+	// the same way it is reduced by VariableSkipped — this is the sentence that
+	// explains the drop, without which a smaller number than the file the
+	// customer just uploaded reads as a fault in the estimate.
+	SuppressedExcluded int
 }
 
 // EstimateCampaign prices a campaign against its real audience.
@@ -44,8 +50,19 @@ type CampaignEstimate struct {
 // not a fault, and the API answers it with a sentence the customer can act on.
 var ErrNoRate = errors.New("sending: no rate for corridor")
 
+// The template is passed whole rather than as its body, because an RCS
+// template has no body: its words live in a card, and an estimate reading
+// template.Body alone saw an empty string, found no slots in it and reported
+// that nobody would be skipped — on the one channel where the carrier renders
+// from the values we pass.
 func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, country, channel, body, category string) (CampaignEstimate, error) {
+	listID *uuid.UUID, country, channel string, template store.Template) (CampaignEstimate, error) {
+
+	body := templateText(template)
+	category := ""
+	if template.Category != nil {
+		category = *template.Category
+	}
 
 	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, country, channel, category)
 	if err != nil {
@@ -67,6 +84,13 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
+	// Already excluded from total above — counted here only so the screen can
+	// say why. Suppression overrides consent wherever the two disagree: an
+	// opt-in is usually older than the STOP that followed it.
+	suppressed, err := store.SuppressedOnChannel(ctx, s.DB, identity, listID, channel)
+	if err != nil {
+		return CampaignEstimate{}, err
+	}
 
 	// The range, not a guess at one. This used to add 1 to the written count
 	// when the body contained "{{" — right often enough to look correct, and
@@ -79,7 +103,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	// the fan-out skips by, walking the same list, so the number quoted before
 	// the send is the number the send acts on. A count that disagreed with the
 	// send would be worse than none, because it would be believed.
-	skipped, byName, err := s.countUnpersonalisable(ctx, identity, listID, channel, body)
+	skipped, byName, err := s.countUnpersonalisable(ctx, identity, listID, channel, template)
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
@@ -88,6 +112,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	}
 
 	return CampaignEstimate{
+		SuppressedExcluded:    suppressed,
 		VariableSkipped:       skipped,
 		VariableSkippedByName: byName,
 		Recipients:            total,
@@ -119,10 +144,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return 0, 0, err
 	}
-	body := ""
-	if template.Body != nil {
-		body = *template.Body
-	}
+	body := templateText(template)
 	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, sender.Country, sender.Channel, "")
 	if err != nil {
 		return 0, 0, fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
@@ -279,34 +301,20 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	return sent, failed, nil
 }
 
-// personalise substitutes a template's slots from one contact's own columns,
-// and reports the slots it could not fill.
+// countUnpersonalisable walks a list and counts who the message cannot be
+// filled for, by the same rule the fan-out skips by.
 //
-// The rule is audience.ResolveField, shared with the campaign wizard's preview.
-// If the two ever differ the customer is shown one message and a handset
-// receives another, which is the one failure neither side can detect alone.
-//
-// A contact with any unresolved slot is SKIPPED by the caller rather than sent
-// a message with a hole in it. Before this, walking the contact's fields meant
-// a slot with no value was never visited at all: on the live system 999 of
-// 1,000 contacts had no first name, so "Dear {{firstName}}," would have gone
-// out literally on 999 handsets in 1,000 — and where the value was present but
-// blank it read "Dear ," instead, which is the same defect wearing a
-// grammatically plausible disguise.
-func personalise(body string, contact store.Contact, mapping map[string]string) (string, []string) {
-	filled := audience.Fill(body, contact.Fields, mapping)
-	return filled.Text, filled.Missing
-}
-
-// countUnpersonalisable walks a list and counts who the body cannot be filled
-// for, by the same rule the fan-out skips by.
-//
-// A body with no slots returns zero without reading anything: that is the
-// common case and it must not cost a walk of the audience.
+// A message with no slots anywhere returns zero without reading anything: that
+// is the common case and it must not cost a walk of the audience. "Anywhere" is
+// the fix — this used to ask only whether the BODY had slots, so an RCS
+// template, whose body is null and whose {{first_name}} lives in a card,
+// returned zero here while the send skipped nobody. Both numbers were wrong in
+// the same direction, which is why they agreed.
 func (s *Service) countUnpersonalisable(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, channel, body string) (int, map[string]int, error) {
+	listID *uuid.UUID, channel string, template store.Template) (int, map[string]int, error) {
 
-	if listID == nil || len(audience.SlotsIn(body)) == 0 {
+	body := templateText(template)
+	if listID == nil || len(templateSlots(template, body)) == 0 {
 		return 0, nil, nil
 	}
 	mapping, err := store.ListVariableMapping(ctx, s.DB, identity, *listID)
@@ -326,8 +334,9 @@ func (s *Service) countUnpersonalisable(ctx context.Context, identity store.Iden
 			return 0, nil, err
 		}
 		for _, contact := range contacts {
-			if _, missing := personalise(body, contact, mapping); len(missing) > 0 {
-				tally.add(missing)
+			rendered := renderMessage(template, body, contact.Fields, mapping)
+			if len(rendered.missing) > 0 {
+				tally.add(rendered.missing)
 			}
 		}
 		if next == "" {

@@ -130,6 +130,18 @@ func (s *Server) rcsAgentResponse(ctx context.Context, agent store.RcsAgent) gen
 	}
 	slices.Sort(carriers)
 
+	// Whether this deployment can reach each carrier at all, read once. The
+	// launch endpoint already refuses a carrier we hold no credentials for —
+	// `POST /v1/rcs/agents/{id}/launch` answers 409 "We hold no AIRTEL
+	// integration yet" — but nothing said so before the customer pressed the
+	// button, so a screen decided from its own list of adapters and offered a
+	// Submit the API was always going to refuse.
+	//
+	// It matters most on a PARTIAL rollout, which is the expected shape here:
+	// Airtel's credentials arrive before Vi's, and for the weeks between, the
+	// only control that works is the one for the carrier we already have.
+	reachable := s.reachableCarriers()
+
 	out.CarrierLaunches = make([]gen.RcsCarrierLaunch, 0, len(carriers))
 	for _, carrier := range carriers {
 		// A launch on the Google RBM test platform is used for sending but not
@@ -149,6 +161,11 @@ func (s *Server) rcsAgentResponse(ctx context.Context, agent store.RcsAgent) gen
 			RejectionReason: launch.RejectionReason,
 			SubmittedAt:     launch.SubmittedAt,
 		}
+		// Sent always, never omitted. Absent means "this server does not say",
+		// so a client keeps whatever it assumed; false is the stronger and more
+		// useful claim, and we are in a position to make it.
+		carrierReachable := reachable[carrier]
+		row.Reachable = &carrierReachable
 		// Null, not the zero time. A synthesised not_submitted row has never
 		// been updated, and 0001-01-01T00:00:00Z is a value that looks like
 		// data — the exact failure we warned the frontend about one required

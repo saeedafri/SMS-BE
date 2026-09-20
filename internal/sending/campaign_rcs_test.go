@@ -2,6 +2,8 @@ package sending_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -180,4 +182,130 @@ func (f *fixture) exec(sql string, args ...any) {
 		}); err != nil {
 		f.t.Fatalf("seed: %v", err)
 	}
+}
+
+// An RCS template keeps its words in a card, and template.Body is null on
+// purpose. The fan-out read that null body, found no slots in an empty string,
+// and so skipped nobody — on the one channel where the carrier renders from
+// what we pass. Every contact was dispatched and charged for, and the card's
+// own {{offer}} was never looked at.
+func TestAnRCSCardCampaignSkipsContactsItCannotFill(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	carrier := &recordingCarrier{}
+	f.service.Carriers = connector.Registry{
+		Default:   f.service.Connector,
+		ByChannel: map[string]connector.Connector{"RCS": carrier},
+	}
+
+	senderID := f.seedApprovedSender("RCSCARD", "RCS")
+	// The card needs an offer. Nobody on this list has one.
+	templateID := f.seedRCSCardTemplate(senderID, []string{"first_name", "offer"})
+	listID := f.seedListWithNamedContacts(map[string]string{
+		"919820000021": "Priya",
+		"919820000022": "Vikram",
+	})
+	campaign, err := store.GetCampaign(ctx, f.service.DB, f.identity,
+		f.seedRCSCampaign(senderID, templateID, listID))
+	if err != nil {
+		t.Fatalf("load campaign: %v", err)
+	}
+
+	sent, failed, err := f.service.LaunchCampaign(ctx, f.identity, campaign)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if len(carrier.submissions) != 0 {
+		t.Fatalf("carrier saw %d submissions; a card nobody can fill must reach no handset",
+			len(carrier.submissions))
+	}
+	if sent != 0 || failed != 0 {
+		t.Fatalf("sent=%d failed=%d; a skipped contact is neither sent nor failed", sent, failed)
+	}
+}
+
+// The other half of the same walk: when every slot in the card DOES resolve,
+// the message goes, and the text handed to an operator that holds no template
+// of its own is the card's text with the values in it.
+func TestAnRCSCardCampaignFillsEveryStringItSends(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	carrier := &recordingCarrier{}
+	f.service.Carriers = connector.Registry{
+		Default:   f.service.Connector,
+		ByChannel: map[string]connector.Connector{"RCS": carrier},
+	}
+
+	senderID := f.seedApprovedSender("RCSFILL", "RCS")
+	templateID := f.seedRCSCardTemplate(senderID, []string{"first_name", "offer"})
+	listID := f.seedListWithFields(map[string]map[string]string{
+		"919820000031": {"first_name": "Priya", "offer": "20% off"},
+	})
+	campaign, err := store.GetCampaign(ctx, f.service.DB, f.identity,
+		f.seedRCSCampaign(senderID, templateID, listID))
+	if err != nil {
+		t.Fatalf("load campaign: %v", err)
+	}
+	if _, _, err := f.service.LaunchCampaign(ctx, f.identity, campaign); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	if len(carrier.submissions) != 1 {
+		t.Fatalf("carrier saw %d submissions, want 1", len(carrier.submissions))
+	}
+	submission := carrier.submissions[0]
+	if strings.Contains(submission.Body, "{{") {
+		t.Errorf("a token survived into the dispatched text: %q", submission.Body)
+	}
+	if submission.Body != "Hi Priya" {
+		t.Errorf("dispatched text = %q, want the card's own text filled", submission.Body)
+	}
+	values := map[string]string{}
+	for _, variable := range submission.TemplateVariables {
+		values[variable.Name] = variable.Value
+	}
+	if values["offer"] != "20% off" {
+		t.Errorf("the carrier was handed offer=%q; it holds the card and renders it from this",
+			values["offer"])
+	}
+}
+
+// seedRCSCardTemplate is the shape RCS exists for: no body, and the words in a
+// card and its suggestions rather than in a top-level string.
+func (f *fixture) seedRCSCardTemplate(senderID uuid.UUID, variables []string) uuid.UUID {
+	f.t.Helper()
+	id := uuid.New()
+	f.exec(`INSERT INTO templates (id, tenant_id, sender_id, name, channel, country,
+	            variables, status, category, rcs_content,
+	            carrier_vendor, carrier_template_id, carrier_status, carrier_submitted_at)
+	        VALUES ($1, $2, $3, $4, 'RCS', 'IN', $5, 'approved', 'UTILITY',
+	                $6::jsonb, 'airtel', $7, 'approved', now())`,
+		id, f.identity.TenantID, senderID, "RCS card "+id.String()[:8], variables,
+		`{"kind":"card","text":"Hi {{first_name}}","card":{"title":"{{offer}} just for you",`+
+			`"description":"Tap below"},"suggestions":[{"text":"See {{offer}}",`+
+			`"url":"https://example.test/o"}]}`,
+		"carrier-"+id.String()[:12])
+	return id
+}
+
+// seedListWithFields gives each contact whatever columns the test names, rather
+// than only a first name.
+func (f *fixture) seedListWithFields(fieldsByMsisdn map[string]map[string]string) uuid.UUID {
+	f.t.Helper()
+	listID := uuid.New()
+	f.exec(`INSERT INTO contact_lists (id, tenant_id, name) VALUES ($1, $2, 'RCS card list')`,
+		listID, f.identity.TenantID)
+	for msisdn, fields := range fieldsByMsisdn {
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			f.t.Fatalf("encode fields: %v", err)
+		}
+		contactID := uuid.New()
+		f.exec(`INSERT INTO contacts (id, tenant_id, msisdn, country, fields, consent)
+		        VALUES ($1, $2, $3, 'IN', $4::jsonb, $5::jsonb)`,
+			contactID, f.identity.TenantID, "+"+msisdn, encoded, `{"RCS":"opted_in"}`)
+		f.exec(`INSERT INTO contact_list_members (list_id, contact_id, tenant_id)
+		        VALUES ($1, $2, $3)`, listID, contactID, f.identity.TenantID)
+	}
+	return listID
 }
