@@ -60,7 +60,7 @@ generate:
 	go run ./cmd/gen-unimplemented
 	go build ./...
 
-# Postgres, Redis and ClickHouse all live on the Hostinger VPS and listen on its
+# Postgres, Redis and ClickHouse all live on the AWS server and listen on its
 # loopback only, so `tunnel-up` — not a local install — is what makes them
 # reachable. .env points at the forwarded ports.
 db-setup: tunnel-up
@@ -76,10 +76,10 @@ migrate-status:
 	$(ENV) && goose -dir db/migrations postgres "$$DATABASE_ADMIN_URL" status
 
 tunnel-up:
-	./scripts/hostinger-tunnel.sh start
+	./scripts/aws-tunnel.sh start
 
 tunnel-down:
-	./scripts/hostinger-tunnel.sh stop
+	./scripts/aws-tunnel.sh stop
 
 # clickhouse_migrate.py reads the host and credentials from the environment
 # rather than a URL: urllib drops credentials embedded in a URL and the request

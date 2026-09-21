@@ -1,3 +1,37 @@
+# Project rules — mandatory, before anything else
+
+These come from the project owner and override every default below.
+
+## 1. Pull the UI code first, on EVERY task
+
+Before starting any task, however small, bring the frontend checkout up to date. The API contract
+(`openapi/control.json`) is a symlink into it, and the frontend's briefs live in its
+`docs/api-contract/`. Working from a stale copy is how asks get built against an old contract.
+
+```bash
+cd ../SMS-UI && git fetch upstream && git merge --ff-only upstream/master
+```
+
+The contract lives on the remote **`upstream`** (SAQIBJH/sms-platform-frontend), NOT `origin`.
+If the working tree is dirty or the merge is not a fast-forward, STOP and say so — never reset,
+stash or discard someone else's frontend work to make the pull succeed.
+
+## 2. Test locally, then live
+
+1. **Locally first**, against the REMOTE datastores (Postgres, ClickHouse, Redis on the AWS
+   server, reached through `scripts/aws-tunnel.sh`). Never start a database, container or any
+   other service on this machine.
+2. **Then live**: after the push deploys to AWS, confirm the restart
+   (`ssh relay-aws systemctl show relay-api -p ActiveEnterTimestamp`) and exercise the change
+   against the public API. A green local suite is not a finished task.
+
+## 3. Everything is on AWS
+
+Production is the AWS server (`relay-aws`, ap-south-1). Hostinger is retired — do not deploy to
+it, tunnel to it, or add references to it.
+
+---
+
 <!-- BEGIN AWS Agent Toolkit rules -->
 # AWS Guidance for the new AWS experience
 

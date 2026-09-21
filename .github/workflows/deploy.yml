@@ -1,0 +1,184 @@
+name: Deploy to AWS
+
+# Push to main -> verify, build, deploy to the AWS server (relay-prod, ap-south-1).
+#
+# Relay has the box to itself. Every step is still scoped to Relay's own unit,
+# containers and database: nothing here restarts docker, touches nginx,
+# installs a package or changes a firewall rule.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never two deploys at once: they would race on the same binary path and the
+# same migration lock. cancel-in-progress is deliberately OFF — killing a
+# half-finished deploy is worse than queueing behind it.
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+env:
+  # goose is not a dependency of this module, so building it means downloading
+  # it and every database driver it bundles — most of what used to be a
+  # 92-second compile, for a 51 MB binary that never changes. It is built and
+  # uploaded only when the server does not already have this exact version.
+  GOOSE_VERSION: v3.22.1
+
+jobs:
+  deploy:
+    name: Verify and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      # vet, the tests and the release build are independent, so they run at
+      # the same time on the runner's cores and the step fails if ANY of them
+      # does. Nothing is uploaded until all three pass: a deploy that ships a
+      # binary that does not compile, or that fails its own tests, is worse
+      # than no deploy. (`go vet` type-checks every package, which is why a
+      # separate `go build ./...` is no longer run.)
+      #
+      # The tests that need Postgres, ClickHouse and Redis skip here — the
+      # runner has none. The full suite runs locally against the real
+      # datastores before every push; this is the compile-and-pure-logic gate.
+      - name: Vet, test and build
+        run: |
+          mkdir -p out
+          go vet ./... > vet.log 2>&1 & vet=$!
+          go test ./... > test.log 2>&1 & tst=$!
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+            -o out/ ./cmd/control-api ./cmd/seed-demo ./cmd/operator-admin > build.log 2>&1 & bld=$!
+          status=0
+          wait $vet || { echo "::error::go vet failed"; status=1; }
+          wait $tst || { echo "::error::go test failed"; status=1; }
+          wait $bld || { echo "::error::build failed"; status=1; }
+          for f in vet test build; do echo "::group::$f"; cat "$f.log"; echo "::endgroup::"; done
+          ls -lh out/
+          exit $status
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.AWS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Best-effort known_hosts seed; never fatal, since a transient keyscan
+          # blip must not abort a deploy. accept-new below is the fallback.
+          ssh-keyscan -T 15 -H "${{ secrets.AWS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          printf 'Host relay\n  HostName %s\n  User %s\n  IdentityFile ~/.ssh/deploy_key\n  BatchMode yes\n  StrictHostKeyChecking accept-new\n  ConnectTimeout 20\n  ServerAliveInterval 30\n  ControlMaster auto\n  ControlPath ~/.ssh/cm-%%r@%%h:%%p\n  ControlPersist 5m\n' \
+            "${{ secrets.AWS_HOST }}" "${{ secrets.AWS_USER }}" > ~/.ssh/config
+
+      - name: Build goose only if the server lacks it
+        run: |
+          have=$(ssh relay 'goose -version 2>/dev/null' || true)
+          if echo "$have" | grep -q "$GOOSE_VERSION"; then
+            echo "server already has goose $GOOSE_VERSION"
+          else
+            echo "server has '${have:-no goose}'; building $GOOSE_VERSION"
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOBIN="$PWD/out" \
+              go install -trimpath -ldflags="-s -w" "github.com/pressly/goose/v3/cmd/goose@$GOOSE_VERSION"
+          fi
+
+      # ONE compressed stream over ONE connection, and only what changed.
+      # This used to be eight separate scp handshakes pushing ~100 MB of
+      # uncompressed binaries from a US runner to Mumbai — two minutes of every
+      # deploy. rsync --checksum skips files the release directory already
+      # holds byte for byte (db/, scripts/, and binaries whose code did not
+      # change) and -z compresses the rest.
+      - name: Upload
+        run: |
+          mkdir -p stage/bin stage/systemd
+          cp out/* stage/bin/
+          cp -r db scripts stage/
+          cp deploy/relay-api.service deploy/relay-backup.service deploy/relay-backup.timer stage/systemd/
+          cp deploy/relay-backup.sh stage/
+          rsync -az --checksum --delete --stats stage/ relay:/opt/relay/release/ | tail -n 15
+
+      - name: Migrate, swap, verify, roll back on failure
+        run: |
+          ssh relay 'bash -se' <<'EOSSH'
+          set -euo pipefail
+          cd /opt/relay
+          R=/opt/relay/release
+
+          if [ -f "$R/bin/goose" ]; then
+            install -m 755 "$R/bin/goose" /usr/local/bin/goose
+          fi
+          cp -r "$R/db" "$R/scripts" /opt/relay/
+          install -m 644 "$R"/systemd/* /etc/systemd/system/
+          install -m 755 "$R/relay-backup.sh" /opt/relay/relay-backup.sh
+
+          # .env supplies the URLs. MAIL_FROM is quoted in that file precisely so
+          # this `.` cannot choke on its angle brackets.
+          set -a; . /opt/relay/.env; set +a
+
+          echo "::group::backup"
+          # Relay's OWN database. The container and role come from .env; no
+          # default, so a missing setting fails loudly instead of dumping the
+          # wrong thing.
+          mkdir -p /opt/relay/backups
+          docker exec "${BACKUP_PG_CONTAINER:?BACKUP_PG_CONTAINER is not set in /opt/relay/.env}" \
+            pg_dump -U "${BACKUP_PG_USER:?BACKUP_PG_USER is not set in /opt/relay/.env}" -d sms \
+            | gzip > "/opt/relay/backups/sms_predeploy_$(date +%Y%m%d_%H%M%S).sql.gz"
+          ls -t /opt/relay/backups/sms_predeploy_*.sql.gz | tail -n +15 | xargs -r rm -f
+          echo "::endgroup::"
+
+          echo "::group::migrate"
+          # BEFORE the swap: a failed migration leaves the old binary serving,
+          # which is a working system rather than a new binary against a schema
+          # it does not understand.
+          goose -dir db/migrations postgres "$DATABASE_ADMIN_URL" up
+          CLICKHOUSE_HTTP=http://127.0.0.1:8123 CLICKHOUSE_USER=relay \
+          CLICKHOUSE_PASSWORD="$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /opt/relay/.secrets)" \
+            python3 scripts/clickhouse_migrate.py sms
+          echo "::endgroup::"
+
+          echo "::group::swap"
+          # Keep the outgoing binary. Without it there is nothing to roll back
+          # TO, and "redeploy the previous commit" is a slow answer at 3am.
+          cp -a /opt/relay/control-api /opt/relay/control-api.prev 2>/dev/null || true
+          for b in control-api seed-demo operator-admin; do
+            install -o relay -g relay -m 755 "$R/bin/$b" "/opt/relay/$b.new"
+            mv "/opt/relay/$b.new" "/opt/relay/$b"
+          done
+          systemctl daemon-reload
+          systemctl enable --now relay-backup.timer
+          systemctl restart relay-api
+          echo "::endgroup::"
+
+          echo "::group::verify"
+          for i in $(seq 1 20); do
+            if curl -sf --max-time 3 http://127.0.0.1:8080/healthz | grep -q '"status":"ok"'; then
+              echo "healthy after ${i} attempt(s)"
+              curl -s http://127.0.0.1:8080/healthz; echo
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "NEW BINARY DID NOT BECOME HEALTHY — rolling back" >&2
+          journalctl -u relay-api -n 40 --no-pager >&2 || true
+          if [ -f /opt/relay/control-api.prev ]; then
+            mv /opt/relay/control-api.prev /opt/relay/control-api
+            systemctl restart relay-api
+            sleep 5
+            curl -s http://127.0.0.1:8080/healthz >&2 || true
+            echo "rolled back to the previous binary" >&2
+          fi
+          exit 1
+          EOSSH
+
+      - name: Confirm public endpoint
+        # Through nginx and TLS, not just loopback — the loopback check above
+        # would still pass if the public route were broken.
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://sms-api.saqibsaeed.cloud/healthz)
+          echo "https://sms-api.saqibsaeed.cloud/healthz -> $code"
+          [ "$code" = "200" ]
+          # The test hooks must never become publicly reachable by accident.
+          dev=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST https://sms-api.saqibsaeed.cloud/v1/dev/reset-mock-state)
+          echo "/v1/dev/reset-mock-state -> $dev (expect 403)"
+          [ "$dev" = "403" ]

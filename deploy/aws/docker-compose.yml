@@ -1,9 +1,8 @@
 # Relay's datastores on the AWS server (ap-south-1, relay-prod).
 #
-# Unlike the shared Hostinger VPS this machine runs nothing else, so Postgres
-# lives here too instead of borrowing a neighbour's container. Every port is
-# published on loopback only, on the SAME port numbers Hostinger used, so the
-# API's URLs and the local SSH tunnel stay identical.
+# This machine runs nothing else, so Postgres lives here too. Every port is
+# published on loopback only, so the API's URLs and the local SSH tunnel
+# (scripts/aws-tunnel.sh) are the same numbers everywhere.
 #
 #   docker compose --env-file /opt/relay/.secrets -f /opt/relay/deploy/aws/docker-compose.yml up -d
 

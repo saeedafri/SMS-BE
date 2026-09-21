@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Forward the AWS datastores (relay-prod, ap-south-1) to localhost. They listen
 # on 127.0.0.1 on the server and are not published, so SSH is the only way in.
-# Same local ports as the Hostinger tunnel, so .env needs no change — run one
-# tunnel or the other, never both.
 #
 #   local 18080 -> the live control-api, including /v1/dev/* which nginx
 #                  denies on the public hostname — the browser gate needs those

@@ -1,9 +1,9 @@
 # /etc/fail2ban/jail.d/relay.local
 # Bans are firewall drops on 80/443, so a banned address costs nginx nothing.
-# Never banned: this box, the old Hostinger proxy.
+# Never banned: this box.
 
 [DEFAULT]
-ignoreip = 127.0.0.1/8 ::1 3.111.226.170 31.97.186.223
+ignoreip = 127.0.0.1/8 ::1 3.111.226.170
 
 # 20 nginx rate-limit refusals in a minute: one hour.
 [relay-nginx-flood]

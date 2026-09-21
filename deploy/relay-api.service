@@ -3,8 +3,8 @@ Description=Relay control-api
 # Wants= not Requires=: if a database is briefly down the API should start and
 # retry, not refuse to boot. The binary retries Postgres with backoff and
 # degrades gracefully without ClickHouse or Redis.
-# Every datastore is a container on this host — the reused ems-postgres plus
-# Relay's own ClickHouse and Redis — so docker is the dependency, not the
+# Every datastore is a container on this host — relay-postgres, ClickHouse and
+# Redis — so docker is the dependency, not the
 # distro packages this line used to name (none of which are installed).
 After=network-online.target docker.service
 Wants=network-online.target

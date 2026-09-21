@@ -25,9 +25,9 @@ file="$dir/sms_nightly_$stamp.sql.gz"
 notify() { [ -n "${BACKUP_HEALTHCHECK_URL:-}" ] && curl -fsS -m 10 --retry 3 "${BACKUP_HEALTHCHECK_URL}$1" >/dev/null || true; }
 trap 'notify /fail; rm -f "$dir"/*.partial' ERR
 
-# Relay's database only. On Hostinger it lives in the shared ems-postgres; on
-# AWS in relay-postgres — set BACKUP_PG_CONTAINER / BACKUP_PG_USER in .env.
-docker exec "${BACKUP_PG_CONTAINER:-ems-postgres}" pg_dump -U "${BACKUP_PG_USER:-ems_user}" -d sms | gzip > "$file.partial"
+# Relay's database only, in relay-postgres on the AWS server. Container and role come
+# from .env with no default, so a missing setting fails loudly.
+docker exec "${BACKUP_PG_CONTAINER:?set BACKUP_PG_CONTAINER in /opt/relay/.env}" pg_dump -U "${BACKUP_PG_USER:?set BACKUP_PG_USER in /opt/relay/.env}" -d sms | gzip > "$file.partial"
 
 gzip -t "$file.partial"
 # grep -c reads to the end; grep -q would exit on the first match and break
