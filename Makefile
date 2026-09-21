@@ -1,4 +1,4 @@
-.PHONY: build vet test test-race check generate db-setup migrate-up migrate-test tunnel-up tunnel-down
+.PHONY: build vet test test-local test-race check generate db-setup migrate-up migrate-test tunnel-up tunnel-down
 
 # Every target that touches a datastore sources .env: the URLs live there and
 # nowhere else. Without it goose falls back to libpq's defaults and tries to
@@ -17,18 +17,19 @@ build:
 vet:
 	go vet ./...
 
-# The fast loop, and the one to run before a push.
+# The full suite, and the one to run before a push: ~3 minutes.
 #
-# The datastores are in ap-south-1 behind an SSH tunnel, so a query costs ~50ms
-# and the suite is latency-bound, not CPU-bound: it used to take 25 minutes with
-# nine of ten cores idle. Two changes fixed that — the pools are opened once per
-# package in TestMain rather than three times per test, and every test that owns
-# its own tenant calls t.Parallel(). Tests that share a row (the RCS carrier
-# launch identities, the corridor tables, the SMPP binds) keep their own lane.
-#
-# -v so the run says which test it is on. A package prints nothing until it
-# finishes, which made a 25-minute run indistinguishable from a hung one.
+# It runs ON the AWS server, next to its databases. From this machine every
+# round trip to ap-south-1 is ~26 ms and a tenant-scoped write is four of them,
+# so the suite spent ~15 minutes waiting on the network; there it is ~0.1 ms.
+# The test binaries are compiled HERE and nothing starts on this machine. See
+# scripts/remote-test.sh. RUN=<pattern> narrows it.
 test:
+	./scripts/remote-test.sh $(RUN)
+
+# The same suite from this machine, through the tunnel. Slow; kept for when the
+# server is unreachable.
+test-local:
 	$(ENV) && go test ./... -count=1 -timeout 15m
 
 # Same suite under the race detector. Slower, so it is the pre-push gate rather

@@ -21,6 +21,9 @@ stash or discard someone else's frontend work to make the pull succeed.
 1. **Locally first**, against the REMOTE datastores (Postgres, ClickHouse, Redis on the AWS
    server, reached through `scripts/aws-tunnel.sh`). Never start a database, container or any
    other service on this machine.
+   **`make test` is the full suite** — it compiles the test binaries here and runs them on the AWS
+   server next to the databases (`scripts/remote-test.sh`, ~3 minutes; `RUN=<pattern>` narrows
+   it). `make test-local` is the old ~15-minute path through the tunnel.
 2. **Then live**: after the push deploys to AWS, confirm the restart
    (`ssh relay-aws systemctl show relay-api -p ActiveEnterTimestamp`) and exercise the change
    against the public API. A green local suite is not a finished task.
