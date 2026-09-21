@@ -602,7 +602,8 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 			FraudFlag: "none", Segments: uint8(plan.segments), CostMinor: cost,
 			Currency: plan.rate.Currency, CampaignID: plan.pending.request.CampaignID,
 			Carrier: plan.carrier, RouteID: plan.routeID,
-			CreatedAt: now, UpdatedAt: now, Version: 1,
+			DeliveredChannel: carriedBy(plan.sender.Channel, plan.refusal != ""),
+			CreatedAt:        now, UpdatedAt: now, Version: 1,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: plan.pending.identity.TenantID, MessageID: plan.messageID,
@@ -716,7 +717,8 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			CostMinor: cost, Currency: plan.rate.Currency,
 			CampaignID: plan.pending.request.CampaignID, CarrierRef: carrierRef,
 			Carrier: plan.carrier, RouteID: plan.routeID,
-			CreatedAt: plan.createdAt, SentAt: &settled, UpdatedAt: settled, Version: 2,
+			DeliveredChannel: carriedBy(plan.sender.Channel, false),
+			CreatedAt:        plan.createdAt, SentAt: &settled, UpdatedAt: settled, Version: 2,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: plan.pending.identity.TenantID, MessageID: plan.messageID,

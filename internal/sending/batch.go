@@ -236,14 +236,15 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		}
 		record := store.MessageRecord{
 			TenantID: identity.TenantID, ID: plan.messageID,
-			Channel: context.sender.Channel, Country: context.sender.Country,
+			Channel: context.recordedChannel(), Country: context.sender.Country,
 			SenderHeader: context.sender.Header, TemplateID: &context.templateID,
 			Msisdn: plan.msisdn, Email: plan.emailForChannel(context.sender.Channel),
 			Status: string(state), ErrorCode: errorCode,
 			FraudFlag: "none", Segments: uint8(plan.segments), CostMinor: cost,
 			Currency: context.rate.Currency, CampaignID: context.campaignID,
 			Carrier: context.carrier, RouteID: context.routeID,
-			CreatedAt: now, UpdatedAt: now, Version: 1,
+			DeliveredChannel: carriedBy(context.sender.Channel, plan.refusal != ""),
+			CreatedAt:        now, UpdatedAt: now, Version: 1,
 		}
 		records = append(records, record)
 		events = append(events, store.MessageEvent{
@@ -307,7 +308,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 
 		records = append(records, store.MessageRecord{
 			TenantID: identity.TenantID, ID: plan.messageID,
-			Channel: context.sender.Channel, Country: context.sender.Country,
+			Channel: context.recordedChannel(), Country: context.sender.Country,
 			SenderHeader: context.sender.Header, TemplateID: &context.templateID,
 			Msisdn: plan.msisdn, Email: plan.emailForChannel(context.sender.Channel),
 			Status: string(state), ErrorCode: errorCode,
@@ -315,7 +316,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			CostMinor: cost, Currency: context.rate.Currency,
 			CampaignID: context.campaignID, CarrierRef: carrierRef,
 			Carrier: context.carrier, RouteID: context.routeID,
-			CreatedAt: now, SentAt: &settled, UpdatedAt: settled, Version: 2,
+			DeliveredChannel: carriedBy(context.sender.Channel, false),
+			CreatedAt:        now, SentAt: &settled, UpdatedAt: settled, Version: 2,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: identity.TenantID, MessageID: plan.messageID,
@@ -396,6 +398,31 @@ type batchContext struct {
 	// the same identity.
 	rcsCarrier string
 	agentID    string
+
+	// campaignChannel is the campaign's OWN channel, which every row it writes
+	// is filed under. It differs from sender.Channel only on the fallback leg:
+	// a recipient carried by SMS in an RCS campaign is still that campaign's
+	// message, and the row says so in `channel` while delivered_channel says
+	// what actually carried it. Rollups stay on sender.Channel, because the
+	// cost and segments belong to the leg that sent them.
+	campaignChannel string
+}
+
+// recordedChannel is the channel a message row is filed under.
+func (c batchContext) recordedChannel() string {
+	if c.campaignChannel != "" {
+		return c.campaignChannel
+	}
+	return c.sender.Channel
+}
+
+// carriedBy is the delivered_channel a row records: the leg's own channel once
+// the message is dispatched, and nothing for a refusal that never left.
+func carriedBy(channel string, refused bool) *string {
+	if refused {
+		return nil
+	}
+	return &channel
 }
 
 // emailForChannel returns the address to record as the recipient, and only for

@@ -19,6 +19,8 @@ type estimateBody struct {
 	CostMinorMin          int            `json:"costMinorMin"`
 	CostMinorMax          int            `json:"costMinorMax"`
 	VariableSkipped       *int           `json:"variableSkipped"`
+	FallbackForced        *int           `json:"fallbackForced"`
+	FallbackEligible      int            `json:"fallbackEligible"`
 	VariableSkippedByName map[string]int `json:"variableSkippedByName"`
 }
 
@@ -170,5 +172,45 @@ func TestAListCarriesWhichColumnFeedsWhichSlot(t *testing.T) {
 	if res := h.do(http.MethodPatch, "/v1/contact-lists/6f1d1f6a-0000-4000-8000-000000000000",
 		acct.Token, map[string]any{"name": "x"}); res.Code != http.StatusNotFound {
 		t.Errorf("unknown list = %d, want 404", res.Code)
+	}
+}
+
+// T13 and T16. The campaign estimate READS the fallback the wizard sends — it
+// used to parse it and drop it — and fallbackForced is always on the response,
+// as a measured zero when nothing falls back. Absent tells the screen this
+// server does not apply the per-leg rule, which would now be false.
+func TestTheCampaignEstimateReadsTheFallbackAndAlwaysStatesTheSplit(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	acct := h.newAccount("owner")
+	list := createList(t, h, acct.Token, "Fallback "+fmt.Sprint(rand.Int()))
+	importRows(t, h, acct.Token, list.Id.String(), []map[string]any{
+		{"msisdn": number(), "fields": map[string]string{"firstName": "Rahul"}},
+		{"msisdn": number(), "fields": map[string]string{"City": "Pune"}},
+	}, "fallback-"+fmt.Sprint(rand.Int()))
+
+	named := seedSlotTemplate(t, h, acct, "Dear {{firstName}}, your order shipped.")
+	plain := seedSlotTemplate(t, h, acct, "Your order shipped.")
+
+	alone := estimateFor(t, h, acct.Token, map[string]any{
+		"listId": list.Id.String(), "country": "IN", "channel": "SMS", "templateId": named,
+	})
+	if alone.FallbackForced == nil || *alone.FallbackForced != 0 {
+		t.Fatalf("fallbackForced = %v with no fallback, want a present 0", alone.FallbackForced)
+	}
+	if alone.Recipients != 1 {
+		t.Fatalf("recipients = %d, want 1: the contact with no first name is skipped", alone.Recipients)
+	}
+
+	withFallback := estimateFor(t, h, acct.Token, map[string]any{
+		"listId": list.Id.String(), "country": "IN", "channel": "SMS", "templateId": named,
+		"fallback": map[string]any{"channel": "SMS", "senderId": "00000000-0000-0000-0000-000000000000", "templateId": plain},
+	})
+	if withFallback.FallbackForced == nil || *withFallback.FallbackForced != 1 {
+		t.Fatalf("fallbackForced = %v, want 1: the fallback needs no name", withFallback.FallbackForced)
+	}
+	if withFallback.Recipients != 2 || withFallback.FallbackEligible != 2 {
+		t.Fatalf("recipients %d eligible %d, want 2 and 2: the fallback carries who the primary cannot",
+			withFallback.Recipients, withFallback.FallbackEligible)
 	}
 }

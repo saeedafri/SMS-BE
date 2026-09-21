@@ -35,12 +35,20 @@ type MessageRecord struct {
 	// enum. Distinct from CarrierRef, which is the carrier's own reference for
 	// this one message. Empty until route selection records which carrier
 	// carried it; the deliverability report excludes empty rather than guessing.
-	Carrier     string
-	CreatedAt   time.Time
-	SentAt      *time.Time
-	DeliveredAt *time.Time
-	UpdatedAt   time.Time
-	Version     uint64
+	Carrier string
+
+	// DeliveredChannel is the channel that actually carried this message,
+	// which is not always Channel. Channel is the campaign's own; a recipient
+	// its primary leg could not reach or could not be personalised for goes by
+	// the campaign's fallback leg instead, and the cost, the segments and every
+	// receipt belong to THAT channel. Nil until dispatch and on every refusal:
+	// a message that never left was carried by nothing.
+	DeliveredChannel *string
+	CreatedAt        time.Time
+	SentAt           *time.Time
+	DeliveredAt      *time.Time
+	UpdatedAt        time.Time
+	Version          uint64
 }
 
 // InsertMessages writes a batch. ClickHouse is built for batched inserts and
@@ -68,7 +76,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.TenantID, record.ID, record.CampaignID, record.CampaignName,
 			nil, nil, nil, // journey id/name, conversation id — Stage 11
 			record.Channel, record.Country, record.SenderHeader, record.TemplateID,
-			record.Msisdn, record.Email, record.Status, nil,
+			record.Msisdn, record.Email, record.Status, record.DeliveredChannel,
 			record.ErrorCode, record.ErrorClass, record.FraudFlag,
 			record.Segments, record.CostMinor, record.Currency,
 			record.RouteID, record.CarrierRef, record.Carrier,
@@ -184,6 +192,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	rows, err := conn.Query(ctx, `
 		SELECT id, campaign_id, campaign_name, channel, msisdn, email, status,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
+		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at
 		FROM messages FINAL
 		WHERE `+where+`
@@ -200,7 +209,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		if err := rows.Scan(&record.ID, &record.CampaignID, &record.CampaignName,
 			&record.Channel, &record.Msisdn, &record.Email, &record.Status,
 			&record.ErrorCode, &record.ErrorClass, &record.FraudFlag, &record.Segments,
-			&record.CostMinor, &record.Currency,
+			&record.CostMinor, &record.Currency, &record.DeliveredChannel,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
 			&record.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("store: scan message: %w", err)
@@ -240,7 +249,7 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 	err := conn.QueryRow(ctx, `
 		SELECT id, status, segments, cost_minor, currency, campaign_id,
 		       campaign_name, channel, country, sender_header, template_id,
-		       msisdn, email, route_id, carrier_ref, carrier,
+		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
 		       created_at, sent_at, version
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
@@ -248,13 +257,26 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		&record.Currency, &record.CampaignID, &record.CampaignName,
 		&record.Channel, &record.Country, &record.SenderHeader, &record.TemplateID,
 		&record.Msisdn, &record.Email, &record.RouteID, &record.CarrierRef,
-		&record.Carrier, &record.CreatedAt, &record.SentAt, &record.Version)
+		&record.Carrier, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
+		&record.Version)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
 	record.TenantID = tenantID
 	return record, nil
 }
+
+// deliveredChannelColumn is delivered_channel for display, with rows written
+// before it was recorded filled in.
+//
+// Every message dispatched before the fallback leg existed was carried by its
+// own channel — there was no second leg to carry it — so for those rows the
+// fill is exact rather than a guess. A gate refusal ('rejected') never left and
+// stays null, which is what the contract says null means. Display reads only:
+// LoadMessageState carries the stored value as it is, so this never writes an
+// inferred channel back into a row.
+const deliveredChannelColumn = `coalesce(delivered_channel,
+		       if(status = 'rejected', NULL, channel))`
 
 // GetMessage reads one message for display.
 //
@@ -272,6 +294,7 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		SELECT id, campaign_id, campaign_name, channel, country, sender_header,
 		       msisdn, email, status, error_code, error_class, fraud_flag,
 		       segments, cost_minor, currency, carrier, carrier_ref,
+		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
@@ -279,8 +302,8 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		&record.Country, &record.SenderHeader, &record.Msisdn, &record.Email,
 		&record.Status, &record.ErrorCode, &record.ErrorClass, &record.FraudFlag,
 		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,
-		&record.CarrierRef, &record.CreatedAt, &record.SentAt, &record.DeliveredAt,
-		&record.UpdatedAt)
+		&record.CarrierRef, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
+		&record.DeliveredAt, &record.UpdatedAt)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}

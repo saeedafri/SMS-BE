@@ -421,6 +421,10 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
 		string(body.Country), string(body.Channel), template, fallback)
+	if errors.Is(err, sending.ErrNoFallbackRate) {
+		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
+			"We do not have a rate for the fallback channel in that country yet, so this campaign cannot be priced. Choose another fallback, or remove it.")), nil
+	}
 	if errors.Is(err, sending.ErrNoRate) {
 		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
 			"We do not have a rate for that country and channel yet.")), nil
@@ -440,7 +444,8 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		// DECLARING that it tries the fallback leg before giving up on a
 		// recipient — which we now do, so saying so is the honest answer and
 		// omitting it would understate what the send will actually do.
-		FallbackForced: &estimate.FallbackForced,
+		FallbackForced:   &estimate.FallbackForced,
+		FallbackEligible: estimate.FallbackEligible,
 		// Optional in the contract on purpose: an ABSENT count means "this
 		// server cannot tell yet", which the screen says in those words. We can
 		// tell, so we always send it — a zero here is a measured zero.
@@ -519,6 +524,12 @@ func (s *Server) ListCampaignMessages(ctx context.Context, request gen.ListCampa
 			var class gen.Message_ErrorClass
 			_ = class.FromMessageErrorClass(gen.MessageErrorClass(*record.ErrorClass))
 			message.ErrorClass = &class
+		}
+		if record.DeliveredChannel != nil && *record.DeliveredChannel != "" {
+			var delivered gen.Message_DeliveredChannel
+			if err := delivered.FromChannelId(gen.ChannelId(*record.DeliveredChannel)); err == nil {
+				message.DeliveredChannel = &delivered
+			}
 		}
 		if record.FraudFlag != "" {
 			flag := gen.MessageFraudFlag(record.FraudFlag)

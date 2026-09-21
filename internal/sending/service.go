@@ -401,7 +401,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		Msisdn: msisdn, Status: string(messaging.StateQueued),
 		Segments: uint8(segments), CostMinor: cost, Currency: rate.Currency,
 		CampaignID: request.CampaignID, Carrier: carrier, RouteID: routeID,
-		CreatedAt: now, UpdatedAt: now, Version: 1,
+		DeliveredChannel: carriedBy(sender.Channel, false),
+		CreatedAt:        now, UpdatedAt: now, Version: 1,
 	}, "", string(messaging.StateQueued), ""); err != nil {
 		return SendResult{}, err
 	}
@@ -452,7 +453,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		SenderHeader: sender.Header, TemplateID: request.TemplateID, Msisdn: msisdn,
 		Status: string(outcome.state), Segments: uint8(segments), Currency: rate.Currency,
 		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: outcome.ref,
-		Carrier: carrier, RouteID: routeID,
+		Carrier: carrier, RouteID: routeID, DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
 	}
 	update.ErrorCode, update.ErrorClass = outcome.codes()
@@ -611,8 +612,8 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		TemplateID: current.TemplateID,
 		Carrier:    current.Carrier, RouteID: current.RouteID,
 		CarrierRef: current.CarrierRef, SentAt: current.SentAt,
-		CampaignName: current.CampaignName,
-		Status:       string(to), Segments: current.Segments, Currency: current.Currency,
+		CampaignName: current.CampaignName, DeliveredChannel: current.DeliveredChannel,
+		Status: string(to), Segments: current.Segments, Currency: current.Currency,
 		CostMinor: current.CostMinor, CampaignID: current.CampaignID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 	}

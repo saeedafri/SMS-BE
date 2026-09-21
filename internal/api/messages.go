@@ -396,6 +396,15 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 	// charge.
 	entry.CostMinor = record.CostMinor
 	entry.Currency = gen.CurrencyCode(record.Currency)
+	// Which leg actually carried it. Not always the campaign's channel: a
+	// recipient the primary could not reach or personalise goes by the
+	// fallback, and this is what the cost and the receipts belong to.
+	if record.DeliveredChannel != nil && *record.DeliveredChannel != "" {
+		var delivered gen.MessageLogEntry_DeliveredChannel
+		if err := delivered.FromChannelId(gen.ChannelId(*record.DeliveredChannel)); err == nil {
+			entry.DeliveredChannel = &delivered
+		}
+	}
 	// The whole honesty claim in one line: an internal "accepted" surfaces as
 	// "sent", never "delivered".
 	entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))

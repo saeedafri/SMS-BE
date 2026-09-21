@@ -33,6 +33,11 @@ type CampaignEstimate struct {
 	VariableSkipped       int
 	VariableSkippedByName map[string]int
 
+	// FallbackEligible is how many of the audience COULD be carried by the
+	// fallback: one is configured, and they are addressable and consented on
+	// its channel. A capacity, not a prediction — contrast FallbackForced.
+	FallbackEligible int
+
 	// FallbackForced is how many of Recipients will CERTAINLY be carried by the
 	// fallback leg: the primary could not reach them or could not be filled for
 	// them, and the fallback can. Distinct from how many COULD land there,
@@ -60,6 +65,12 @@ type CampaignEstimate struct {
 // ErrNoRate means this corridor has no price yet. It is a configuration gap,
 // not a fault, and the API answers it with a sentence the customer can act on.
 var ErrNoRate = errors.New("sending: no rate for corridor")
+
+// ErrNoFallbackRate is ErrNoRate for the fallback leg, told apart so the
+// sentence can name the leg to go and price. A fallback with no rate is caught
+// here, at estimate time, rather than discovered when the campaign launches
+// and the second leg cannot be resolved.
+var ErrNoFallbackRate = fmt.Errorf("%w (fallback leg)", ErrNoRate)
 
 // FallbackEstimate is a campaign's second leg as the wizard describes it,
 // before any campaign row exists to read it from.
@@ -99,16 +110,13 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		fallbackRate, err = store.FindPricingRate(ctx, s.DB, identity.TenantID,
 			country, fallback.Channel, fallbackCategory)
 		if err != nil {
-			return CampaignEstimate{}, fmt.Errorf("%w: %s/%s", ErrNoRate, country, fallback.Channel)
+			return CampaignEstimate{}, fmt.Errorf("%w: %s/%s", ErrNoFallbackRate, country, fallback.Channel)
 		}
 	}
 
-	// Who the two legs between them can reach. Counted over BOTH channels: a
-	// campaign with a fallback reaches people the primary cannot, and quoting
-	// only the primary's audience under-counts exactly the recipients the
-	// fallback exists for.
-	total, err := store.ReachableOnChannel(ctx, s.DB, identity, listID,
-		estimateChannels(channel, fallback)...)
+	// The audience is the PRIMARY channel's. A fallback rescues people already
+	// in it; it never adds anyone, so it never widens this count.
+	total, err := store.ReachableOnChannel(ctx, s.DB, identity, listID, channel)
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
@@ -156,6 +164,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		VariableSkipped:       split.skipped,
 		VariableSkippedByName: split.byName,
 		FallbackForced:        split.fallbackForced,
+		FallbackEligible:      split.fallbackEligible,
 		Recipients:            split.primary + split.fallbackForced,
 		SegmentsPerMessageMin: minSegments,
 		SegmentsPerMessageMax: maxSegments,
@@ -163,14 +172,6 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		CostMinorMax:          costMax,
 		Currency:              rate.Currency,
 	}, nil
-}
-
-// estimateChannels is every channel the two legs between them can reach on.
-func estimateChannels(channel string, fallback *FallbackEstimate) []string {
-	if fallback == nil || fallback.Channel == "" || fallback.Channel == channel {
-		return []string{channel}
-	}
-	return []string{channel, fallback.Channel}
 }
 
 // LaunchCampaign fans a campaign out to its list, one page at a time.
@@ -231,6 +232,9 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		if err != nil {
 			return 0, 0, err
 		}
+		// Filed under the campaign's own channel; what carried it is recorded
+		// separately as delivered_channel.
+		leg.campaignChannel = batch.sender.Channel
 		fallback = &leg
 	}
 
@@ -299,13 +303,17 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		// The audience spans BOTH legs' channels. Walking only the primary's is
 		// what made a fallback decorative: the people it exists to reach were
 		// never paged in.
+		// The audience is the PRIMARY channel's. The fallback rescues people
+		// already in it and never adds anyone: paging the union of both
+		// channels sent the SMS fallback to people who had consented to SMS
+		// and never to this campaign's RCS.
 		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity,
-			campaign.ListID, cursor, batchSize, legChannels(batch, fallback)...)
+			campaign.ListID, cursor, batchSize, batch.sender.Channel)
 		if err != nil {
 			return sent, failed, err
 		}
 
-		forPrimary, forFallback := assignLegs(batch, fallback, contacts)
+		forPrimary, forFallback := s.assignLegs(ctx, batch, fallback, contacts)
 		pageSent, pageFailed, err := s.SendBatch(ctx, identity, batch, forPrimary)
 		sent += pageSent
 		failed += pageFailed
@@ -349,21 +357,24 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 
 // audienceSplit is who each leg carries, and who neither can.
 type audienceSplit struct {
-	primary        int
-	fallbackForced int
-	skipped        int
-	byName         map[string]int
+	primary          int
+	fallbackForced   int
+	fallbackEligible int
+	skipped          int
+	byName           map[string]int
 }
 
-// splitAudience walks a list and assigns every contact to a leg, or to
-// neither, by the same rule the fan-out assigns by.
+// splitAudience walks a list and puts every contact through chooseLeg — the
+// function the fan-out uses — so the quote and the send cannot disagree.
+//
+// Handset reachability is NOT asked here: the estimate would otherwise query a
+// carrier for every number on a list before anyone has decided to send. It
+// reports what is CERTAIN (fallbackForced: the primary cannot be filled for
+// them) and what is POSSIBLE (fallbackEligible), and leaves the reachability
+// share to the send, where the lookup is one call per page.
 //
 // The fast path matters: a single-leg campaign whose message has no slots
-// anywhere carries everyone, and answering that must not cost a walk of the
-// audience. "Anywhere" is the fix — this used to ask only whether the BODY had
-// slots, so an RCS template, whose body is null and whose {{first_name}} lives
-// in a card, returned zero here while the send skipped nobody. Both numbers
-// were wrong in the same direction, which is why they agreed.
+// anywhere carries everyone, and answering that must not cost a walk.
 func (s *Service) splitAudience(ctx context.Context, identity store.Identity,
 	listID *uuid.UUID, channel string, template store.Template,
 	fallback *FallbackEstimate, total int) (audienceSplit, error) {
@@ -377,42 +388,36 @@ func (s *Service) splitAudience(ctx context.Context, identity store.Identity,
 		return audienceSplit{}, err
 	}
 
+	primary := legSpec{channel: channel, template: template, mapping: mapping}
+	var fallbackSpec *legSpec
+	if fallback != nil {
+		fallbackSpec = &legSpec{channel: fallback.Channel, template: fallback.Template,
+			mapping: mapping}
+	}
+
 	tally := &skipTally{}
 	split := audienceSplit{}
-	// Paged with the same cursor the fan-out uses, over the same channels, so
-	// the count explains the same audience the send will walk.
 	cursor := ""
 	for {
 		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity, listID,
-			cursor, estimateScanPage, estimateChannels(channel, fallback)...)
+			cursor, estimateScanPage, channel)
 		if err != nil {
 			return audienceSplit{}, err
 		}
 		for _, contact := range contacts {
-			primaryMissing, primaryReaches := legCarries(channel, template, mapping, contact)
-			if primaryReaches && len(primaryMissing) == 0 {
+			if fallback != nil && reachableOn(contact, fallback.Channel) {
+				split.fallbackEligible++
+			}
+			choice := chooseLeg(primary, fallbackSpec, contact, true)
+			switch {
+			case choice.excluded:
+			case choice.skipped:
+				tally.add(choice.missing)
+			case choice.onFallback:
+				split.fallbackForced++
+			default:
 				split.primary++
-				continue
 			}
-			if fallback != nil {
-				fallbackMissing, fallbackReaches := legCarries(
-					fallback.Channel, fallback.Template, mapping, contact)
-				if fallbackReaches && len(fallbackMissing) == 0 {
-					split.fallbackForced++
-					continue
-				}
-				if !primaryReaches && fallbackReaches {
-					tally.add(fallbackMissing)
-					continue
-				}
-			}
-			if primaryReaches {
-				tally.add(primaryMissing)
-				continue
-			}
-			// Reachable by neither leg. Not skipped for a missing variable —
-			// they were never in this campaign's audience, and counting them
-			// here would explain one person twice in two different numbers.
 		}
 		if next == "" {
 			break
