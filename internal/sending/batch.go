@@ -59,11 +59,17 @@ type sendPlan struct {
 // What is deliberately NOT batched is correctness: every recipient still goes
 // through the same gate with the same rules, and the money still moves before
 // anything reaches a carrier.
+//
+// spent is the money this page actually took from the wallet: what was held,
+// less what was released for messages that never went out. The caller spends
+// its running balance down by THIS rather than re-deriving it — re-deriving it
+// as messages x per-segment rate under-counted every multi-segment SMS, and
+// let a campaign's running balance drift further from the ledger's each page.
 func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
-	context batchContext, contacts []store.Contact) (sent int, failed int, err error) {
+	context batchContext, contacts []store.Contact) (sent int, failed int, spent int64, err error) {
 
 	if len(contacts) == 0 {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 
 	// One suppression query for the whole page rather than one per recipient.
@@ -79,7 +85,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	}
 	suppressed, err := store.SuppressedSet(ctx, s.DB, identity, identities)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 
 	now := time.Now().UTC()
@@ -191,7 +197,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Description: fmt.Sprintf("Campaign hold (%d messages)", len(plans)),
 			CampaignID:  context.campaignID,
 		}); err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
 	}
 
@@ -261,16 +267,16 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	}
 
 	if err := s.writeBatch(ctx, records, events, rollups); err != nil {
-		return 0, failed, err
+		return 0, failed, holdTotal, err
 	}
 
 	if len(submissions) == 0 {
-		return 0, failed, nil
+		return 0, failed, holdTotal, nil
 	}
 
 	receipts, err := s.carrierFor(context.sender.Channel).Submit(ctx, submissions)
 	if err != nil {
-		return 0, failed, fmt.Errorf("sending: submit batch: %w", err)
+		return 0, failed, holdTotal, fmt.Errorf("sending: submit batch: %w", err)
 	}
 
 	// Apply the receipts as a second batched write.
@@ -339,11 +345,12 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Description: "Released holds for messages that were not sent",
 			CampaignID:  context.campaignID,
 		}); err != nil {
-			return sent, failed, err
+			// The refund did not land, so the whole hold is still out of the wallet.
+			return sent, failed, holdTotal, err
 		}
 	}
 
-	return sent, failed, s.writeBatch(ctx, records, events, rollups)
+	return sent, failed, holdTotal - releaseTotal, s.writeBatch(ctx, records, events, rollups)
 }
 
 // writeBatch performs the three ClickHouse writes for a page. Three round

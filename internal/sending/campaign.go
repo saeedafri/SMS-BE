@@ -194,6 +194,15 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return 0, 0, err
 	}
+	// ONE running balance per currency, shared by both legs. Handing each leg
+	// its own copy of the snapshot let a two-leg campaign pass its own guard
+	// twice over — each leg believing it had the whole wallet — and the ledger
+	// then refused a hold part-way, which aborted the campaign instead of
+	// refusing the recipients it could not afford, one by one, at cost 0.
+	wallet := map[string]int64{}
+	for _, entry := range balances {
+		wallet[entry.Currency] = entry.BalanceMinor
+	}
 
 	// The list's own columns, joined to the template's slots. Absent for a
 	// campaign with no list, and an empty mapping is fine: a file whose headers
@@ -218,7 +227,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	campaignID := campaign.ID
 
 	batch, err := s.resolveLeg(ctx, identity, &campaignID, campaign.SenderID,
-		campaign.TemplateID, tenantStatus, balances, mapping, skipped)
+		campaign.TemplateID, tenantStatus, mapping, skipped)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -228,7 +237,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	var fallback *batchContext
 	if _, fallbackSender, fallbackTemplate, ok := fallbackLeg(campaign); ok {
 		leg, err := s.resolveLeg(ctx, identity, &campaignID, fallbackSender,
-			fallbackTemplate, tenantStatus, balances, mapping, skipped)
+			fallbackTemplate, tenantStatus, mapping, skipped)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -314,20 +323,23 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 
 		forPrimary, forFallback := s.assignLegs(ctx, batch, fallback, contacts)
-		pageSent, pageFailed, err := s.SendBatch(ctx, identity, batch, forPrimary)
+		// Each leg reads the SHARED balance and spends it down by what it
+		// actually took, so a wallet that runs dry refuses the rest of the
+		// campaign recipient by recipient instead of overdrawing.
+		batch.balance = wallet[batch.rate.Currency]
+		pageSent, pageFailed, pageSpent, err := s.SendBatch(ctx, identity, batch, forPrimary)
 		sent += pageSent
 		failed += pageFailed
-		// The running balance shrinks as the campaign spends, so a wallet that
-		// runs dry stops the rest of the campaign instead of overdrawing.
-		batch.balance -= int64(pageSent) * batch.rate.PerSegmentMinor
+		wallet[batch.rate.Currency] -= pageSpent
 		if err != nil {
 			return sent, failed, err
 		}
 		if fallback != nil && len(forFallback) > 0 {
-			legSent, legFailed, legErr := s.SendBatch(ctx, identity, *fallback, forFallback)
+			fallback.balance = wallet[fallback.rate.Currency]
+			legSent, legFailed, legSpent, legErr := s.SendBatch(ctx, identity, *fallback, forFallback)
 			sent += legSent
 			failed += legFailed
-			fallback.balance -= int64(legSent) * fallback.rate.PerSegmentMinor
+			wallet[fallback.rate.Currency] -= legSpent
 			if legErr != nil {
 				return sent, failed, legErr
 			}

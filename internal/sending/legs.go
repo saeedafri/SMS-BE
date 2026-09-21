@@ -35,7 +35,7 @@ import (
 // message.
 func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 	campaignID *uuid.UUID, senderID, templateID uuid.UUID, tenantStatus string,
-	balances []store.WalletBalance, mapping map[string]string,
+	mapping map[string]string,
 	skipped *skipTally) (batchContext, error) {
 
 	sender, err := store.GetSenderID(ctx, s.DB, identity, senderID)
@@ -53,13 +53,6 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 			sender.Country, sender.Channel)
 	}
 
-	balance := int64(0)
-	for _, entry := range balances {
-		if entry.Currency == rate.Currency {
-			balance = entry.BalanceMinor
-		}
-	}
-
 	// The brand every message on this leg goes out under, and the path its
 	// traffic takes. One sender per leg, so one of each.
 	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
@@ -70,8 +63,8 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 		templateStatus: template.Status, templateSender: template.SenderID.String(),
 		template: template, body: templateText(template),
 		rate: rate, tenantStatus: tenantStatus,
-		balance: balance, campaignID: campaignID,
-		carrier: carrier, routeID: routeID,
+		campaignID: campaignID,
+		carrier:    carrier, routeID: routeID,
 		rcsCarrier: rcsCarrier, agentID: agentID,
 		variableMapping: mapping,
 		skipped:         skipped,

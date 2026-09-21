@@ -25,7 +25,7 @@ vet:
 # The test binaries are compiled HERE and nothing starts on this machine. See
 # scripts/remote-test.sh. RUN=<pattern> narrows it.
 test:
-	./scripts/remote-test.sh $(RUN)
+	./scripts/remote-test.sh "$(RUN)"
 
 # The same suite from this machine, through the tunnel. Slow; kept for when the
 # server is unreachable.
