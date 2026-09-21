@@ -302,7 +302,7 @@ const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
 // Separate from ListContacts, which the API uses and which pages by number.
 // See encodeDispatchCursor for why the send path does not share it.
 func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	listID *uuid.UUID, channel, cursor string, limit int) ([]Contact, string, error) {
+	listID *uuid.UUID, cursor string, limit int, channels ...string) ([]Contact, string, error) {
 
 	if limit <= 0 || limit > maxContactPage {
 		limit = 50
@@ -319,10 +319,10 @@ func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			WHERE ($1::uuid IS NULL OR EXISTS (
 			        SELECT 1 FROM contact_list_members m
 			        WHERE m.contact_id = c.id AND m.list_id = $1))
-			  AND ($4::timestamptz IS NULL OR (c.created_at, c.id) < ($4, $5))`+
+			  AND ($3::timestamptz IS NULL OR (c.created_at, c.id) < ($3, $4))`+
 			reachableOnChannel+`
 			ORDER BY c.created_at DESC, c.id DESC
-			LIMIT $6`, listID, channel == "EMAIL", channel, cursorTime, cursorID, limit+1)
+			LIMIT $5`, listID, channels, cursorTime, cursorID, limit+1)
 		if err != nil {
 			return err
 		}
@@ -718,31 +718,38 @@ func SuppressedSet(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // this was written — 2,500 contacts with no SMS consent, a campaign quoting 0,
 // and 2,500 messages dispatched.
 //
-// $1 is the list id, $2 the by-email flag, $3 the channel.
+// A campaign with a fallback leg has an audience spanning BOTH channels, so
+// this takes a set rather than one name: a contact is in it when ANY of the
+// named channels can carry them. Passing a single channel is the ordinary case
+// and behaves exactly as before.
+//
+// $1 is the list id, $2 the channels as text[].
 const reachableOnChannel = `
-	  AND CASE WHEN $2::boolean
-	           THEN c.email IS NOT NULL AND c.email <> ''
-	           ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
-	      END
-	  -- Consent is per channel and stored as a jsonb map. A channel the contact
-	  -- has never answered on is 'unknown', which is not consent: only an
-	  -- explicit opt-in counts.
-	  AND coalesce(c.consent ->> $3, '') = 'opted_in'
-	  -- And suppression overrides all of it. Without this the estimate quoted
-	  -- for people the gate then refused one by one: the customer approved a
-	  -- number, was charged nothing for the refusals, and read a delivery rate
-	  -- that counted them as failures.
-	  AND NOT EXISTS (
-	      SELECT 1 FROM suppressions s
-	      WHERE s.identity = CASE WHEN $2::boolean THEN c.email ELSE c.msisdn END)`
+	  AND EXISTS (
+	      SELECT 1 FROM unnest($2::text[]) AS reach(channel)
+	      -- Email is the only channel addressed by an address rather than a
+	      -- number. Compared per channel rather than hoisted into a flag,
+	      -- because with two legs the two halves of one audience can be
+	      -- addressed differently.
+	      WHERE CASE WHEN reach.channel = 'EMAIL'
+	                 THEN c.email IS NOT NULL AND c.email <> ''
+	                 ELSE c.msisdn IS NOT NULL AND c.msisdn <> ''
+	            END
+	        -- Consent is per channel and stored as a jsonb map. A channel the
+	        -- contact has never answered on is 'unknown', which is not
+	        -- consent: only an explicit opt-in counts.
+	        AND coalesce(c.consent ->> reach.channel, '') = 'opted_in'
+	        -- And suppression overrides all of it. Without this the estimate
+	        -- quoted for people the gate then refused one by one: the customer
+	        -- approved a number, was charged nothing for the refusals, and read
+	        -- a delivery rate that counted them as failures.
+	        AND NOT EXISTS (
+	            SELECT 1 FROM suppressions s
+	            WHERE s.identity = CASE WHEN reach.channel = 'EMAIL'
+	                                    THEN c.email ELSE c.msisdn END))`
 
 func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	listID *uuid.UUID, channel string) (int, error) {
-
-	// Email is the only channel addressed by an address rather than a number.
-	// Written as a flag rather than a channel comparison inside the SQL so the
-	// day a second such channel appears, this is the one line that changes.
-	byEmail := channel == "EMAIL"
+	listID *uuid.UUID, channels ...string) (int, error) {
 
 	var total int
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
@@ -751,7 +758,7 @@ func ReachableOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			WHERE ($1::uuid IS NULL OR EXISTS (
 			        SELECT 1 FROM contact_list_members m
 			        WHERE m.contact_id = c.id AND m.list_id = $1))
-			  `+reachableOnChannel, listID, byEmail, channel).Scan(&total)
+			  `+reachableOnChannel, listID, channels).Scan(&total)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("store: count reachable contacts: %w", err)

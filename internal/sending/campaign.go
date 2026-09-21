@@ -33,6 +33,17 @@ type CampaignEstimate struct {
 	VariableSkipped       int
 	VariableSkippedByName map[string]int
 
+	// FallbackForced is how many of Recipients will CERTAINLY be carried by the
+	// fallback leg: the primary could not reach them or could not be filled for
+	// them, and the fallback can. Distinct from how many COULD land there,
+	// which is a capacity rather than a prediction.
+	//
+	// They are priced at the FALLBACK rate at both ends of the range. Once a
+	// recipient is known to route through the second leg, the cheap end of the
+	// primary's price is no longer reachable for them, and averaging the two
+	// would quote a number no recipient will actually cost.
+	FallbackForced int
+
 	// SuppressedExcluded is how many of the list's otherwise-reachable contacts
 	// have opted out of being contacted. Recipients is already reduced by it,
 	// the same way it is reduced by VariableSkipped — this is the sentence that
@@ -50,20 +61,26 @@ type CampaignEstimate struct {
 // not a fault, and the API answers it with a sentence the customer can act on.
 var ErrNoRate = errors.New("sending: no rate for corridor")
 
+// FallbackEstimate is a campaign's second leg as the wizard describes it,
+// before any campaign row exists to read it from.
+type FallbackEstimate struct {
+	Channel  string
+	Template store.Template
+}
+
 // The template is passed whole rather than as its body, because an RCS
 // template has no body: its words live in a card, and an estimate reading
 // template.Body alone saw an empty string, found no slots in it and reported
 // that nobody would be skipped — on the one channel where the carrier renders
 // from the values we pass.
 func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, country, channel string, template store.Template) (CampaignEstimate, error) {
+	listID *uuid.UUID, country, channel string, template store.Template,
+	fallback *FallbackEstimate) (CampaignEstimate, error) {
 
-	body := templateText(template)
 	category := ""
 	if template.Category != nil {
 		category = *template.Category
 	}
-
 	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, country, channel, category)
 	if err != nil {
 		// Wrapped so the caller can tell "we have no price for this corridor"
@@ -73,14 +90,25 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		return CampaignEstimate{}, fmt.Errorf("%w: %s/%s", ErrNoRate, country, channel)
 	}
 
-	// Count the audience, not a page of it. A limit here would quietly
-	// under-quote a large list, which is the one direction an estimate must
-	// never be wrong in.
-	// Only the contacts this channel can actually reach: an Email campaign
-	// counts the ones with an email address, and every channel counts only the
-	// ones who opted in on it. Counting the whole list quoted sends that could
-	// never happen and charged the customer for agreeing to them.
-	total, err := store.ReachableOnChannel(ctx, s.DB, identity, listID, channel)
+	fallbackRate := rate
+	if fallback != nil {
+		fallbackCategory := ""
+		if fallback.Template.Category != nil {
+			fallbackCategory = *fallback.Template.Category
+		}
+		fallbackRate, err = store.FindPricingRate(ctx, s.DB, identity.TenantID,
+			country, fallback.Channel, fallbackCategory)
+		if err != nil {
+			return CampaignEstimate{}, fmt.Errorf("%w: %s/%s", ErrNoRate, country, fallback.Channel)
+		}
+	}
+
+	// Who the two legs between them can reach. Counted over BOTH channels: a
+	// campaign with a fallback reaches people the primary cannot, and quoting
+	// only the primary's audience under-counts exactly the recipients the
+	// fallback exists for.
+	total, err := store.ReachableOnChannel(ctx, s.DB, identity, listID,
+		estimateChannels(channel, fallback)...)
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
@@ -92,36 +120,57 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		return CampaignEstimate{}, err
 	}
 
+	// Who each leg actually carries, by the same rule the fan-out assigns by,
+	// walking the same list. A count that disagreed with the send would be
+	// worse than none, because it would be believed.
+	split, err := s.splitAudience(ctx, identity, listID, channel, template, fallback, total)
+	if err != nil {
+		return CampaignEstimate{}, err
+	}
+
 	// The range, not a guess at one. This used to add 1 to the written count
 	// when the body contained "{{" — right often enough to look correct, and
 	// wrong twice over: the written count charges for braces no handset ever
 	// sees, and a body forty septets under the boundary with three long
 	// variables tips by two segments rather than one.
-	minSegments, maxSegments := billing.SegmentBounds(body)
+	minSegments, maxSegments := billing.SegmentBounds(templateText(template))
+	costMin := int64(split.primary) * int64(minSegments) * rate.PerSegmentMinor
+	costMax := int64(split.primary) * int64(maxSegments) * rate.PerSegmentMinor
 
-	// Who the template cannot be personalised for. Counted with the same rule
-	// the fan-out skips by, walking the same list, so the number quoted before
-	// the send is the number the send acts on. A count that disagreed with the
-	// send would be worse than none, because it would be believed.
-	skipped, byName, err := s.countUnpersonalisable(ctx, identity, listID, channel, template)
-	if err != nil {
-		return CampaignEstimate{}, err
-	}
-	if total -= skipped; total < 0 {
-		total = 0
+	if split.fallbackForced > 0 && fallback != nil {
+		// Priced at the fallback's rate at BOTH ends. These recipients are not
+		// "maybe cheaper on the primary" — the primary cannot carry them, so
+		// the primary's price is not reachable for them at either end of the
+		// range.
+		fallbackMin, fallbackMax := billing.SegmentBounds(templateText(fallback.Template))
+		costMin += int64(split.fallbackForced) * int64(fallbackMin) * fallbackRate.PerSegmentMinor
+		costMax += int64(split.fallbackForced) * int64(fallbackMax) * fallbackRate.PerSegmentMinor
+		// The quoted per-message range has to span both legs, or the screen
+		// shows a segment range no fallback recipient falls inside.
+		minSegments = min(minSegments, fallbackMin)
+		maxSegments = max(maxSegments, fallbackMax)
 	}
 
 	return CampaignEstimate{
 		SuppressedExcluded:    suppressed,
-		VariableSkipped:       skipped,
-		VariableSkippedByName: byName,
-		Recipients:            total,
+		VariableSkipped:       split.skipped,
+		VariableSkippedByName: split.byName,
+		FallbackForced:        split.fallbackForced,
+		Recipients:            split.primary + split.fallbackForced,
 		SegmentsPerMessageMin: minSegments,
 		SegmentsPerMessageMax: maxSegments,
-		CostMinorMin:          int64(total) * int64(minSegments) * rate.PerSegmentMinor,
-		CostMinorMax:          int64(total) * int64(maxSegments) * rate.PerSegmentMinor,
+		CostMinorMin:          costMin,
+		CostMinorMax:          costMax,
 		Currency:              rate.Currency,
 	}, nil
+}
+
+// estimateChannels is every channel the two legs between them can reach on.
+func estimateChannels(channel string, fallback *FallbackEstimate) []string {
+	if fallback == nil || fallback.Channel == "" || fallback.Channel == channel {
+		return []string{channel}
+	}
+	return []string{channel, fallback.Channel}
 }
 
 // LaunchCampaign fans a campaign out to its list, one page at a time.
@@ -133,48 +182,22 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	campaign store.Campaign) (sent int, failed int, err error) {
 
-	// Everything identical across recipients is resolved ONCE here. Doing it
+	// Everything identical across recipients is resolved ONCE per leg. Doing it
 	// per message cost eight Postgres round trips per recipient and capped
 	// throughput at roughly 68 messages/second on this machine.
-	sender, err := store.GetSenderID(ctx, s.DB, identity, campaign.SenderID)
-	if err != nil {
-		return 0, 0, err
-	}
-	template, err := store.GetTemplate(ctx, s.DB, identity, campaign.TemplateID)
-	if err != nil {
-		return 0, 0, err
-	}
-	body := templateText(template)
-	rate, err := store.FindPricingRate(ctx, s.DB, identity.TenantID, sender.Country, sender.Channel, "")
-	if err != nil {
-		return 0, 0, fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
-	}
 	tenantStatus, err := store.TenantStatus(ctx, s.DB, identity)
 	if err != nil {
 		return 0, 0, err
 	}
-	balance := int64(0)
 	balances, err := store.ListWalletBalances(ctx, s.DB, identity)
 	if err != nil {
 		return 0, 0, err
 	}
-	for _, entry := range balances {
-		if entry.Currency == rate.Currency {
-			balance = entry.BalanceMinor
-		}
-	}
-
-	// The path this campaign's traffic takes, resolved once with everything else
-	// that is identical across recipients. See resolvePath in service.go.
-	//
-	// The brand every message in this campaign goes out under is resolved once
-	// with it. A campaign has one sender and therefore one agent.
-	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
-	carrier, routeID := s.resolvePath(ctx, sender.Country, sender.Channel, rcsCarrier)
 
 	// The list's own columns, joined to the template's slots. Absent for a
 	// campaign with no list, and an empty mapping is fine: a file whose headers
-	// already match a template's slots resolves without one.
+	// already match a template's slots resolves without one. Shared by both
+	// legs — it is a fact about the spreadsheet, not about a channel.
 	mapping := map[string]string{}
 	if campaign.ListID != nil {
 		loaded, err := store.ListVariableMapping(ctx, s.DB, identity, *campaign.ListID)
@@ -186,20 +209,29 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 	}
 
+	// Whatever the estimate said would be skipped must ACTUALLY be skipped
+	// here, not merely counted there. One tally across both legs and every
+	// page: a contact is skipped once, for the whole campaign, not once per
+	// leg that could not carry them.
+	skipped := &skipTally{}
 	campaignID := campaign.ID
-	batch := batchContext{
-		sender: sender, templateID: campaign.TemplateID,
-		templateStatus: template.Status, templateSender: template.SenderID.String(),
-		template: template,
-		body:     body, rate: rate, tenantStatus: tenantStatus,
-		balance: balance, campaignID: &campaignID,
-		carrier: carrier, routeID: routeID,
-		rcsCarrier: rcsCarrier, agentID: agentID,
-		// Whatever the estimate said would be skipped must ACTUALLY be skipped
-		// here, not merely counted there. The same mapping and the same rule,
-		// so the two cannot drift.
-		variableMapping: mapping,
-		skipped:         &skipTally{},
+
+	batch, err := s.resolveLeg(ctx, identity, &campaignID, campaign.SenderID,
+		campaign.TemplateID, tenantStatus, balances, mapping, skipped)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// The second leg, for the recipients the primary cannot serve. Nil for a
+	// campaign that has none, which is the common case and costs nothing.
+	var fallback *batchContext
+	if _, fallbackSender, fallbackTemplate, ok := fallbackLeg(campaign); ok {
+		leg, err := s.resolveLeg(ctx, identity, &campaignID, fallbackSender,
+			fallbackTemplate, tenantStatus, balances, mapping, skipped)
+		if err != nil {
+			return 0, 0, err
+		}
+		fallback = &leg
 	}
 
 	if err := store.MarkCampaignSending(ctx, s.DB, identity, campaign.ID); err != nil {
@@ -264,20 +296,34 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			return sent, failed, nil
 		}
 
+		// The audience spans BOTH legs' channels. Walking only the primary's is
+		// what made a fallback decorative: the people it exists to reach were
+		// never paged in.
 		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity,
-			campaign.ListID, sender.Channel, cursor, batchSize)
+			campaign.ListID, cursor, batchSize, legChannels(batch, fallback)...)
 		if err != nil {
 			return sent, failed, err
 		}
-		pageSent, pageFailed, err := s.SendBatch(ctx, identity, batch, contacts)
+
+		forPrimary, forFallback := assignLegs(batch, fallback, contacts)
+		pageSent, pageFailed, err := s.SendBatch(ctx, identity, batch, forPrimary)
 		sent += pageSent
 		failed += pageFailed
+		// The running balance shrinks as the campaign spends, so a wallet that
+		// runs dry stops the rest of the campaign instead of overdrawing.
+		batch.balance -= int64(pageSent) * batch.rate.PerSegmentMinor
 		if err != nil {
 			return sent, failed, err
 		}
-		// The running balance shrinks as the campaign spends, so a wallet that
-		// runs dry stops the rest of the campaign instead of overdrawing.
-		batch.balance -= int64(pageSent) * rate.PerSegmentMinor
+		if fallback != nil && len(forFallback) > 0 {
+			legSent, legFailed, legErr := s.SendBatch(ctx, identity, *fallback, forFallback)
+			sent += legSent
+			failed += legFailed
+			fallback.balance -= int64(legSent) * fallback.rate.PerSegmentMinor
+			if legErr != nil {
+				return sent, failed, legErr
+			}
+		}
 		if next == "" {
 			break
 		}
@@ -301,50 +347,80 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	return sent, failed, nil
 }
 
-// countUnpersonalisable walks a list and counts who the message cannot be
-// filled for, by the same rule the fan-out skips by.
-//
-// A message with no slots anywhere returns zero without reading anything: that
-// is the common case and it must not cost a walk of the audience. "Anywhere" is
-// the fix — this used to ask only whether the BODY had slots, so an RCS
-// template, whose body is null and whose {{first_name}} lives in a card,
-// returned zero here while the send skipped nobody. Both numbers were wrong in
-// the same direction, which is why they agreed.
-func (s *Service) countUnpersonalisable(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, channel string, template store.Template) (int, map[string]int, error) {
+// audienceSplit is who each leg carries, and who neither can.
+type audienceSplit struct {
+	primary        int
+	fallbackForced int
+	skipped        int
+	byName         map[string]int
+}
 
-	body := templateText(template)
-	if listID == nil || len(templateSlots(template, body)) == 0 {
-		return 0, nil, nil
+// splitAudience walks a list and assigns every contact to a leg, or to
+// neither, by the same rule the fan-out assigns by.
+//
+// The fast path matters: a single-leg campaign whose message has no slots
+// anywhere carries everyone, and answering that must not cost a walk of the
+// audience. "Anywhere" is the fix — this used to ask only whether the BODY had
+// slots, so an RCS template, whose body is null and whose {{first_name}} lives
+// in a card, returned zero here while the send skipped nobody. Both numbers
+// were wrong in the same direction, which is why they agreed.
+func (s *Service) splitAudience(ctx context.Context, identity store.Identity,
+	listID *uuid.UUID, channel string, template store.Template,
+	fallback *FallbackEstimate, total int) (audienceSplit, error) {
+
+	if listID == nil ||
+		(fallback == nil && len(templateSlots(template, templateText(template))) == 0) {
+		return audienceSplit{primary: total}, nil
 	}
 	mapping, err := store.ListVariableMapping(ctx, s.DB, identity, *listID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return 0, nil, err
+		return audienceSplit{}, err
 	}
 
 	tally := &skipTally{}
-	// Paged with the same cursor the fan-out uses, and narrowed to the contacts
-	// this channel can actually reach — so the count explains the same audience
-	// the estimate is quoting for, not a wider one.
+	split := audienceSplit{}
+	// Paged with the same cursor the fan-out uses, over the same channels, so
+	// the count explains the same audience the send will walk.
 	cursor := ""
 	for {
-		contacts, next, err := store.ListContactsAfter(
-			ctx, s.DB, identity, listID, channel, cursor, estimateScanPage)
+		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity, listID,
+			cursor, estimateScanPage, estimateChannels(channel, fallback)...)
 		if err != nil {
-			return 0, nil, err
+			return audienceSplit{}, err
 		}
 		for _, contact := range contacts {
-			rendered := renderMessage(template, body, contact.Fields, mapping)
-			if len(rendered.missing) > 0 {
-				tally.add(rendered.missing)
+			primaryMissing, primaryReaches := legCarries(channel, template, mapping, contact)
+			if primaryReaches && len(primaryMissing) == 0 {
+				split.primary++
+				continue
 			}
+			if fallback != nil {
+				fallbackMissing, fallbackReaches := legCarries(
+					fallback.Channel, fallback.Template, mapping, contact)
+				if fallbackReaches && len(fallbackMissing) == 0 {
+					split.fallbackForced++
+					continue
+				}
+				if !primaryReaches && fallbackReaches {
+					tally.add(fallbackMissing)
+					continue
+				}
+			}
+			if primaryReaches {
+				tally.add(primaryMissing)
+				continue
+			}
+			// Reachable by neither leg. Not skipped for a missing variable —
+			// they were never in this campaign's audience, and counting them
+			// here would explain one person twice in two different numbers.
 		}
 		if next == "" {
 			break
 		}
 		cursor = next
 	}
-	return tally.Total, tally.ByName, nil
+	split.skipped, split.byName = tally.Total, tally.ByName
+	return split, nil
 }
 
 // estimateScanPage is how many contacts the estimate reads at a time. Larger

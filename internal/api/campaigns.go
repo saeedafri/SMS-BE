@@ -295,7 +295,8 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 			return nil, err
 		}
 		estimate, err := service.EstimateCampaign(ctx, identity, campaign.ListID,
-			campaign.Country, campaign.Channel, template)
+			campaign.Country, campaign.Channel, template,
+			s.fallbackEstimate(ctx, identity, campaign.FallbackChannel, campaign.FallbackTemplateID))
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
 			campaign.SegmentsPerMessageMin = estimate.SegmentsPerMessageMin
@@ -404,8 +405,22 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		}
 	}
 
+	// The second leg, when the wizard is asking about one. A fallback naming a
+	// template we cannot read is treated as no fallback rather than as an
+	// error: the estimate's job is to quote what will happen, and a leg with
+	// no template is a leg nothing can be sent over.
+	var fallback *sending.FallbackEstimate
+	if body.Fallback != nil {
+		if leg, err := body.Fallback.AsCampaignFallback(); err == nil && leg.TemplateId != "" {
+			channel := string(leg.Channel)
+			if templateID, err := uuid.Parse(leg.TemplateId); err == nil {
+				fallback = s.fallbackEstimate(ctx, identity, &channel, &templateID)
+			}
+		}
+	}
+
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
-		string(body.Country), string(body.Channel), template)
+		string(body.Country), string(body.Channel), template, fallback)
 	if errors.Is(err, sending.ErrNoRate) {
 		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
 			"We do not have a rate for that country and channel yet.")), nil
@@ -421,6 +436,11 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 		CostMinorMax:          int(estimate.CostMinorMax),
 		Currency:              gen.CurrencyCode(estimate.Currency),
 		SuppressedExcluded:    estimate.SuppressedExcluded,
+		// Sent always. The contract says a server returning this field is
+		// DECLARING that it tries the fallback leg before giving up on a
+		// recipient — which we now do, so saying so is the honest answer and
+		// omitting it would understate what the send will actually do.
+		FallbackForced: &estimate.FallbackForced,
 		// Optional in the contract on purpose: an ABSENT count means "this
 		// server cannot tell yet", which the screen says in those words. We can
 		// tell, so we always send it — a zero here is a measured zero.
@@ -693,4 +713,21 @@ func (s *Server) dispatchedRecipients(ctx context.Context, identity store.Identi
 		})
 	}
 	return out, total, nil
+}
+
+// fallbackEstimate loads a campaign's second leg for pricing, or nil when it
+// has none. A leg whose template cannot be read is no leg: nothing can be sent
+// over it, so quoting as though it existed would promise a delivery that never
+// happens.
+func (s *Server) fallbackEstimate(ctx context.Context, identity store.Identity,
+	channel *string, templateID *uuid.UUID) *sending.FallbackEstimate {
+
+	if channel == nil || *channel == "" || templateID == nil {
+		return nil
+	}
+	template, err := store.GetTemplate(ctx, s.DB, identity, *templateID)
+	if err != nil {
+		return nil
+	}
+	return &sending.FallbackEstimate{Channel: *channel, Template: template}
 }

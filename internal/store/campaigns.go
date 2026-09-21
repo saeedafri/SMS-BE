@@ -474,9 +474,8 @@ func ListCancelledRecipients(ctx context.Context, pool *pgxpool.Pool, id Identit
 		FROM contacts c
 		WHERE EXISTS (SELECT 1 FROM contact_list_members m
 		              WHERE m.contact_id = c.id AND m.list_id = $1)
-		  AND ($4::timestamptz IS NULL OR c.created_at <= $4)` + reachableOnChannel
-	args := []any{*campaign.ListID, campaign.Channel == "EMAIL", campaign.Channel,
-		campaign.SendStartedAt}
+		  AND ($3::timestamptz IS NULL OR c.created_at <= $3)` + reachableOnChannel
+	args := []any{*campaign.ListID, campaignChannels(campaign), campaign.SendStartedAt}
 
 	// Fan-out walks created_at DESC, id DESC and saves the cursor after each
 	// page, so everything strictly older than the cursor is what it never
@@ -487,7 +486,7 @@ func ListCancelledRecipients(ctx context.Context, pool *pgxpool.Pool, id Identit
 	// name a placeholder the args slice does not supply — which is how this
 	// function last returned a 500 on every campaign that had a list.
 	if cursorTime != nil {
-		where += ` AND (c.created_at, c.id) < ($5::timestamptz, $6::uuid)`
+		where += ` AND (c.created_at, c.id) < ($4::timestamptz, $5::uuid)`
 		args = append(args, cursorTime, cursorID)
 	}
 
@@ -579,4 +578,21 @@ func ClaimScheduledCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity
 		return false, fmt.Errorf("store: claim scheduled campaign: %w", err)
 	}
 	return claimed, nil
+}
+
+// campaignChannels is every channel a campaign's audience can be reached on:
+// its own, plus its fallback leg's when it has one.
+//
+// A campaign with a fallback sends to people the primary channel cannot reach,
+// so its audience is the union rather than the primary's alone. Reading only
+// the primary is what made the fallback columns decorative — they were stored,
+// echoed back to the console, and never once widened the set of people a
+// campaign would walk.
+func campaignChannels(campaign Campaign) []string {
+	channels := []string{campaign.Channel}
+	if campaign.FallbackChannel != nil && *campaign.FallbackChannel != "" &&
+		*campaign.FallbackChannel != campaign.Channel {
+		channels = append(channels, *campaign.FallbackChannel)
+	}
+	return channels
 }

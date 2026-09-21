@@ -84,7 +84,7 @@ func TestACampaignReachesOnlyContactsWhoOptedInOnItsChannel(t *testing.T) {
 	cursor := ""
 	for range 10 {
 		contacts, next, err := store.ListContactsAfter(context.Background(),
-			f.service.DB, f.identity, &listRef, "SMS", cursor, 3)
+			f.service.DB, f.identity, &listRef, cursor, 3, "SMS")
 		if err != nil {
 			t.Fatalf("page: %v", err)
 		}
