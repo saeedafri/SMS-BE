@@ -344,10 +344,20 @@ var templateSubstanceFields = []string{"body", "rcsContent", "ctaUrl", "category
 
 // templateCategories is the category taxonomy each channel declares.
 //
-// SMS and RCS declare none on purpose: in India their taxonomy is DLT's, and it
-// lives in dltCategory. Accepting Meta's MARKETING on an Indian SMS template
-// would record a classification no operator reads, beside the one they do.
+// SMS declares none on purpose: in India its taxonomy is DLT's, and it lives in
+// dltCategory. Accepting Meta's MARKETING on an Indian SMS template would
+// record a classification no operator reads, beside the one they do.
+//
+// RCS declares one, and carries BOTH. The two answer different authorities: the
+// DLT category answers India's regulator, and the category answers the carrier,
+// whose agent was approved under a use case a template must match or be
+// auto-rejected. Deriving one from the other was tried and is wrong — DLT's
+// TRANSACTIONAL covers banking and OTP traffic, which Airtel separates, so any
+// derivation guesses on the customer's behalf and a wrong guess is silent. The
+// person who wrote the message picks. RCS is also the only channel with a
+// carrier agent of its own, which is why this is narrow to it.
 var templateCategories = map[string][]string{
+	"RCS":      {"MARKETING", "UTILITY", "AUTHENTICATION"},
 	"WHATSAPP": {"MARKETING", "UTILITY", "AUTHENTICATION"},
 	"EMAIL":    {"MARKETING", "TRANSACTIONAL", "AUTHENTICATION"},
 	"VOICE":    {"MARKETING", "TRANSACTIONAL", "AUTHENTICATION"},

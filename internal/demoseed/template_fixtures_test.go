@@ -29,16 +29,23 @@ func TestEveryIndiaTemplateFixtureCarriesWhatDLTRequires(t *testing.T) {
 	}
 }
 
-// SMS and RCS declare no Meta category — in India their taxonomy is DLT's, and
-// a second classification beside it is one no operator reads.
-func TestNoIndiaSMSOrRCSFixtureCarriesAMetaCategory(t *testing.T) {
+// SMS declares no category — in India its taxonomy is DLT's, and a second
+// classification beside it is one no operator reads. RCS is the exception and
+// carries both: its category answers the carrier, whose agent was approved
+// under a use case the template must match.
+func TestNoIndiaSMSFixtureCarriesACategoryAndEveryRCSOneDoes(t *testing.T) {
 	for _, fixture := range demoTemplates {
-		if fixture.channel != "SMS" && fixture.channel != "RCS" {
-			continue
-		}
-		if fixture.category != "" {
-			t.Errorf("%q is %s and carries the Meta category %q, which PATCH refuses",
-				fixture.name, fixture.channel, fixture.category)
+		switch fixture.channel {
+		case "SMS":
+			if fixture.category != "" {
+				t.Errorf("%q is SMS and carries the category %q, which create and PATCH refuse",
+					fixture.name, fixture.category)
+			}
+		case "RCS":
+			if fixture.category == "" {
+				t.Errorf("%q is RCS with no category, so it can never be registered "+
+					"with a carrier", fixture.name)
+			}
 		}
 	}
 }

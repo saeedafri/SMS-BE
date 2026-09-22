@@ -196,6 +196,9 @@ func TestATemplateEditRefusesWhatItsChannelDoesNotCarry(t *testing.T) {
 		want     int
 	}{
 		{"a body on an RCS template", rcs, map[string]any{"body": "words"}, 422},
+		{"a category on an RCS template", rcs, map[string]any{"category": "MARKETING"}, 200},
+		{"TRANSACTIONAL on an RCS template", rcs,
+			map[string]any{"category": "TRANSACTIONAL"}, 422},
 		{"rcsContent on an SMS template", sms,
 			map[string]any{"rcsContent": map[string]any{"kind": "text", "text": "x",
 				"suggestions": []any{}}}, 422},
@@ -391,18 +394,6 @@ func TestTemplateEditAndDeleteRefuseUnknownIdsAndUnknownCallers(t *testing.T) {
 	}
 }
 
-// classifyByDLT moves a template to India's own taxonomy: the DLT category the
-// customer registered it under, and no Meta category, which is what a template
-// created through the product carries.
-func (h *harness) classifyByDLT(templateID uuid.UUID, dltCategory string) {
-	h.t.Helper()
-	if _, err := h.admin.Exec(context.Background(),
-		`UPDATE templates SET category = NULL, dlt_category = $2 WHERE id = $1`,
-		templateID, dltCategory); err != nil {
-		h.t.Fatalf("classify by DLT: %v", err)
-	}
-}
-
 // A registry id that is still blank can be filled in on an approved template,
 // and nothing else about it can.
 //
@@ -513,7 +504,10 @@ func TestCreateRefusesACategoryTheChannelDoesNotDeclare(t *testing.T) {
 			map[string]any{"body": "Hello", "category": "UTILITY"}, 422},
 		{"a category on an RCS template", "RCS",
 			map[string]any{"rcsContent": map[string]any{"kind": "text", "text": "Hello",
-				"suggestions": []any{}}, "category": "UTILITY"}, 422},
+				"suggestions": []any{}}, "category": "UTILITY"}, 201},
+		{"TRANSACTIONAL on an RCS template", "RCS",
+			map[string]any{"rcsContent": map[string]any{"kind": "text", "text": "Hello",
+				"suggestions": []any{}}, "category": "TRANSACTIONAL"}, 422},
 		{"TRANSACTIONAL on a WhatsApp template", "WHATSAPP",
 			map[string]any{"waContent": map[string]any{"kind": "text", "body": "Hello"},
 				"category": "TRANSACTIONAL"}, 422},
@@ -530,7 +524,7 @@ func TestCreateRefusesACategoryTheChannelDoesNotDeclare(t *testing.T) {
 		// The same sentence PATCH answers with. "must be one of: ." is what a
 		// channel with no taxonomy produces when the refusal is left to the
 		// enum check, and it tells the customer nothing.
-		if row.want == 422 && (row.channel == "SMS" || row.channel == "RCS") {
+		if row.want == 422 && row.channel == "SMS" {
 			want := row.channel + " templates carry no category."
 			if !strings.Contains(string(res.Body), want) {
 				t.Errorf("%s refused with %s, want %q", row.name, res.Body, want)

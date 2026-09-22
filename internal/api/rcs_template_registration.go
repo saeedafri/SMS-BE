@@ -29,43 +29,22 @@ func carrierRegistrationResponse(t store.Template) *gen.Template_CarrierRegistra
 	return &wrapper
 }
 
-// airtelUseCase maps a template's own classification to the agent use case
-// Airtel expects.
+// airtelUseCase maps Relay's template category to the agent use case Airtel
+// expects.
 //
 // Getting this wrong is not a cosmetic problem: "if your Agent was created and
 // approved under a Transactional use case, any template submitted under this
 // agent with Promotional content will fail validation and be automatically
-// rejected". There is no safe default, which is why an unclassified template is
-// refused rather than guessed at.
+// rejected". There is no safe default, which is why an uncategorised template
+// is refused rather than guessed at.
 //
-// The DLT category is read FIRST, and it is why an RCS template created through
-// the product can be registered at all. RCS declares no Meta category — in
-// India its taxonomy is DLT's — so asking for one would have made every RCS
-// template a customer creates unregisterable, and the only registerable ones
-// the two the demo seeder writes in raw SQL. Reading dltCategory asks the
-// customer for nothing they have not already told their own regulator.
-//
-// The Meta category remains the fallback for a country with no DLT-style
-// registry. There is no such RCS country today; the branch costs one switch and
-// means adding one is a registry entry rather than a redesign.
+// The category, and not dltCategory. Deriving the use case from India's DLT
+// category was built and then reversed: DLT's TRANSACTIONAL covers banking and
+// OTP traffic, which Airtel separates into TRANSACTIONAL and OTP, so the
+// derivation has to guess exactly where a wrong answer is silent. RCS declares
+// its own category for this reason — the customer who wrote the message picks,
+// and dltCategory goes on answering the regulator.
 func airtelUseCase(t store.Template) (string, bool) {
-	if t.DltCategory != nil {
-		switch *t.DltCategory {
-		case "PROMOTIONAL":
-			return "PROMOTIONAL", true
-		// Both service tiers are transactional traffic to Airtel; the
-		// implicit/explicit split is a consent distinction DLT makes and the
-		// carrier does not.
-		case "SERVICE_IMPLICIT", "SERVICE_EXPLICIT":
-			return "TRANSACTIONAL", true
-		// DLT's TRANSACTIONAL is restricted to banking and OTP, and those are
-		// two different Airtel use cases. TRANSACTIONAL is the one that carries
-		// both: a one-time passcode under a transactional agent is accepted,
-		// while a balance alert under an OTP agent is the mismatch above.
-		case "TRANSACTIONAL":
-			return "TRANSACTIONAL", true
-		}
-	}
 	if t.Category == nil {
 		return "", false
 	}
@@ -202,7 +181,7 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 	useCase, classified := airtelUseCase(template)
 	if !classified {
 		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeValidation,
-			"Give this template a DLT category first. The carrier requires a use case, and it "+
+			"Give this template a category first. The carrier requires a use case, and it "+
 				"must match the one your RCS agent was approved under.")), nil
 	}
 

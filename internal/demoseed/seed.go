@@ -1990,12 +1990,13 @@ var demoTemplates = []templateFixture{
 		"{{code}} is your Acme verification code.", "", "pending_review", `{code}`, "", "",
 		"", "TRANSACTIONAL"},
 
-	// No Meta category, like the SMS pair above: RCS declares none, because in
-	// India its taxonomy is DLT's. These still demonstrate carrier registration
-	// — airtelUseCase derives the carrier's use case from dltCategory — and now
-	// they demonstrate it through the same fields a customer's own RCS template
-	// carries, rather than through a column only this file could write.
-	{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "", "approved", `{first_name}`, "", `{
+	// Both categories, unlike the SMS pair above, because an RCS template
+	// answers two authorities. dltCategory is India's regulator; category is
+	// the carrier, which needs a use case for the agent the template sends
+	// under — and a promotional template under a transactional agent is
+	// auto-rejected. An uncategorised fixture could not demonstrate carrier
+	// registration at all.
+	{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "UTILITY", "approved", `{first_name}`, "", `{
 		"kind": "text",
 		"text": "Welcome to Acme, {{first_name}}.",
 		"suggestions": [
@@ -2004,7 +2005,7 @@ var demoTemplates = []templateFixture{
 		]
 	}`, "1207161000000000002", "SERVICE_IMPLICIT"},
 	{"dddddddd-dddd-dddd-dddd-dddddddddddd", rcsID, "Product launch", "RCS",
-		"", "", "pending_review", `{product}`, "", `{
+		"", "MARKETING", "pending_review", `{product}`, "", `{
 		"kind": "card",
 		"card": {
 			"mediaUrl": "https://acme.example.com/launch.jpg",
