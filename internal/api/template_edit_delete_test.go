@@ -487,3 +487,54 @@ func TestTheFrozenTemplateRefusalReadsAsEnglish(t *testing.T) {
 		}
 	}
 }
+
+// Create used to be looser than edit: it stored a Meta category on a channel
+// that declares none, and the PATCH that would have corrected it refused. The
+// two answered differently in adjacent lines of one file.
+func TestCreateRefusesACategoryTheChannelDoesNotDeclare(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+
+	create := func(channel string, body map[string]any) response {
+		sender := h.seedSender(acct, channel)
+		body["senderId"] = sender.String()
+		body["name"] = fmt.Sprintf("created %d", h.nextSenderSeq())
+		return h.do(http.MethodPost, "/v1/templates", acct.Token, body)
+	}
+
+	for _, row := range []struct {
+		name    string
+		channel string
+		body    map[string]any
+		want    int
+	}{
+		{"a category on an SMS template", "SMS",
+			map[string]any{"body": "Hello", "category": "UTILITY"}, 422},
+		{"a category on an RCS template", "RCS",
+			map[string]any{"rcsContent": map[string]any{"kind": "text", "text": "Hello",
+				"suggestions": []any{}}, "category": "UTILITY"}, 422},
+		{"TRANSACTIONAL on a WhatsApp template", "WHATSAPP",
+			map[string]any{"waContent": map[string]any{"kind": "text", "body": "Hello"},
+				"category": "TRANSACTIONAL"}, 422},
+		{"MARKETING on a WhatsApp template", "WHATSAPP",
+			map[string]any{"waContent": map[string]any{"kind": "text", "body": "Hello"},
+				"category": "MARKETING"}, 201},
+		{"no category at all on SMS", "SMS", map[string]any{"body": "Hello"}, 201},
+	} {
+		res := create(row.channel, row.body)
+		if res.Code != row.want {
+			t.Errorf("%s = %d, want %d\n%s", row.name, res.Code, row.want, res.Body)
+			continue
+		}
+		// The same sentence PATCH answers with. "must be one of: ." is what a
+		// channel with no taxonomy produces when the refusal is left to the
+		// enum check, and it tells the customer nothing.
+		if row.want == 422 && (row.channel == "SMS" || row.channel == "RCS") {
+			want := row.channel + " templates carry no category."
+			if !strings.Contains(string(res.Body), want) {
+				t.Errorf("%s refused with %s, want %q", row.name, res.Body, want)
+			}
+		}
+	}
+}

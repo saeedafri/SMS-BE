@@ -236,12 +236,25 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 		}
 	}
 
+	// The same rule PATCH enforces, in the same words. Create used to store
+	// whatever arrived: an SMS template could be filed under Meta's UTILITY,
+	// beside the DLT category its operator actually reads, and the edit that
+	// would have corrected it was refused. Neither form offers the field, so
+	// this only ever reached a direct API caller.
 	var category *string
 	if request.Body.Category != nil {
-		if decoded, err := request.Body.Category.AsTemplateCategory(); err == nil {
-			value := string(decoded)
-			category = &value
+		decoded, err := request.Body.Category.AsTemplateCategory()
+		allowed, declared := templateCategories[sender.Channel]
+		switch {
+		case !declared:
+			return gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
+				sender.Channel+" templates carry no category.")), nil
+		case err != nil || !oneOf(string(decoded), allowed):
+			return gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
+				enumMessage("category", allowed))), nil
 		}
+		value := string(decoded)
+		category = &value
 	}
 
 	// India's taxonomy, kept apart from Meta's above.
