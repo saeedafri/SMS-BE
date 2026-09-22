@@ -390,3 +390,100 @@ func TestTemplateEditAndDeleteRefuseUnknownIdsAndUnknownCallers(t *testing.T) {
 		}
 	}
 }
+
+// classifyByDLT moves a template to India's own taxonomy: the DLT category the
+// customer registered it under, and no Meta category, which is what a template
+// created through the product carries.
+func (h *harness) classifyByDLT(templateID uuid.UUID, dltCategory string) {
+	h.t.Helper()
+	if _, err := h.admin.Exec(context.Background(),
+		`UPDATE templates SET category = NULL, dlt_category = $2 WHERE id = $1`,
+		templateID, dltCategory); err != nil {
+		h.t.Fatalf("classify by DLT: %v", err)
+	}
+}
+
+// A registry id that is still blank can be filled in on an approved template,
+// and nothing else about it can.
+//
+// India's DLT issues a content-template id when it approves the words, which
+// can be after the template is approved here — and until it arrives the
+// template cannot send at all, because SMPPRouter.Submit refuses an Indian SMS
+// with no DLT ids. Under the plain freeze rule that state was permanent.
+func TestABlankRegistryIdCanBeFilledInOnAnApprovedTemplateAndNothingElseCan(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	sender := h.seedSender(acct, "SMS")
+	approved := func(columns map[string]any) uuid.UUID {
+		columns["body"] = "Hello {{first_name}}"
+		return h.seedTemplateOn(acct, sender, "SMS", "approved", columns)
+	}
+
+	blank := approved(map[string]any{})
+	res := h.patchTemplate(acct, blank, map[string]any{"registrationId": "1207161000000000007"})
+	if res.Code != http.StatusOK {
+		t.Fatalf("filling a blank registry id = %d, want 200\n%s", res.Code, res.Body)
+	}
+	var updated gen.Template
+	res.decode(t, &updated)
+	if updated.RegistrationId == nil || *updated.RegistrationId != "1207161000000000007" {
+		t.Errorf("registrationId = %v, want the one just supplied", updated.RegistrationId)
+	}
+
+	for _, row := range []struct {
+		name     string
+		template uuid.UUID
+		body     any
+		want     int
+	}{
+		// Already set: changing it would point registered words at a different
+		// registration, which is the thing the freeze exists for.
+		{"replacing an id that is already set", blank,
+			map[string]any{"registrationId": "1207161000000000008"}, http.StatusConflict},
+		{"clearing it", approved(map[string]any{}),
+			map[string]any{"registrationId": nil}, http.StatusUnprocessableEntity},
+		{"blanking it", approved(map[string]any{}),
+			map[string]any{"registrationId": ""}, http.StatusUnprocessableEntity},
+		// The exception is registrationId ALONE. A body travelling beside it is
+		// still a body.
+		{"words alongside it", approved(map[string]any{}),
+			map[string]any{"registrationId": "1207161000000000009", "body": "New words"},
+			http.StatusConflict},
+		{"words on their own", approved(map[string]any{}),
+			map[string]any{"body": "New words"}, http.StatusConflict},
+		{"a DLT category", approved(map[string]any{}),
+			map[string]any{"dltCategory": "PROMOTIONAL"}, http.StatusConflict},
+	} {
+		got := h.patchTemplate(acct, row.template, row.body)
+		if got.Code != row.want {
+			t.Errorf("%s = %d, want %d\n%s", row.name, got.Code, row.want, got.Body)
+		}
+	}
+}
+
+// The refusal is shown verbatim in the edit drawer, and "a approved template"
+// is what it used to read — on the status it fires on most.
+func TestTheFrozenTemplateRefusalReadsAsEnglish(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	sender := h.seedSender(acct, "SMS")
+
+	for _, status := range []string{"approved", "expired", "blocked"} {
+		template := h.seedTemplateOn(acct, sender, "SMS", status,
+			map[string]any{"body": "Hello"})
+		res := h.patchTemplate(acct, template, map[string]any{"body": "New words"})
+		if res.Code != http.StatusConflict {
+			t.Fatalf("%s = %d, want 409\n%s", status, res.Code, res.Body)
+		}
+		for _, wrong := range []string{"a approved", "a expired", "a blocked"} {
+			if strings.Contains(string(res.Body), wrong) {
+				t.Errorf("the %s refusal reads %q: %s", status, wrong, res.Body)
+			}
+		}
+		if !strings.Contains(string(res.Body), "it is "+status) {
+			t.Errorf("the %s refusal does not say which status it is: %s", status, res.Body)
+		}
+	}
+}

@@ -581,3 +581,61 @@ func TestAnRCSReplyReachesTheInboxAndStopSuppresses(t *testing.T) {
 		t.Errorf("STOP over RCS did not suppress %s: %s", from, res.Body)
 	}
 }
+
+// An RCS template created through the product carries no Meta category: RCS
+// declares none, because in India its taxonomy is DLT's. The carrier still
+// needs a use case, so before it was derived from dltCategory the only RCS
+// templates in the system that could ever be registered were the two the demo
+// seeder wrote in raw SQL — every template a customer made was refused.
+func TestAnRCSTemplateIsRegisteredUnderItsDLTCategory(t *testing.T) {
+	for _, row := range []struct {
+		dltCategory, useCase string
+	}{
+		{"PROMOTIONAL", "PROMOTIONAL"},
+		// The implicit/explicit split is a consent distinction DLT makes and
+		// the carrier does not.
+		{"SERVICE_IMPLICIT", "TRANSACTIONAL"},
+		{"SERVICE_EXPLICIT", "TRANSACTIONAL"},
+		// DLT's TRANSACTIONAL covers banking AND OTP, which are two Airtel use
+		// cases. The one that carries both is the safe end: an OTP under a
+		// transactional agent is accepted, a balance alert under an OTP agent
+		// is the mismatch that gets auto-rejected.
+		{"TRANSACTIONAL", "TRANSACTIONAL"},
+	} {
+		carrier := &stubRegistrar{vendor: "airtel", issued: "id-" + row.dltCategory}
+		h := newCarrierHarness(t, carrier)
+		tenant := h.newAccount("owner")
+		templateID := h.rcsTemplate(tenant, "DLT "+row.dltCategory, []string{"first_name"}, "")
+		h.classifyByDLT(templateID, row.dltCategory)
+
+		res := h.do(http.MethodPost,
+			"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+			map[string]any{"vendor": carrier.vendor})
+		if res.Code != http.StatusOK {
+			t.Fatalf("%s = %d, want 200; body = %s", row.dltCategory, res.Code, res.Body)
+		}
+		if carrier.sawSpec.UseCase != row.useCase {
+			t.Errorf("%s submitted under use case %q, want %q",
+				row.dltCategory, carrier.sawSpec.UseCase, row.useCase)
+		}
+	}
+}
+
+// Neither classification means no use case, and there is no safe default: a
+// promotional template under a transactional agent is auto-rejected by Airtel.
+func TestAnUnclassifiedRCSTemplateIsRefusedRatherThanGuessedAt(t *testing.T) {
+	carrier := &stubRegistrar{vendor: "airtel", issued: "never"}
+	h := newCarrierHarness(t, carrier)
+	tenant := h.newAccount("owner")
+	templateID := h.rcsTemplate(tenant, "Unclassified", []string{"first_name"}, "")
+
+	res := h.do(http.MethodPost,
+		"/v1/templates/"+templateID.String()+"/carrier-registration", tenant.Token,
+		map[string]any{"vendor": carrier.vendor})
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body = %s", res.Code, res.Body)
+	}
+	if carrier.calls != 0 {
+		t.Error("an unclassified template was submitted to the carrier anyway")
+	}
+}

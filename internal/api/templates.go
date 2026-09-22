@@ -374,22 +374,39 @@ func (s *Server) UpdateTemplate(ctx context.Context, request gen.UpdateTemplateR
 	// What the request ASKS to change, not what would differ afterwards. A
 	// hand-built body that re-sends the identical words is still asking to set
 	// them, and an edit drawer that diffs first simply never sends the key.
-	touchesSubstance := false
+	asked := []string{}
 	for _, field := range templateSubstanceFields {
 		if bodyMentions(ctx, field) {
-			touchesSubstance = true
-			break
+			asked = append(asked, field)
 		}
 	}
+	touchesSubstance := len(asked) > 0
+
+	// The one way into a frozen template, and it is narrow on purpose: filling
+	// in a registry id that is still blank.
+	//
+	// Blank-to-value cannot contradict what DLT approved, because there was
+	// nothing there to contradict — while changing an id that is already set
+	// would point registered words at a different registration. Without this a
+	// template approved before DLT returned its content-template id could never
+	// be given one, and it can never send either: SMPPRouter.Submit refuses an
+	// Indian SMS with no DLT ids rather than letting the operator scrub it.
+	// Alone in the request, too: a body travelling beside it is still a body.
+	fillingBlankRegistrationID := len(asked) == 1 && asked[0] == "registrationId" &&
+		(template.ExternalID == nil || strings.TrimSpace(*template.ExternalID) == "")
+
 	switch {
-	case !touchesSubstance:
+	case !touchesSubstance, fillingBlankRegistrationID:
 	case template.Status == "approved", template.Status == "blocked",
 		template.Status == "expired":
 		// Atomic: a name in the same body is refused with the rest rather than
 		// applied on its own, so the caller never half-succeeds.
+		//
+		// No article in front of the status: "a approved template" reads wrong
+		// for the two statuses this fires on most.
 		return gen.UpdateTemplate409JSONResponse(errorBody(codeConflict,
-			fmt.Sprintf("The words of a %s template cannot be changed — they are what "+
-				"the registry approved. Rename it, or create a new template.",
+			fmt.Sprintf("The words of this template cannot be changed — it is %s, and they "+
+				"are what the registry approved. Rename it, or create a new template.",
 				template.Status))), nil
 	}
 

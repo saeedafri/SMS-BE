@@ -581,102 +581,7 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	// verbatim from the frontend's fixture, because the screens render its
 	// individual parts (a button's label, an email's subject) and a paraphrase
 	// would show the customer something the mock never said.
-	templates := []struct {
-		id, sender, name, channel, body, category, status string
-		variables                                         string
-		ctaURL                                            string
-		content                                           string
-	}{
-		{smsTemplate, smsID, "Order shipped", "SMS",
-			"Hi {{first_name}}, your order {{order_id}} has shipped. Track: https://acme.example.com/track",
-			"", "approved", `{first_name,order_id}`, "https://acme.example.com/track", ""},
-		{otpTemplate, smsID, "OTP", "SMS",
-			"{{code}} is your Acme verification code.", "", "pending_review", `{code}`, "", ""},
-
-		// Categorised, unlike the SMS pair above, because an RCS template cannot
-		// be registered with a carrier without one: the carrier needs a use
-		// case, and a promotional template under a transactional agent is
-		// auto-rejected. An uncategorised fixture could not demonstrate carrier
-		// registration at all.
-		{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "UTILITY", "approved", `{first_name}`, "", `{
-			"kind": "text",
-			"text": "Welcome to Acme, {{first_name}}.",
-			"suggestions": [
-				{"type": "reply", "text": "Get started"},
-				{"type": "open_url", "text": "Open app", "url": "https://acme.example.com/app"}
-			]
-		}`},
-		{"dddddddd-dddd-dddd-dddd-dddddddddddd", rcsID, "Product launch", "RCS",
-			"", "MARKETING", "pending_review", `{product}`, "", `{
-			"kind": "card",
-			"card": {
-				"mediaUrl": "https://acme.example.com/launch.jpg",
-				"title": "Meet {{product}}",
-				"description": "Our newest release, available today."
-			},
-			"suggestions": [
-				{"type": "open_url", "text": "Shop now", "url": "https://acme.example.com/shop"}
-			]
-		}`},
-
-		{"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", whatsappID, "Order confirmed (WA text)",
-			"WHATSAPP", "", "UTILITY", "approved", `{first_name,order_id}`, "", `{
-			"kind": "text",
-			"body": "Hi {{first_name}}, your order {{order_id}} is confirmed."
-		}`},
-		{"ffffffff-ffff-ffff-ffff-ffffffffffff", whatsappID, "Feedback request (WA buttons)",
-			"WHATSAPP", "", "MARKETING", "approved", `{first_name}`, "", `{
-			"kind": "buttons",
-			"body": "Hi {{first_name}}, how was your order?",
-			"buttons": [
-				{"type": "quick_reply", "text": "Great"},
-				{"type": "quick_reply", "text": "Not great"},
-				{"type": "cta_url", "text": "Leave a review", "url": "https://acme.example.com/review"}
-			]
-		}`},
-		{"10101010-1010-1010-1010-101010101010", whatsappID, "Support menu (WA list)",
-			"WHATSAPP", "", "UTILITY", "approved", `{}`, "", `{
-			"kind": "list",
-			"body": "How can we help today?",
-			"buttonLabel": "View options",
-			"sections": [
-				{"title": "Support", "rows": [
-					{"id": "track",  "title": "Track my order"},
-					{"id": "return", "title": "Start a return"},
-					{"id": "human",  "title": "Talk to a person"}
-				]}
-			]
-		}`},
-
-		{"20202020-2020-2020-2020-202020202020", emailID, "Shipment notice (Email)",
-			"EMAIL", "", "TRANSACTIONAL", "approved", `{first_name,order_id}`, "", `{
-			"subject": "Your order {{order_id}} has shipped",
-			"bodyHtml": "<p>Hi {{first_name}}, your order {{order_id}} is on its way.</p>",
-			"preheader": "Track your delivery"
-		}`},
-		{"30303030-3030-3030-3030-303030303030", emailID, "Diwali sale (Email)",
-			"EMAIL", "", "MARKETING", "approved", `{first_name}`, "", `{
-			"subject": "{{first_name}}, our Diwali sale starts now",
-			"bodyHtml": "<p>Hi {{first_name}}, save 20% this week only.</p><a href=\"{{unsubscribe_url}}\">Unsubscribe</a>",
-			"preheader": "20% off everything"
-		}`},
-		{"40404040-4040-4040-4040-404040404040", emailID, "Verification code (Email)",
-			"EMAIL", "", "AUTHENTICATION", "approved", `{code}`, "", `{
-			"subject": "Your verification code",
-			"bodyHtml": "<p>{{code}} is your Acme verification code. It expires in 10 minutes.</p>"
-		}`},
-
-		{"77777777-0000-0000-0000-000000000001", voiceID, "Delivery update (Voice)", "VOICE",
-			"Hi {{first_name}}, this is Acme calling about order {{order_id}}. It's out for delivery today.",
-			"TRANSACTIONAL", "approved", `{first_name,order_id}`, "", ""},
-		{"77777777-0000-0000-0000-000000000002", voiceID, "Diwali sale (Voice)", "VOICE",
-			"Hi {{first_name}}, Acme's Diwali sale is on now. Say 'yes' to hear today's top offer.",
-			"MARKETING", "approved", `{first_name}`, "", ""},
-		{"77777777-0000-0000-0000-000000000003", voiceID, "Verification code (Voice)", "VOICE",
-			"Your Acme verification code is {{code}}. Repeating: {{code}}.",
-			"AUTHENTICATION", "approved", `{code}`, "", ""},
-	}
-	for _, template := range templates {
+	for _, template := range demoTemplates {
 		var body, category, ctaURL *string
 		if template.body != "" {
 			body = &template.body
@@ -690,6 +595,13 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		// The content column is chosen by channel, so a payload can never land
 		// on the wrong one — the database enforces the same rule, and hitting
 		// that constraint here would mean this table and the schema disagree.
+		var registrationID, dltCategory *string
+		if template.registrationID != "" {
+			registrationID = &template.registrationID
+		}
+		if template.dltCategory != "" {
+			dltCategory = &template.dltCategory
+		}
 		var rcsContent, waContent, emailContent *string
 		if template.content != "" {
 			switch template.channel {
@@ -704,12 +616,14 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO templates (id, tenant_id, sender_id, name, channel, country,
 			                       body, category, variables, status, cta_url,
-			                       rcs_content, wa_content, email_content)
+			                       rcs_content, wa_content, email_content,
+			                       external_id, dlt_category)
 			VALUES ($1,$2,$3,$4,$5,'IN',$6,$7,$8::text[],$9,$10,
-			        $11::jsonb, $12::jsonb, $13::jsonb)`,
+			        $11::jsonb, $12::jsonb, $13::jsonb, $14, $15)`,
 			template.id, tenantID, template.sender, template.name, template.channel,
 			body, category, template.variables, template.status, ctaURL,
-			rcsContent, waContent, emailContent); err != nil {
+			rcsContent, waContent, emailContent,
+			registrationID, dltCategory); err != nil {
 			return fmt.Errorf("seed template %s: %w", template.name, err)
 		}
 	}
@@ -2046,6 +1960,120 @@ func seedUserActivity(ctx context.Context, pool *pgxpool.Pool, tenantIDs []strin
 // and roll them back. routes is a global table shared by every test against
 // this database, and a test that seeded it for real broke two others in other
 // packages that were inserting routes of their own at the same time.
+// templateFixture is one seeded template.
+//
+// registrationID and dltCategory are India's, and every India SMS or RCS row
+// carries the category. The id is carried by the APPROVED ones only, because
+// that is the honest shape: DLT issues a content-template id when it approves
+// the words, so a template still in review legitimately has none yet — and
+// PATCH can fill one in later precisely for that case.
+//
+// They were missing here entirely, which left the demo tenant's flagship SMS
+// template unable to send at all: SMPPRouter.Submit refuses an Indian SMS with
+// no DLT ids rather than letting the operator scrub it silently.
+type templateFixture struct {
+	id, sender, name, channel, body, category, status string
+	variables                                         string
+	ctaURL                                            string
+	content                                           string
+	registrationID, dltCategory                       string
+}
+
+// demoTemplates is the demo tenant's template catalogue. Package-level so the
+// India rules above are assertable without a database.
+var demoTemplates = []templateFixture{
+	{smsTemplate, smsID, "Order shipped", "SMS",
+		"Hi {{first_name}}, your order {{order_id}} has shipped. Track: https://acme.example.com/track",
+		"", "approved", `{first_name,order_id}`, "https://acme.example.com/track", "",
+		"1207161000000000001", "SERVICE_IMPLICIT"},
+	{otpTemplate, smsID, "OTP", "SMS",
+		"{{code}} is your Acme verification code.", "", "pending_review", `{code}`, "", "",
+		"", "TRANSACTIONAL"},
+
+	// No Meta category, like the SMS pair above: RCS declares none, because in
+	// India its taxonomy is DLT's. These still demonstrate carrier registration
+	// — airtelUseCase derives the carrier's use case from dltCategory — and now
+	// they demonstrate it through the same fields a customer's own RCS template
+	// carries, rather than through a column only this file could write.
+	{rcsTemplate, rcsID, "Welcome (RCS)", "RCS", "", "", "approved", `{first_name}`, "", `{
+		"kind": "text",
+		"text": "Welcome to Acme, {{first_name}}.",
+		"suggestions": [
+			{"type": "reply", "text": "Get started"},
+			{"type": "open_url", "text": "Open app", "url": "https://acme.example.com/app"}
+		]
+	}`, "1207161000000000002", "SERVICE_IMPLICIT"},
+	{"dddddddd-dddd-dddd-dddd-dddddddddddd", rcsID, "Product launch", "RCS",
+		"", "", "pending_review", `{product}`, "", `{
+		"kind": "card",
+		"card": {
+			"mediaUrl": "https://acme.example.com/launch.jpg",
+			"title": "Meet {{product}}",
+			"description": "Our newest release, available today."
+		},
+		"suggestions": [
+			{"type": "open_url", "text": "Shop now", "url": "https://acme.example.com/shop"}
+		]
+	}`, "", "PROMOTIONAL"},
+
+	{"eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", whatsappID, "Order confirmed (WA text)",
+		"WHATSAPP", "", "UTILITY", "approved", `{first_name,order_id}`, "", `{
+		"kind": "text",
+		"body": "Hi {{first_name}}, your order {{order_id}} is confirmed."
+	}`, "", ""},
+	{"ffffffff-ffff-ffff-ffff-ffffffffffff", whatsappID, "Feedback request (WA buttons)",
+		"WHATSAPP", "", "MARKETING", "approved", `{first_name}`, "", `{
+		"kind": "buttons",
+		"body": "Hi {{first_name}}, how was your order?",
+		"buttons": [
+			{"type": "quick_reply", "text": "Great"},
+			{"type": "quick_reply", "text": "Not great"},
+			{"type": "cta_url", "text": "Leave a review", "url": "https://acme.example.com/review"}
+		]
+	}`, "", ""},
+	{"10101010-1010-1010-1010-101010101010", whatsappID, "Support menu (WA list)",
+		"WHATSAPP", "", "UTILITY", "approved", `{}`, "", `{
+		"kind": "list",
+		"body": "How can we help today?",
+		"buttonLabel": "View options",
+		"sections": [
+			{"title": "Support", "rows": [
+				{"id": "track",  "title": "Track my order"},
+				{"id": "return", "title": "Start a return"},
+				{"id": "human",  "title": "Talk to a person"}
+			]}
+		]
+	}`, "", ""},
+
+	{"20202020-2020-2020-2020-202020202020", emailID, "Shipment notice (Email)",
+		"EMAIL", "", "TRANSACTIONAL", "approved", `{first_name,order_id}`, "", `{
+		"subject": "Your order {{order_id}} has shipped",
+		"bodyHtml": "<p>Hi {{first_name}}, your order {{order_id}} is on its way.</p>",
+		"preheader": "Track your delivery"
+	}`, "", ""},
+	{"30303030-3030-3030-3030-303030303030", emailID, "Diwali sale (Email)",
+		"EMAIL", "", "MARKETING", "approved", `{first_name}`, "", `{
+		"subject": "{{first_name}}, our Diwali sale starts now",
+		"bodyHtml": "<p>Hi {{first_name}}, save 20% this week only.</p><a href=\"{{unsubscribe_url}}\">Unsubscribe</a>",
+		"preheader": "20% off everything"
+	}`, "", ""},
+	{"40404040-4040-4040-4040-404040404040", emailID, "Verification code (Email)",
+		"EMAIL", "", "AUTHENTICATION", "approved", `{code}`, "", `{
+		"subject": "Your verification code",
+		"bodyHtml": "<p>{{code}} is your Acme verification code. It expires in 10 minutes.</p>"
+	}`, "", ""},
+
+	{"77777777-0000-0000-0000-000000000001", voiceID, "Delivery update (Voice)", "VOICE",
+		"Hi {{first_name}}, this is Acme calling about order {{order_id}}. It's out for delivery today.",
+		"TRANSACTIONAL", "approved", `{first_name,order_id}`, "", "", "", ""},
+	{"77777777-0000-0000-0000-000000000002", voiceID, "Diwali sale (Voice)", "VOICE",
+		"Hi {{first_name}}, Acme's Diwali sale is on now. Say 'yes' to hear today's top offer.",
+		"MARKETING", "approved", `{first_name}`, "", "", "", ""},
+	{"77777777-0000-0000-0000-000000000003", voiceID, "Verification code (Voice)", "VOICE",
+		"Your Acme verification code is {{code}}. Repeating: {{code}}.",
+		"AUTHENTICATION", "approved", `{code}`, "", "", "", ""},
+}
+
 func rebuildRoutes(ctx context.Context, tx pgx.Tx) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM routes`); err != nil {
 		return fmt.Errorf("clear routes: %w", err)
