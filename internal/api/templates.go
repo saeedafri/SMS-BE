@@ -321,3 +321,347 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 	}
 	return gen.CreateTemplate201JSONResponse(templateResponse(created)), nil
 }
+
+// templateSubstanceFields are the parts of a template a review is ABOUT: the
+// words a recipient reads and the registry ids those words are registered
+// under. name is deliberately absent — it is the platform's own label, which no
+// regulator and no carrier ever saw.
+var templateSubstanceFields = []string{"body", "rcsContent", "ctaUrl", "category",
+	"registrationId", "dltCategory"}
+
+// templateCategories is the category taxonomy each channel declares.
+//
+// SMS and RCS declare none on purpose: in India their taxonomy is DLT's, and it
+// lives in dltCategory. Accepting Meta's MARKETING on an Indian SMS template
+// would record a classification no operator reads, beside the one they do.
+var templateCategories = map[string][]string{
+	"WHATSAPP": {"MARKETING", "UTILITY", "AUTHENTICATION"},
+	"EMAIL":    {"MARKETING", "TRANSACTIONAL", "AUTHENTICATION"},
+	"VOICE":    {"MARKETING", "TRANSACTIONAL", "AUTHENTICATION"},
+}
+
+// UpdateTemplate renames a template, or corrects one no registry has approved.
+//
+// Two tiers with opposite rules, and the split is the whole design. The name is
+// editable in every status. The substance is editable only while the template
+// is still working through approval: an approved body is what DLT approved and,
+// on RCS, what the carrier approved, and in India the content-template id is
+// registered against those exact words — so changing either would leave the
+// platform sending copy no registry has seen, under an id pointing at
+// different words.
+func (s *Server) UpdateTemplate(ctx context.Context, request gen.UpdateTemplateRequestObject) (
+	gen.UpdateTemplateResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return nil, errForbidden
+	}
+	template, err := store.GetTemplate(ctx, s.DB, identity, request.Id)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateTemplate404JSONResponse(
+			errorBody(codeNotFound, "No such template.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if request.Body == nil {
+		return gen.UpdateTemplate200JSONResponse(templateResponse(template)), nil
+	}
+
+	// What the request ASKS to change, not what would differ afterwards. A
+	// hand-built body that re-sends the identical words is still asking to set
+	// them, and an edit drawer that diffs first simply never sends the key.
+	touchesSubstance := false
+	for _, field := range templateSubstanceFields {
+		if bodyMentions(ctx, field) {
+			touchesSubstance = true
+			break
+		}
+	}
+	switch {
+	case !touchesSubstance:
+	case template.Status == "approved", template.Status == "blocked",
+		template.Status == "expired":
+		// Atomic: a name in the same body is refused with the rest rather than
+		// applied on its own, so the caller never half-succeeds.
+		return gen.UpdateTemplate409JSONResponse(errorBody(codeConflict,
+			fmt.Sprintf("The words of a %s template cannot be changed — they are what "+
+				"the registry approved. Rename it, or create a new template.",
+				template.Status))), nil
+	}
+
+	regime, known := compliance.For(template.Country)
+	if !known {
+		return gen.UpdateTemplate422JSONResponse(errorBody(codeValidation,
+			"That template's country has no compliance regime.")), nil
+	}
+
+	edited := template
+	if request.Body.Name != nil {
+		name := strings.TrimSpace(*request.Body.Name)
+		if name == "" {
+			return gen.UpdateTemplate422JSONResponse(
+				errorBody(codeValidation, "A template name is required.")), nil
+		}
+		edited.Name = name
+	}
+	if problem := applyTemplateSubstance(ctx, &edited, regime, request.Body); problem != "" {
+		return gen.UpdateTemplate422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+
+	// Re-derived from whatever words the template now carries, never taken from
+	// the caller — the same rule as create, applied to the record as it will
+	// end up rather than to the fields this request happened to send.
+	edited.Variables = templateVariables(edited)
+
+	// The rejection was a decision about the old copy, so once the copy changes
+	// it no longer applies to anything. Without this the customer fixes exactly
+	// what the reason told them to fix and the template reads rejected for
+	// ever. A rename alone must not resubmit it.
+	if touchesSubstance && edited.Status == "rejected" {
+		edited.Status = "pending_review"
+		edited.RejectionReason = nil
+	}
+
+	updated, err := store.UpdateTemplate(ctx, s.DB, identity, edited)
+	if errors.Is(err, store.ErrConflict) {
+		return gen.UpdateTemplate409JSONResponse(errorBody(codeConflict,
+			"A template with that name already exists.")), nil
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.UpdateTemplate404JSONResponse(
+			errorBody(codeNotFound, "No such template.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return gen.UpdateTemplate200JSONResponse(templateResponse(updated)), nil
+}
+
+// applyTemplateSubstance writes the reviewed fields onto the record and returns
+// a customer-facing reason, empty when the request is acceptable.
+//
+// Every rule here is about the CHANNEL declaring the field at all. Content
+// belonging to a channel that has none of it is refused rather than stored: a
+// silently dropped payload costs the customer a template that looks saved and
+// has lost the thing they edited.
+func applyTemplateSubstance(ctx context.Context, edited *store.Template,
+	regime compliance.Regime, body *gen.UpdateTemplateJSONRequestBody) string {
+
+	if body.Body != nil {
+		if edited.Channel != "SMS" && edited.Channel != "VOICE" {
+			return "A " + edited.Channel + " template's words live in its content, not in body."
+		}
+		text := *body.Body
+		if strings.TrimSpace(text) == "" {
+			return "A template with no words is not a template."
+		}
+		if result := compliance.ValidateBody(text); !result.OK {
+			return result.Reason
+		}
+		edited.Body = &text
+	}
+	if body.RcsContent != nil {
+		if edited.Channel != "RCS" {
+			return "rcsContent applies to RCS templates only."
+		}
+		raw, err := json.Marshal(*body.RcsContent)
+		if err != nil {
+			return "That RCS content could not be read."
+		}
+		// The country's link rule reaches inside the card. A card's every
+		// string is walked, because a shortener in a suggestion's URL is the
+		// same violation as one in the body and DLT drops the message either
+		// way.
+		for _, url := range compliance.ExtractURLs(string(raw)) {
+			if result := regime.ValidateCtaURL(url); !result.OK {
+				return result.Reason
+			}
+		}
+		edited.RCSContent = raw
+	}
+
+	// Sent-and-null is a different request from omitted, and both arrive as a
+	// nil pointer, so the raw body decides which one this is.
+	if body.CtaUrl != nil || bodyMentions(ctx, "ctaUrl") {
+		if edited.Channel != "SMS" {
+			return "ctaUrl applies to SMS templates only."
+		}
+		switch {
+		case body.CtaUrl == nil:
+			edited.CtaURL = nil
+		default:
+			if result := regime.ValidateCtaURL(*body.CtaUrl); !result.OK {
+				return result.Reason
+			}
+			edited.CtaURL = body.CtaUrl
+		}
+	}
+	if body.Category != nil {
+		allowed, declared := templateCategories[edited.Channel]
+		if !declared {
+			return edited.Channel + " templates carry no category."
+		}
+		value := string(*body.Category)
+		if !oneOf(value, allowed) {
+			return enumMessage("category", allowed)
+		}
+		edited.Category = &value
+	}
+
+	// India's registry ids, on the channels India registers. Elsewhere there is
+	// no such identifier to carry, so storing one would record an answer to a
+	// question the regulator never asked.
+	registers := regime.RequiresRegistrationID(compliance.TierTemplate) &&
+		(edited.Channel == "SMS" || edited.Channel == "RCS")
+	if body.RegistrationId != nil || bodyMentions(ctx, "registrationId") {
+		if !registers {
+			return "This country and channel carry no template registration id."
+		}
+		if body.RegistrationId == nil || strings.TrimSpace(*body.RegistrationId) == "" {
+			return "This country's regulator issues a registration id for a template, " +
+				"so it cannot be cleared."
+		}
+		edited.ExternalID = body.RegistrationId
+	}
+	if body.DltCategory != nil {
+		if !registers {
+			return "This country and channel carry no DLT category."
+		}
+		value := string(*body.DltCategory)
+		if !oneOf(value, validDltCategories) {
+			return enumMessage("dltCategory", validDltCategories)
+		}
+		edited.DltCategory = &value
+	}
+	return ""
+}
+
+// templateVariables is the create path's rule, applied to a whole record: the
+// body's tokens, or — for a template whose words live in rich content — every
+// token anywhere in that content.
+func templateVariables(template store.Template) []string {
+	if template.Body != nil && *template.Body != "" {
+		return compliance.ParseVariables(*template.Body)
+	}
+	for _, raw := range [][]byte{template.RCSContent, template.WAContent, template.EmailContent} {
+		if len(raw) > 0 {
+			return compliance.ParseVariables(string(raw))
+		}
+	}
+	return []string{}
+}
+
+// DeleteTemplate removes a template nothing is using.
+//
+// Allowed in every status, approved included: retiring a template is a
+// legitimate thing to do, and what gates it is USE rather than standing — the
+// opposite of the rule on editing. This removes the platform's record only; a
+// DLT registration or a carrier approval is held by them and withdrawn with
+// them.
+func (s *Server) DeleteTemplate(ctx context.Context, request gen.DeleteTemplateRequestObject) (
+	gen.DeleteTemplateResponseObject, error) {
+
+	identity, ok := identityFrom(ctx)
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	if !canManageSettings(identity.Role) {
+		return nil, errForbidden
+	}
+	template, err := store.GetTemplate(ctx, s.DB, identity, request.Id)
+	if errors.Is(err, store.ErrNotFound) {
+		return gen.DeleteTemplate404JSONResponse(
+			errorBody(codeNotFound, "No such template.")), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := store.CountTemplateReferences(ctx, s.DB, identity, request.Id)
+	if err != nil {
+		return nil, err
+	}
+	refs.VerifyServices, err = s.countVerifyServicesHeldBy(ctx, identity, template)
+	if err != nil {
+		return nil, err
+	}
+	if refs.Total() > 0 {
+		return gen.DeleteTemplate409JSONResponse(errorBody(codeConflict,
+			"This template is still used by "+describeTemplateUse(refs)+
+				". Remove those first.")), nil
+	}
+
+	if err := store.DeleteTemplate(ctx, s.DB, identity, request.Id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return gen.DeleteTemplate404JSONResponse(
+				errorBody(codeNotFound, "No such template.")), nil
+		}
+		return nil, err
+	}
+	return gen.DeleteTemplate204Response{}, nil
+}
+
+// countVerifyServicesHeldBy counts the Verify services this template is holding
+// live.
+//
+// A service holds no template id at all: its channel carries OTP copy, and the
+// service is live only while an approved template on the same sender matches
+// that copy. So the reference is a copy match, and it is read back through the
+// very function that decides the live badge — counting it any other way would
+// let the delete guard and the badge disagree about the same template.
+func (s *Server) countVerifyServicesHeldBy(ctx context.Context, identity store.Identity,
+	template store.Template) (int, error) {
+
+	services, err := store.ListVerifyServices(ctx, s.DB, identity)
+	if err != nil {
+		return 0, err
+	}
+	held := 0
+	for _, service := range services {
+		for _, channel := range service.Channels {
+			senderID, valid := parsePathID(channel.SenderID)
+			if !valid || senderID != template.SenderID {
+				continue
+			}
+			matched, err := s.matchOTPTemplate(ctx, identity, senderID, channel.Body,
+				service.CodeLength)
+			if err != nil {
+				return 0, err
+			}
+			if matched != nil && matched.ID == template.ID {
+				held++
+				break
+			}
+		}
+	}
+	return held, nil
+}
+
+// describeTemplateUse turns the counts into the sentence the caller acts on:
+// "1 campaign, 1 verify service".
+func describeTemplateUse(refs store.TemplateReferences) string {
+	parts := []string{}
+	for _, kind := range []struct {
+		count     int
+		one, many string
+	}{
+		{refs.Campaigns, "campaign", "campaigns"},
+		{refs.CampaignFallback, "campaign fallback", "campaign fallbacks"},
+		{refs.Journeys, "journey", "journeys"},
+		{refs.VerifyServices, "verify service", "verify services"},
+	} {
+		if kind.count == 0 {
+			continue
+		}
+		noun := kind.many
+		if kind.count == 1 {
+			noun = kind.one
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", kind.count, noun))
+	}
+	return strings.Join(parts, ", ")
+}

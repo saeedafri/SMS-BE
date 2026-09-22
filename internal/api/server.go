@@ -305,6 +305,11 @@ func NewRouter(s *Server) http.Handler {
 		"PATCH /v1/contact-lists/{id}": {"name", "variableMapping"},
 		"POST /v1/contacts/consent":    {"listId", "channel", "state", "onlyUnknown", "declaration"},
 		"PATCH /v1/sender-ids/{id}":    {"header", "displayName", "registrationId"},
+		// Also registered for the second thing this middleware does: a
+		// ctaUrl or registrationId sent as null means clear it, which the
+		// generated struct cannot tell from omitting the field.
+		"PATCH /v1/templates/{id}": {"name", "body", "rcsContent", "ctaUrl",
+			"category", "registrationId", "dltCategory"},
 		// Registered for the SECOND thing this middleware does: recording which
 		// keys the caller actually sent. An agent PATCH is JSON Merge Patch —
 		// an omitted key leaves the value alone, an explicit null clears it —

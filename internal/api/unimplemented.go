@@ -740,8 +740,16 @@ func (Unimplemented) CreateTemplate(ctx context.Context, request gen.CreateTempl
 	return nil, errNotImplemented("CreateTemplate")
 }
 
+func (Unimplemented) DeleteTemplate(ctx context.Context, request gen.DeleteTemplateRequestObject) (gen.DeleteTemplateResponseObject, error) {
+	return nil, errNotImplemented("DeleteTemplate")
+}
+
 func (Unimplemented) GetTemplate(ctx context.Context, request gen.GetTemplateRequestObject) (gen.GetTemplateResponseObject, error) {
 	return nil, errNotImplemented("GetTemplate")
+}
+
+func (Unimplemented) UpdateTemplate(ctx context.Context, request gen.UpdateTemplateRequestObject) (gen.UpdateTemplateResponseObject, error) {
+	return nil, errNotImplemented("UpdateTemplate")
 }
 
 func (Unimplemented) RegisterTemplateWithCarrier(ctx context.Context, request gen.RegisterTemplateWithCarrierRequestObject) (gen.RegisterTemplateWithCarrierResponseObject, error) {
