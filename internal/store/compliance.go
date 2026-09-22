@@ -525,6 +525,128 @@ func CreateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templa
 	return created, nil
 }
 
+// TemplateReferences reports everything using a template, per kind, so a
+// refused delete can name what is in the way.
+//
+// Only Campaigns and CampaignFallback have a foreign key behind them. Journeys
+// hold their steps as JSONB, and a Verify service holds no template id at all —
+// it carries OTP copy, and an approved template on the same sender whose words
+// match that copy is what makes the service live. Both of those the database
+// would let you delete straight through, so both are counted here.
+// VerifyServices is filled by the caller, which owns the copy-matching rule.
+type TemplateReferences struct {
+	Campaigns        int
+	CampaignFallback int
+	Journeys         int
+	VerifyServices   int
+}
+
+// Total is what decides whether a delete may proceed.
+func (r TemplateReferences) Total() int {
+	return r.Campaigns + r.CampaignFallback + r.Journeys + r.VerifyServices
+}
+
+// CountTemplateReferences counts the three kinds a query can see. The caller
+// adds VerifyServices.
+func CountTemplateReferences(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	templateID uuid.UUID) (TemplateReferences, error) {
+
+	var refs TemplateReferences
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT
+			  (SELECT count(*) FROM campaigns WHERE template_id = $1),
+			  (SELECT count(*) FROM campaigns WHERE fallback_template_id = $1),
+			  -- steps is a JSONB array of objects; a send step names its
+			  -- template and nothing stops the row from outliving it.
+			  (SELECT count(*) FROM journeys
+			     WHERE steps @> jsonb_build_array(jsonb_build_object('templateId', $1::text)))`,
+			templateID).Scan(&refs.Campaigns, &refs.CampaignFallback, &refs.Journeys)
+	})
+	if err != nil {
+		return TemplateReferences{}, fmt.Errorf("store: count template references: %w", err)
+	}
+	return refs, nil
+}
+
+// UpdateTemplate writes an edited template.
+//
+// The caller has read the row, decided what this status allows to change and
+// built the record it wants; this writes those columns and nothing else. Which
+// is why it takes a whole Template rather than a pointer per field: the rule
+// about what may change lives with the status rule, in one place, not spread
+// across eleven arguments here.
+func UpdateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	template Template) (Template, error) {
+
+	var updated Template
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		updated, err = scanTemplate(tx.QueryRow(ctx, `
+			UPDATE templates SET
+			    name             = $2,
+			    body             = $3,
+			    category         = $4,
+			    external_id      = $5,
+			    dlt_category     = $6,
+			    variables        = $7,
+			    cta_url          = $8,
+			    rcs_content      = $9,
+			    wa_content       = $10,
+			    email_content    = $11,
+			    status           = $12,
+			    rejection_reason = $13
+			WHERE id = $1
+			RETURNING `+templateColumns,
+			template.ID, template.Name, template.Body, template.Category,
+			template.ExternalID, template.DltCategory, template.Variables,
+			template.CtaURL,
+			nullableJSON(template.RCSContent),
+			nullableJSON(template.WAContent),
+			nullableJSON(template.EmailContent),
+			template.Status, template.RejectionReason))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Template{}, ErrNotFound
+	}
+	// The new name may already belong to another template on this tenant.
+	if isUniqueViolation(err) {
+		return Template{}, ErrConflict
+	}
+	if err != nil {
+		return Template{}, fmt.Errorf("store: update template: %w", err)
+	}
+	return updated, nil
+}
+
+// DeleteTemplate removes a template nothing references.
+//
+// Callers must have checked CountTemplateReferences first; this is the last
+// line rather than the only one, because two of the four references have no
+// foreign key to stop them.
+func DeleteTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	templateID uuid.UUID) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM templates WHERE id = $1`, templateID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if errors.Is(err, ErrNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("store: delete template: %w", err)
+	}
+	return nil
+}
+
 // Registration is one regulatory filing.
 type Registration struct {
 	ID              uuid.UUID
