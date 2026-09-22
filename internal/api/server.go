@@ -13,6 +13,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -50,6 +51,16 @@ type Server struct {
 	// EnableDevEndpoints mounts /v1/dev/*, the browser suite's state hooks.
 	// Off unless the deployment opts in.
 	EnableDevEndpoints bool
+
+	// DevCodeTenant is the one tenant that may be issued the published dev OTP,
+	// and only while EnableDevEndpoints is on. The demo tenant on a deployment;
+	// zero, which matches nobody, when unset.
+	DevCodeTenant uuid.UUID
+
+	// Commit is the revision this binary was built from, reported by /healthz.
+	// Empty on a build that did not stamp it, and then simply left out of the
+	// payload rather than reported as an empty string.
+	Commit string
 
 	// OperatorAllowlist restricts /v1/operator to known networks. Nil or empty
 	// means no restriction.
@@ -438,7 +449,13 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	if !healthy {
 		status, code = "degraded", http.StatusServiceUnavailable
 	}
-	writeJSON(w, code, map[string]any{"status": status, "checks": checks})
+	body := map[string]any{"status": status, "checks": checks}
+	// So "is it deployed?" is one read rather than a behavioural discriminator
+	// invented per change — a fix with no API surface often has none.
+	if s.Commit != "" {
+		body["commit"] = s.Commit
+	}
+	writeJSON(w, code, body)
 }
 
 // writeOperationError renders every error leaving an operation as the

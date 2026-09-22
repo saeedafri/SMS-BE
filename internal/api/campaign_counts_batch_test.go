@@ -22,7 +22,13 @@ func TestACampaignPageReadsTheMessageLogOnce(t *testing.T) {
 	h := newSendHarness(t)
 	acct := h.newAccount("owner")
 
-	const campaigns = 6
+	// Twenty rather than a handful, and a tolerance far above one, because the
+	// counter below is ClickHouse's own SelectQuery event — server-wide, and
+	// the suite now runs every package concurrently against one ClickHouse.
+	// Another package's SELECT lands in this window and inflates the reading by
+	// a couple. The signal being caught is a round trip PER ROW, which at this
+	// size is twenty; that survives the noise, a tolerance of two did not.
+	const campaigns = 20
 	ids := make([]string, 0, campaigns)
 	for i := 0; i < campaigns; i++ {
 		_, campaignID := h.seedOptedOutCampaign(acct, fmt.Sprintf("counted %d", i))
@@ -63,10 +69,10 @@ func TestACampaignPageReadsTheMessageLogOnce(t *testing.T) {
 		}
 	}
 
-	// One SELECT for the whole page. Two would be a regression worth catching;
-	// the old code issued one per campaign.
-	if queries := after - before; queries > 2 {
-		t.Errorf("rendering %d campaigns issued %d message-log queries, want 1 — "+
+	// One SELECT for the whole page, plus whatever else was passing through.
+	// The old code issued one per campaign.
+	if queries := after - before; queries > campaigns/2 {
+		t.Errorf("rendering %d campaigns issued %d ClickHouse selects, want 1 — "+
 			"a page must not cost a round trip per row", len(page.Campaigns), queries)
 	}
 }

@@ -12,7 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/saeedafri/sms-be/internal/demoseed"
 
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/connector"
@@ -25,6 +28,11 @@ import (
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 )
+
+// commit is stamped at build time with -X main.commit=$GITHUB_SHA and reported
+// by /healthz, so both teams can read which revision is serving instead of
+// guessing from behaviour.
+var commit string
 
 func main() {
 	if err := run(); err != nil {
@@ -300,6 +308,8 @@ func run() error {
 	apiServer := &api.Server{DB: pool, Redis: rdb, Logger: logger, Hot: hot,
 		ClickHouse: clickhouse, Connector: sandbox, Metrics: metrics,
 		EnableDevEndpoints: cfg.EnableDevEndpoints,
+		Commit:             commit,
+		DevCodeTenant:      uuid.MustParse(demoseed.TenantID),
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
 		Secrets:           connectionSecrets,
 		SMPP:              smpp,

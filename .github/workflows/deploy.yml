@@ -50,7 +50,8 @@ jobs:
           mkdir -p out
           go vet ./... > vet.log 2>&1 & vet=$!
           go test ./... > test.log 2>&1 & tst=$!
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags="-s -w -X main.commit=$GITHUB_SHA" \
             -o out/ ./cmd/control-api ./cmd/seed-demo ./cmd/operator-admin > build.log 2>&1 & bld=$!
           status=0
           wait $vet || { echo "::error::go vet failed"; status=1; }

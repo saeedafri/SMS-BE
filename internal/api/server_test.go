@@ -30,6 +30,30 @@ func TestHealthzReportsOK(t *testing.T) {
 	}
 }
 
+// /healthz names the revision it is serving, so "is it deployed?" is a read
+// rather than a behavioural discriminator invented per change. A build that
+// did not stamp one says nothing instead of an empty string.
+func TestHealthzNamesTheCommitItWasBuiltFrom(t *testing.T) {
+	t.Parallel()
+	read := func(server *api.Server) map[string]any {
+		rec := httptest.NewRecorder()
+		api.NewRouter(server).ServeHTTP(rec,
+			httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		var body map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
+	}
+
+	if got := read(&api.Server{Commit: "abc1234"})["commit"]; got != "abc1234" {
+		t.Errorf("commit = %v, want abc1234", got)
+	}
+	if _, present := read(&api.Server{})["commit"]; present {
+		t.Error("an unstamped build reports a commit key anyway")
+	}
+}
+
 // Every route in the contract must be registered. A path the spec does not
 // define is a 404 — and that 404 must still use the Error envelope, because
 // the frontend parses failures the same way regardless of status.

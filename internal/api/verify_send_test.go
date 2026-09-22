@@ -34,6 +34,9 @@ func TestAVerificationSendsItsCodeAndNeverLogsIt(t *testing.T) {
 	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
+	// This tenant stands in for the fixture the browser suite signs in as —
+	// the only one the published dev code is ever issued to.
+	h.server.DevCodeTenant = tenant.TenantID
 	sender := h.approvedSender(tenant)
 	h.registeredTemplate(tenant, sender, "{{code}} is your login code. Do not share it.")
 	h.fundWallet(tenant)
@@ -87,5 +90,50 @@ func TestAVerificationThatCannotBeSentIsRefusedAndDead(t *testing.T) {
 	}
 	if !strings.Contains(string(started.Body), "template") {
 		t.Errorf("refusal does not name the missing template: %s", started.Body)
+	}
+}
+
+// The published dev code belongs to the fixture tenant and to nobody else.
+//
+// ENABLE_DEV_ENDPOINTS alone used to arm it, which meant that on any instance
+// running the browser suite every customer's Verify OTP was 424242: anyone
+// could pass any customer's phone check without ever holding the handset.
+// Verify is an ordinary public flow, so the nginx rule denying /v1/dev/* never
+// covered it — the same shape of hole as the dev password-reset token.
+func TestTheDevOTPIsIssuedToTheFixtureTenantAndNobodyElse(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	fixture := h.newAccount("owner")
+	customer := h.newAccount("owner")
+	h.server.DevCodeTenant = fixture.TenantID
+
+	for _, tenant := range []account{fixture, customer} {
+		sender := h.approvedSender(tenant)
+		h.registeredTemplate(tenant, sender, "{{code}} is your login code. Do not share it.")
+		h.fundWallet(tenant)
+		service := h.otpService(tenant, sender)
+
+		started := h.do(http.MethodPost, "/v1/verify/services/"+service+"/verifications",
+			tenant.Token, map[string]any{"msisdn": "+919876543210"})
+		if started.Code != http.StatusCreated {
+			t.Fatalf("start verification = %d, want 201\n%s", started.Code, started.Body)
+		}
+		var verification struct {
+			ID string `json:"id"`
+		}
+		started.decode(t, &verification)
+
+		checked := h.do(http.MethodPost, "/v1/verify/services/"+service+"/verifications/"+
+			verification.ID+"/check", tenant.Token, map[string]any{"code": verify.DevCode})
+		var result struct {
+			Status string `json:"status"`
+		}
+		checked.decode(t, &result)
+
+		isFixture := tenant.TenantID == fixture.TenantID
+		if verified := result.Status == "verified"; verified != isFixture {
+			t.Errorf("fixture=%t: checking %s gave status %q\n%s",
+				isFixture, verify.DevCode, result.Status, checked.Body)
+		}
 	}
 }

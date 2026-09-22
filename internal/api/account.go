@@ -177,6 +177,23 @@ func (s *Server) devSecretFor(email string) bool {
 	return s.EnableDevEndpoints && isFixtureAddress(email)
 }
 
+// devCodeFor says whether this caller may be issued the published dev OTP:
+// dev endpoints on AND the fixture tenant, the same two conditions every other
+// dev bypass makes. The flag alone was not safe here either. Verify is an
+// ordinary customer flow on the public API, so an instance running the browser
+// suite issued 424242 to every tenant on the box — anyone could pass any
+// customer's phone check without ever holding the handset.
+//
+// The tenant, not the number: an MSISDN has no reserved range the way an
+// address has a reserved TLD, and the browser suite signs in as the fixture
+// tenant anyway. DevCodeTenant is the demo tenant on a real deployment and the
+// zero UUID everywhere else, which no tenant can ever equal — so a customer
+// cannot be reached this way however the flag is set.
+func (s *Server) devCodeFor(identity store.Identity) bool {
+	return s.EnableDevEndpoints && s.DevCodeTenant != uuid.Nil &&
+		identity.TenantID == s.DevCodeTenant
+}
+
 // devPasswordResetToken is the reset token issued when dev endpoints are on.
 // It matches DEV_RESET_TOKEN in ../SMS-UI/src/lib/auth/session-config.ts, which
 // is what the dev-only "Open reset link" shortcut on the forgot screen points

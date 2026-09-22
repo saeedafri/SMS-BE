@@ -201,7 +201,7 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 			"Sending is not available on this deployment.")), nil
 	}
 
-	code, err := verify.GenerateCode(service.CodeLength, s.EnableDevEndpoints)
+	code, err := verify.GenerateCode(service.CodeLength, s.devCodeFor(identity))
 	if err != nil {
 		return nil, err
 	}
