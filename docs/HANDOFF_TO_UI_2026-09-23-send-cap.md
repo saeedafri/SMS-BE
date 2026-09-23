@@ -6,9 +6,14 @@ tenant may send in a day. `00040` already caps a tenant's send **rate**
 different thing — a tenant can sit comfortably under the rate ceiling all day
 and still hand us a hundred thousand messages.
 
-The backend half is built and tested, and ships with this commit. **Nothing in this is visible to
-a customer**, and the second half — the operator console control — needs three
-additions to `openapi.json`, which you own. They are in §4.
+The backend half is **built, tested and live** — `18d683d` (the ceiling),
+`93c4e05` (admins only), deployed and verified against the public API. No tenant
+is capped yet, so nothing has changed for anybody: the feature is inert until an
+operator sets a ceiling.
+
+**Nothing in this is visible to a customer.** The second half — the operator
+console control — needs four additions to `openapi.json`, which you own. They
+are in §4, and §4.4 is the one that will fail your build if it is missed.
 
 ---
 
@@ -143,9 +148,9 @@ large number, or we leave a ceiling nobody meant to keep.
 `GET /v1/operator/tenants/{id}`.**
 
 The ceiling is for admins only — a plain `operator` may neither set it nor see
-it. The backend gate is written (`requireOperatorAdmin`), but a handler cannot
-answer 403 on an operation whose contract does not declare one, so both routes
-need it or the gate cannot be applied.
+it. The backend gate is shipped (`requireOperatorAdmin`, `93c4e05`), but a
+handler cannot answer 403 on an operation whose contract does not declare one,
+so both routes need it or the gate cannot be applied.
 
 The tenant-detail route needs one because of 4.1: the moment `TenantDetail`
 carries `sendCapPerDay`, every route that returns it can leak the ceiling to a
