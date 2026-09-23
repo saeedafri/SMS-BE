@@ -378,27 +378,47 @@ func UpdateRetention(ctx context.Context, pool *pgxpool.Pool, id Identity,
 // ScheduledReport is a recurring analytics export.
 type ScheduledReport struct {
 	ID         uuid.UUID
+	TenantID   uuid.UUID
 	Frequency  string
 	Range      string
 	Recipients []string
 	Paused     bool
 	CreatedAt  time.Time
+	NextSendAt time.Time
+	// RecentSends are the last five sends that actually went out, newest first.
+	RecentSends []time.Time
+}
+
+// reportPeriod is one report's interval, as SQL.
+const reportPeriod = `CASE frequency WHEN 'daily' THEN interval '1 day'
+	WHEN 'weekly' THEN interval '7 days' ELSE interval '1 month' END`
+
+const reportColumns = `
+	r.id, r.tenant_id, r.frequency, r.range_key, r.recipients, r.paused, r.created_at,
+	r.next_send_at,
+	ARRAY(SELECT sent_at FROM report_sends rs WHERE rs.report_id = r.id
+	      ORDER BY sent_at DESC LIMIT 5)`
+
+func scanReport(row pgx.Row) (ScheduledReport, error) {
+	var report ScheduledReport
+	err := row.Scan(&report.ID, &report.TenantID, &report.Frequency, &report.Range,
+		&report.Recipients, &report.Paused, &report.CreatedAt, &report.NextSendAt,
+		&report.RecentSends)
+	return report, err
 }
 
 func ListScheduledReports(ctx context.Context, pool *pgxpool.Pool, id Identity) ([]ScheduledReport, error) {
 	var out []ScheduledReport
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, frequency, range_key, recipients, paused, created_at
-			FROM scheduled_reports ORDER BY created_at DESC`)
+			SELECT `+reportColumns+` FROM scheduled_reports r ORDER BY r.created_at DESC`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var report ScheduledReport
-			if err := rows.Scan(&report.ID, &report.Frequency, &report.Range,
-				&report.Recipients, &report.Paused, &report.CreatedAt); err != nil {
+			report, err := scanReport(rows)
+			if err != nil {
 				return err
 			}
 			out = append(out, report)
@@ -420,14 +440,23 @@ func CreateScheduledReport(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	if report.Range == "" {
 		report.Range = "30d"
 	}
+	// The first send is one period after creation, not at creation: a report
+	// is a summary of a period, and a new one has no period behind it yet.
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
-			INSERT INTO scheduled_reports (tenant_id, frequency, range_key, recipients)
-			VALUES ($1,$2,$3,$4)
-			RETURNING id, frequency, range_key, recipients, paused, created_at`,
+		var reportID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO scheduled_reports (tenant_id, frequency, range_key, recipients, next_send_at)
+			VALUES ($1, $2, $3, $4, now() + CASE $2::text WHEN 'daily' THEN interval '1 day'
+			    WHEN 'weekly' THEN interval '7 days' ELSE interval '1 month' END)
+			RETURNING id`,
 			id.TenantID, report.Frequency, report.Range, report.Recipients,
-		).Scan(&report.ID, &report.Frequency, &report.Range, &report.Recipients,
-			&report.Paused, &report.CreatedAt)
+		).Scan(&reportID); err != nil {
+			return err
+		}
+		var err error
+		report, err = scanReport(tx.QueryRow(ctx,
+			`SELECT `+reportColumns+` FROM scheduled_reports r WHERE r.id = $1`, reportID))
+		return err
 	})
 	if err != nil {
 		return ScheduledReport{}, fmt.Errorf("store: create scheduled report: %w", err)
@@ -615,12 +644,17 @@ func SetScheduledReportPaused(ctx context.Context, pool *pgxpool.Pool, id Identi
 
 	var report ScheduledReport
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `
-			UPDATE scheduled_reports SET paused = $2 WHERE id = $1
-			RETURNING id, frequency, range_key, recipients, paused, created_at`,
-			reportID, paused,
-		).Scan(&report.ID, &report.Frequency, &report.Range, &report.Recipients,
-			&report.Paused, &report.CreatedAt)
+		tag, err := tx.Exec(ctx,
+			`UPDATE scheduled_reports SET paused = $2 WHERE id = $1`, reportID, paused)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return pgx.ErrNoRows
+		}
+		report, err = scanReport(tx.QueryRow(ctx,
+			`SELECT `+reportColumns+` FROM scheduled_reports r WHERE r.id = $1`, reportID))
+		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ScheduledReport{}, ErrNotFound
@@ -693,4 +727,70 @@ func BilledUsageBetween(ctx context.Context, conn driver.Conn,
 		out = append(out, usage)
 	}
 	return out, rows.Err()
+}
+
+// DueScheduledReports lists unpaused reports whose send time has come, across
+// tenants.
+func DueScheduledReports(ctx context.Context, operator *pgxpool.Pool,
+	now time.Time, limit int) ([]ScheduledReport, error) {
+
+	rows, err := operator.Query(ctx, `
+		SELECT `+reportColumns+` FROM scheduled_reports r
+		WHERE NOT r.paused AND r.next_send_at <= $1
+		ORDER BY r.next_send_at LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: due scheduled reports: %w", err)
+	}
+	defer rows.Close()
+	var out []ScheduledReport
+	for rows.Next() {
+		report, err := scanReport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, report)
+	}
+	return out, rows.Err()
+}
+
+// ClaimScheduledReport moves a due report's next send on by one period,
+// reporting false when it was paused, deleted or claimed by another instance
+// since it was read. A report overdue by more than a period — one resumed
+// after a long pause — sends once and is next due a period from now, not once
+// per missed period.
+func ClaimScheduledReport(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	report ScheduledReport) (bool, error) {
+
+	var claimed bool
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE scheduled_reports
+			SET next_send_at = CASE WHEN next_send_at + `+reportPeriod+` > now()
+			                        THEN next_send_at + `+reportPeriod+`
+			                        ELSE now() + `+reportPeriod+` END
+			WHERE id = $1 AND next_send_at = $2 AND NOT paused`,
+			report.ID, report.NextSendAt)
+		claimed = tag.RowsAffected() == 1
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: claim scheduled report: %w", err)
+	}
+	return claimed, nil
+}
+
+// RecordReportSend logs a send that reached recipients addresses.
+func RecordReportSend(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	reportID uuid.UUID, recipients int) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO report_sends (tenant_id, report_id, recipients) VALUES ($1, $2, $3)`,
+			id.TenantID, reportID, recipients)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: record report send: %w", err)
+	}
+	return nil
 }

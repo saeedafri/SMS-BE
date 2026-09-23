@@ -16,6 +16,7 @@ import (
 type Journey struct {
 	ID            uuid.UUID
 	Name          string
+	Description   *string
 	Status        string
 	TriggerType   string
 	TriggerListID *uuid.UUID
@@ -27,12 +28,12 @@ type Journey struct {
 }
 
 const journeyColumns = `
-	id, name, status, trigger_type, trigger_list_id, trigger_run_at,
+	id, name, description, status, trigger_type, trigger_list_id, trigger_run_at,
 	steps, recipients, activated_at, created_at`
 
 func scanJourney(row pgx.Row) (Journey, error) {
 	var journey Journey
-	err := row.Scan(&journey.ID, &journey.Name, &journey.Status, &journey.TriggerType,
+	err := row.Scan(&journey.ID, &journey.Name, &journey.Description, &journey.Status, &journey.TriggerType,
 		&journey.TriggerListID, &journey.TriggerRunAt, &journey.Steps,
 		&journey.Recipients, &journey.ActivatedAt, &journey.CreatedAt)
 	return journey, err
@@ -120,11 +121,11 @@ func CreateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		var err error
 		created, err = scanJourney(tx.QueryRow(ctx, `
 			INSERT INTO journeys (tenant_id, name, trigger_type, trigger_list_id,
-			    trigger_run_at, steps, recipients)
-			VALUES ($1,$2,$3,$4,$5,$6,$7)
+			    trigger_run_at, steps, recipients, description)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''))
 			RETURNING `+journeyColumns,
 			id.TenantID, journey.Name, journey.TriggerType, journey.TriggerListID,
-			journey.TriggerRunAt, journey.Steps, journey.Recipients))
+			journey.TriggerRunAt, journey.Steps, journey.Recipients, journey.Description))
 		return err
 	})
 	if err != nil {
@@ -171,15 +172,16 @@ func StepsOf(journey Journey) []map[string]any {
 	return steps
 }
 
-// UpdateJourney changes a journey's name, steps or trigger. Nil means "leave
-// this alone", so a rename does not have to resend the whole step list.
+// UpdateJourney changes a journey's name, description, steps or trigger. Nil
+// means "leave this alone", so a rename does not have to resend the whole step
+// list. An empty description clears it.
 //
 // Status is deliberately not updatable here: moving between draft, active and
 // paused goes through SetJourneyStatus, which owns the activated_at stamping
 // rule. Two paths that can both change status would eventually disagree about
 // it.
 func UpdateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
-	journeyID uuid.UUID, name *string, steps []byte, triggerType *string,
+	journeyID uuid.UUID, name, description *string, steps []byte, triggerType *string,
 	triggerListID *uuid.UUID) (Journey, error) {
 
 	var journey Journey
@@ -188,6 +190,8 @@ func UpdateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		journey, err = scanJourney(tx.QueryRow(ctx, `
 			UPDATE journeys
 			SET name            = coalesce($2, name),
+			    description     = CASE WHEN $6::text IS NULL THEN description
+			                           ELSE nullif($6, '') END,
 			    steps           = coalesce($3::jsonb, steps),
 			    trigger_type    = coalesce($4, trigger_type),
 			    -- The list only moves when the trigger does. Coalescing it
@@ -198,7 +202,7 @@ func UpdateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    updated_at      = now()
 			WHERE id = $1
 			RETURNING `+journeyColumns,
-			journeyID, name, steps, triggerType, triggerListID))
+			journeyID, name, steps, triggerType, triggerListID, description))
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

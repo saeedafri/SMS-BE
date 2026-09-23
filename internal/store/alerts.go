@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -49,6 +50,71 @@ func SaveAlertRules(ctx context.Context, pool *pgxpool.Pool, id Identity, rules 
 	})
 	if err != nil {
 		return fmt.Errorf("store: save alert rules: %w", err)
+	}
+	return nil
+}
+
+// TenantsWithAlertRules lists every tenant that has saved alert rules — the
+// only tenants any rule can be enabled for.
+func TenantsWithAlertRules(ctx context.Context, operator *pgxpool.Pool) ([]uuid.UUID, error) {
+	rows, err := operator.Query(ctx, `SELECT tenant_id FROM alert_rules`)
+	if err != nil {
+		return nil, fmt.Errorf("store: tenants with alert rules: %w", err)
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var tenantID uuid.UUID
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, err
+		}
+		out = append(out, tenantID)
+	}
+	return out, rows.Err()
+}
+
+// BreachedAlerts returns the rules currently recorded as in breach.
+func BreachedAlerts(ctx context.Context, pool *pgxpool.Pool, id Identity) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT rule FROM alert_state WHERE breached`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rule string
+			if err := rows.Scan(&rule); err != nil {
+				return err
+			}
+			out[rule] = true
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: breached alerts: %w", err)
+	}
+	return out, nil
+}
+
+// SetAlertBreached records a rule entering or leaving breach. fired stamps
+// last_fired_at: it is true only when the entering breach was emailed.
+func SetAlertBreached(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	rule string, breached, fired bool) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO alert_state (tenant_id, rule, breached, last_fired_at)
+			VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)
+			ON CONFLICT (tenant_id, rule) DO UPDATE SET
+			    breached = EXCLUDED.breached,
+			    last_fired_at = coalesce(EXCLUDED.last_fired_at, alert_state.last_fired_at),
+			    updated_at = now()`,
+			id.TenantID, rule, breached, fired)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: set alert breached: %w", err)
 	}
 	return nil
 }

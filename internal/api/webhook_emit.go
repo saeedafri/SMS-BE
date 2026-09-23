@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/saeedafri/sms-be/internal/store"
@@ -50,34 +52,96 @@ func (s *Server) emitWebhookEvent(ctx context.Context, identity store.Identity,
 			continue
 		}
 		if recorded.Outcome == "failed" && hook.SealedSecret != nil {
-			go s.retryWebhook(identity, hook, eventType, payload)
+			at := s.now().Add(s.webhookRetryDelays()[0])
+			if err := store.ScheduleWebhookRetry(ctx, s.DB, identity, hook.ID,
+				eventType, payload, 2, at); err != nil {
+				s.Logger.Error("webhook retry not scheduled — this event will not be retried",
+					"event", eventType, "endpoint", hook.ID, "error", err)
+			}
 		}
 	}
 }
 
 // defaultWebhookRetryDelays space the retries after a failed first attempt.
-// ponytail: retries live in this process and are lost on restart; move them to
-// a queue table when a lost retry matters.
 var defaultWebhookRetryDelays = []time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
 
-// retryWebhook re-attempts a failed delivery on the retry schedule until one
-// succeeds, recording every attempt in the delivery log.
-func (s *Server) retryWebhook(identity store.Identity, hook store.WebhookEndpoint,
-	eventType string, payload []byte) {
-
-	delays := s.WebhookRetryDelays
-	if delays == nil {
-		delays = defaultWebhookRetryDelays
+func (s *Server) webhookRetryDelays() []time.Duration {
+	if s.WebhookRetryDelays != nil {
+		return s.WebhookRetryDelays
 	}
-	for i, delay := range delays {
-		time.Sleep(delay)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		recorded, err := s.deliverWebhook(ctx, identity, hook, eventType, payload, i+2)
-		cancel()
-		if err == nil && recorded.Outcome == "succeeded" {
-			return
+	return defaultWebhookRetryDelays
+}
+
+// webhookRetryLease is how long a claimed retry is held before another sweep
+// may take it again: comfortably longer than one delivery's 30s timeout.
+const webhookRetryLease = 2 * time.Minute
+
+// RetryDueWebhooks makes every retry whose time has come, recording each
+// attempt in the delivery log. Retries live in webhook_retries rather than in
+// memory, so one owed when the process restarts is made by the next process.
+//
+// Attempt n (n >= 2) is due delays[n-2] after the attempt before it; a retry
+// that fails its last scheduled attempt is marked abandoned, not left pending.
+func (s *Server) RetryDueWebhooks(ctx context.Context) error {
+	if s.OperatorDB == nil {
+		return nil
+	}
+	now := s.now()
+	due, err := store.DueWebhookRetries(ctx, s.OperatorDB, now, 100)
+	if err != nil {
+		return err
+	}
+	delays := s.webhookRetryDelays()
+	var failures []error
+	for _, retry := range due {
+		identity := store.Identity{TenantID: retry.TenantID}
+		claimed, err := store.ClaimWebhookRetry(ctx, s.DB, identity, retry, now,
+			now.Add(webhookRetryLease))
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		if err := s.attemptWebhookRetry(ctx, identity, retry, delays); err != nil {
+			failures = append(failures, fmt.Errorf("webhook retry %s: %w", retry.ID, err))
 		}
 	}
+	return errors.Join(failures...)
+}
+
+func (s *Server) attemptWebhookRetry(ctx context.Context, identity store.Identity,
+	retry store.WebhookRetry, delays []time.Duration) error {
+
+	hooks, err := store.ListWebhooks(ctx, s.DB, identity, nil)
+	if err != nil {
+		return err
+	}
+	var hook *store.WebhookEndpoint
+	for i := range hooks {
+		if hooks[i].ID == retry.EndpointID {
+			hook = &hooks[i]
+		}
+	}
+	// Disabled since the event fired: the customer turned it off, so stop.
+	if hook == nil || hook.Status != "enabled" {
+		return store.SettleWebhookRetry(ctx, s.DB, identity, retry.ID, "abandoned")
+	}
+
+	attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	recorded, err := s.deliverWebhook(attemptCtx, identity, *hook, retry.EventType,
+		retry.Payload, retry.Attempt)
+	cancel()
+	if err == nil && recorded.Outcome == "succeeded" {
+		return store.SettleWebhookRetry(ctx, s.DB, identity, retry.ID, "succeeded")
+	}
+	next := retry.Attempt - 1
+	if next >= len(delays) {
+		return store.SettleWebhookRetry(ctx, s.DB, identity, retry.ID, "abandoned")
+	}
+	return store.RescheduleWebhookRetry(ctx, s.DB, identity, retry.ID,
+		retry.Attempt+1, s.now().Add(delays[next]))
 }
 
 // missingSecretNote is what the delivery log says for an endpoint whose secret

@@ -191,7 +191,12 @@ func TestACustomer500IsRetriedAndEachAttemptLogged(t *testing.T) {
 
 	h.deliverOneSMS(tenant, "9876543210")
 
-	waitFor(t, "the retry to succeed", func() bool { return len(endpoint.received("message.delivered")) == 2 })
+	waitFor(t, "the retry to succeed", func() bool {
+		if err := h.server.RetryDueWebhooks(context.Background()); err != nil {
+			t.Logf("retry sweep: %v", err)
+		}
+		return len(endpoint.received("message.delivered")) == 2
+	})
 	var log struct {
 		Events []struct {
 			Attempt int    `json:"attempt"`

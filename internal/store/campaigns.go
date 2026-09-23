@@ -17,6 +17,7 @@ import (
 type Campaign struct {
 	ID                 uuid.UUID
 	Name               string
+	Description        *string
 	Channel            string
 	Country            string
 	ListID             *uuid.UUID
@@ -56,7 +57,7 @@ type Campaign struct {
 }
 
 const campaignColumns = `
-	c.id, c.name, c.channel, c.country, c.list_id, c.sender_id, c.template_id,
+	c.id, c.name, c.description, c.channel, c.country, c.list_id, c.sender_id, c.template_id,
 	c.fallback_channel, c.fallback_sender_id, c.fallback_template_id,
 	c.status, c.scheduled_at, c.held_until, c.send_started_at, c.recipients,
 	c.segments_per_message_min, c.segments_per_message_max, c.cost_minor_min, c.cost_minor_max, c.currency,
@@ -65,7 +66,7 @@ const campaignColumns = `
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var campaign Campaign
-	err := row.Scan(&campaign.ID, &campaign.Name, &campaign.Channel, &campaign.Country,
+	err := row.Scan(&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Channel, &campaign.Country,
 		&campaign.ListID, &campaign.SenderID, &campaign.TemplateID,
 		&campaign.FallbackChannel, &campaign.FallbackSenderID, &campaign.FallbackTemplateID,
 		&campaign.Status, &campaign.ScheduledAt, &campaign.HeldUntil, &campaign.SendStartedAt,
@@ -172,8 +173,8 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    sender_id, template_id, fallback_channel, fallback_sender_id,
 			    fallback_template_id, status, scheduled_at, recipients,
 			    segments_per_message_min, segments_per_message_max,
-			    cost_minor_min, cost_minor_max, currency, retry_of, held_until)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+			    cost_minor_min, cost_minor_max, currency, retry_of, held_until, description)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,nullif($21,''))
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
@@ -181,7 +182,7 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			campaign.Status, campaign.ScheduledAt, campaign.Recipients,
 			campaign.SegmentsPerMessageMin, campaign.SegmentsPerMessageMax,
 			campaign.CostMinorMin, campaign.CostMinorMax,
-			campaign.Currency, campaign.RetryOf, campaign.HeldUntil,
+			campaign.Currency, campaign.RetryOf, campaign.HeldUntil, campaign.Description,
 		).Scan(&newID); err != nil {
 			return err
 		}

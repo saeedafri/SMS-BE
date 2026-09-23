@@ -27,6 +27,7 @@ func (s *Server) toCampaign(campaign store.Campaign,
 	out := gen.Campaign{
 		Id:                    campaign.ID,
 		Name:                  campaign.Name,
+		Description:           campaign.Description,
 		Channel:               gen.ChannelId(campaign.Channel),
 		Country:               gen.CountryCode(campaign.Country),
 		SenderId:              campaign.SenderID.String(),
@@ -225,13 +226,14 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 	}
 
 	campaign := store.Campaign{
-		Name:       body.Name,
-		Channel:    string(body.Channel),
-		Country:    string(body.Country),
-		SenderID:   senderID,
-		TemplateID: templateID,
-		Status:     "queued",
-		Currency:   "INR",
+		Name:        body.Name,
+		Description: body.Description,
+		Channel:     string(body.Channel),
+		Country:     string(body.Country),
+		SenderID:    senderID,
+		TemplateID:  templateID,
+		Status:      "queued",
+		Currency:    "INR",
 	}
 	if body.ListId != nil && *body.ListId != "" {
 		listID, err := uuid.Parse(*body.ListId)

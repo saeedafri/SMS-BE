@@ -24,7 +24,7 @@ func (s *Server) toJourney(ctx context.Context, identity store.Identity,
 	journey store.Journey) gen.Journey {
 
 	out := gen.Journey{
-		Id: journey.ID, Name: journey.Name,
+		Id: journey.ID, Name: journey.Name, Description: journey.Description,
 		Status:     gen.JourneyStatus(journey.Status),
 		Recipients: journey.Recipients,
 		CreatedAt:  journey.CreatedAt, ActivatedAt: journey.ActivatedAt,
@@ -51,59 +51,47 @@ func (s *Server) toJourney(ctx context.Context, identity store.Identity,
 	}
 	out.Trigger = trigger
 
-	// Steps round-trip through the stored jsonb rather than being rebuilt
-	// field by field, so a step shape the contract adds later survives without
-	// a backend change.
-	var raw []json.RawMessage
-	if len(journey.Steps) > 0 {
-		_ = json.Unmarshal(journey.Steps, &raw)
-	}
-	for _, item := range raw {
-		var step gen.JourneyStep
-		if err := json.Unmarshal(item, &step); err == nil {
-			out.Steps = append(out.Steps, step)
-		}
-	}
+	out.Steps = append(out.Steps, journeySteps(journey)...)
 
-	// A journey that never activated has enrolled nobody, so both derived
-	// counts are zero rather than a fraction of the cohort.
-	if journey.Status == "active" || journey.Status == "paused" {
-		completed, suppressed := s.journeyCounts(ctx, identity, journey)
-		out.CompletedCount = completed
-		out.ExitedSuppressedCount = suppressed
+	// A journey that never activated has enrolled nobody.
+	if journey.ActivatedAt != nil {
+		funnel := s.journeyFunnel(ctx, identity, journey)
+		out.CompletedCount = funnel.Completed
+		out.ExitedSuppressedCount = funnel.ExitedSuppressed
 	}
 	return out
 }
 
-// journeyCounts derives the funnel from the enrolment cohort and the current
-// suppression list. Anyone suppressed since enrolling has exited; the rest are
-// counted as having completed the sequence.
-func (s *Server) journeyCounts(ctx context.Context, identity store.Identity,
-	journey store.Journey) (completed int, exitedSuppressed int) {
-
-	if journey.TriggerListID == nil {
-		return 0, 0
+// journeySteps decodes the stored steps. They round-trip through the jsonb
+// rather than being rebuilt field by field, so a step shape the contract adds
+// later survives without a backend change.
+func journeySteps(journey store.Journey) []gen.JourneyStep {
+	var raw []json.RawMessage
+	if len(journey.Steps) > 0 {
+		_ = json.Unmarshal(journey.Steps, &raw)
 	}
-	contacts, _, err := store.ListContacts(ctx, s.DB, identity, journey.TriggerListID, 1, 1000)
-	if err != nil {
-		return 0, 0
-	}
-	identities := make([]string, 0, len(contacts))
-	for _, contact := range contacts {
-		identities = append(identities, contact.Msisdn)
-	}
-	suppressed, err := store.SuppressedSet(ctx, s.DB, identity, identities)
-	if err != nil {
-		return len(contacts), 0
-	}
-	for _, contact := range contacts {
-		if suppressed[contact.Msisdn] {
-			exitedSuppressed++
-			continue
+	steps := make([]gen.JourneyStep, 0, len(raw))
+	for _, item := range raw {
+		var step gen.JourneyStep
+		if err := json.Unmarshal(item, &step); err == nil {
+			steps = append(steps, step)
 		}
-		completed++
 	}
-	return completed, exitedSuppressed
+	return steps
+}
+
+// journeyFunnel counts the journey's real enrolments. A count that cannot be
+// read is shown as none rather than failing the page: the journey itself is
+// still there to look at.
+func (s *Server) journeyFunnel(ctx context.Context, identity store.Identity,
+	journey store.Journey) store.JourneyFunnel {
+
+	funnel, err := store.CountJourneyFunnel(ctx, s.DB, identity, journey.ID)
+	if err != nil {
+		s.Logger.Warn("journey funnel unreadable", "journey", journey.ID, "error", err)
+		return store.JourneyFunnel{AtStep: map[int]int{}}
+	}
+	return funnel
 }
 
 func (s *Server) ListJourneys(ctx context.Context, request gen.ListJourneysRequestObject) (gen.ListJourneysResponseObject, error) {
@@ -152,30 +140,33 @@ func (s *Server) GetJourney(ctx context.Context, request gen.GetJourneyRequestOb
 	}
 
 	base := s.toJourney(ctx, identity, journey)
+	// How many contacts are on each step right now. A send step is passed
+	// through the moment it is reached, so its count is normally zero; it
+	// holds people only while the daily ceiling or a send failure does.
+	funnel := store.JourneyFunnel{AtStep: map[int]int{}}
+	if journey.ActivatedAt != nil {
+		funnel = s.journeyFunnel(ctx, identity, journey)
+	}
 	stepCounts := make([]gen.JourneyStepCount, 0, len(base.Steps))
-	for _, step := range base.Steps {
-		if send, err := step.AsJourneyStepSend(); err == nil && send.Id != "" {
+	for i, step := range base.Steps {
+		// Send and wait steps share id; reading it as a send works for both.
+		if named, err := step.AsJourneyStepSend(); err == nil && named.Id != "" {
 			stepCounts = append(stepCounts, gen.JourneyStepCount{
-				StepId: send.Id, Count: base.CompletedCount,
-			})
-			continue
-		}
-		if wait, err := step.AsJourneyStepWait(); err == nil && wait.Id != "" {
-			stepCounts = append(stepCounts, gen.JourneyStepCount{
-				StepId: wait.Id, Count: base.CompletedCount,
+				StepId: named.Id, Count: funnel.AtStep[i],
 			})
 		}
 	}
 
 	return gen.GetJourney200JSONResponse(gen.JourneyDetail{
-		Id: base.Id, Name: base.Name, Status: base.Status, Trigger: base.Trigger,
+		Id: base.Id, Name: base.Name, Description: base.Description,
+		Status: base.Status, Trigger: base.Trigger,
 		Steps: base.Steps, Recipients: base.Recipients, CreatedAt: base.CreatedAt,
 		ActivatedAt: base.ActivatedAt, CompletedCount: base.CompletedCount,
 		ExitedSuppressedCount: base.ExitedSuppressedCount,
 		Funnel: gen.JourneyFunnel{
 			StepCounts: stepCounts, Completed: base.CompletedCount,
 			ExitedSuppressed: base.ExitedSuppressedCount,
-			TotalEnrolled:    base.Recipients,
+			TotalEnrolled:    funnel.TotalEnrolled,
 		},
 	}), nil
 }
@@ -197,7 +188,8 @@ func (s *Server) CreateJourney(ctx context.Context, request gen.CreateJourneyReq
 			"A journey needs at least one step.")), nil
 	}
 
-	journey := store.Journey{Name: body.Name, TriggerType: "list_entry"}
+	journey := store.Journey{Name: body.Name, Description: body.Description,
+		TriggerType: "list_entry"}
 
 	if scheduled, err := body.Trigger.AsJourneyTriggerScheduled(); err == nil && scheduled.Type == "scheduled" {
 		journey.TriggerType = "scheduled"
@@ -506,7 +498,7 @@ func (s *Server) UpdateJourney(ctx context.Context, request gen.UpdateJourneyReq
 	}
 
 	journey, err := store.UpdateJourney(ctx, s.DB, identity, journeyID,
-		name, steps, triggerType, triggerListID)
+		name, body.Description, steps, triggerType, triggerListID)
 	if errors.Is(err, store.ErrNotFound) {
 		return gen.UpdateJourney404JSONResponse(errorBody(codeNotFound, "No such journey.")), nil
 	}

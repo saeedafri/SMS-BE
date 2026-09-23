@@ -380,6 +380,33 @@ func run() error {
 		func(name string) { metrics.RecordIncident("worker_panic", name) },
 		apiServer.LaunchDueCampaigns)
 
+	// Runs active journeys: enrols their trigger lists and moves each enrolled
+	// contact through its send and wait steps. Without it a journey was stored,
+	// activated and never sent anything.
+	go resilience.Supervise(ctx, "journeys", 30*time.Second, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.RunJourneys)
+
+	// Makes owed webhook retries. They live in webhook_retries, so one owed
+	// across a restart is made by the next process instead of lost.
+	go resilience.Supervise(ctx, "webhook-retries", 15*time.Second, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.RetryDueWebhooks)
+
+	// Holds each tenant's message log to the retention it chose.
+	go resilience.Supervise(ctx, "message-retention", time.Hour, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.EnforceMessageRetention)
+
+	// Emails alert recipients when a rule goes into breach, and scheduled
+	// reports when they fall due. Both no-op without RESEND_API_KEY.
+	go resilience.Supervise(ctx, "alerts", 5*time.Minute, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.EvaluateAlerts)
+	go resilience.Supervise(ctx, "scheduled-reports", 5*time.Minute, logger,
+		func(name string) { metrics.RecordIncident("worker_panic", name) },
+		apiServer.SendDueReports)
+
 	// Issues last month's GST invoices early in each new month. Before this,
 	// invoices existed only in the demo seed.
 	go resilience.Supervise(ctx, "invoicing", time.Hour, logger,

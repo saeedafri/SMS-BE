@@ -155,59 +155,22 @@ func (s *Server) GetAnalytics(ctx context.Context, request gen.GetAnalyticsReque
 	return gen.GetAnalytics200JSONResponse(out), nil
 }
 
+// toScheduledReport reads the report's real schedule and send history. Both
+// used to be derived from createdAt and the wall clock, which claimed sends
+// that never happened; they are now what the report worker stored.
 func toScheduledReport(report store.ScheduledReport) gen.ScheduledReport {
 	out := gen.ScheduledReport{
 		Id: report.ID, Frequency: gen.ReportFrequency(report.Frequency),
 		Range: gen.AnalyticsRange(report.Range), Recipients: report.Recipients,
 		Paused: report.Paused, CreatedAt: report.CreatedAt,
-		RecentSends: []time.Time{},
+		RecentSends: report.RecentSends,
+	}
+	if out.RecentSends == nil {
+		out.RecentSends = []time.Time{}
 	}
 	if !report.Paused {
-		next := nextSend(report.CreatedAt, report.Frequency)
+		next := report.NextSendAt
 		out.NextSendAt = &next
-		out.RecentSends = recentSends(report.CreatedAt, report.Frequency)
-	}
-	return out
-}
-
-// nextSend is the next occurrence after now, derived rather than stored. A
-// stored timestamp would go stale the moment the process missed a tick.
-func nextSend(createdAt time.Time, frequency string) time.Time {
-	step := 24 * time.Hour
-	switch frequency {
-	case "weekly":
-		step = 7 * 24 * time.Hour
-	case "monthly":
-		step = 30 * 24 * time.Hour
-	}
-	next := createdAt
-	now := time.Now().UTC()
-	for !next.After(now) {
-		next = next.Add(step)
-	}
-	return next
-}
-
-// recentSends is the last five occurrences before now, capped as the contract
-// requires. Also derived: there is no send history table yet, and the contract
-// documents this field as computed rather than stored.
-func recentSends(createdAt time.Time, frequency string) []time.Time {
-	step := 24 * time.Hour
-	switch frequency {
-	case "weekly":
-		step = 7 * 24 * time.Hour
-	case "monthly":
-		step = 30 * 24 * time.Hour
-	}
-	now := time.Now().UTC()
-	var all []time.Time
-	for point := createdAt; point.Before(now); point = point.Add(step) {
-		all = append(all, point)
-	}
-	// Newest first, capped to five.
-	out := make([]time.Time, 0, 5)
-	for i := len(all) - 1; i >= 0 && len(out) < 5; i-- {
-		out = append(out, all[i])
 	}
 	return out
 }
