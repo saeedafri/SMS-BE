@@ -61,6 +61,29 @@ func (s *Server) requireOperator(ctx context.Context) (store.OperatorIdentity, e
 	return identity, nil
 }
 
+// requireOperatorAdmin is requireOperator for the things a console operator may
+// see but not do.
+//
+// Signing in to the operator console is not the same permission as every button
+// in it. operator_users has carried a role since 00018 and, until this, nothing
+// read it: the role was shown on GET /v1/operator/me and enforced on no route,
+// so any signed-in operator could do anything any other one could.
+//
+// 'admin' is the highest role the schema has — the CHECK admits 'operator' and
+// 'admin' and nothing else — so this is the whole of "admins only" that can be
+// expressed today. If a third tier is wanted above it, that is a migration and
+// a contract change, not a condition here.
+func (s *Server) requireOperatorAdmin(ctx context.Context) (store.OperatorIdentity, error) {
+	identity, err := s.requireOperator(ctx)
+	if err != nil {
+		return store.OperatorIdentity{}, err
+	}
+	if identity.Role != "admin" {
+		return store.OperatorIdentity{}, errForbidden
+	}
+	return identity, nil
+}
+
 func (s *Server) OperatorLogin(ctx context.Context, request gen.OperatorLoginRequestObject) (
 	gen.OperatorLoginResponseObject, error) {
 

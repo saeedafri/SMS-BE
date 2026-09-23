@@ -104,6 +104,9 @@ vague in the same way. `TestTheSingleSendPathIsCappedToo` fails if the words
 All three are operator-side. **Nothing goes on a tenant-facing schema** — not
 `Campaign`, not `CampaignEstimate`, not `SendMessageResult`, not `Me`.
 
+**4.0 All three are admin-only.** See §4.4 — the route and the fields both need
+a `403`, and `GET /v1/operator/tenants/{id}` needs one it does not have today.
+
 **4.1 `TenantDetail` gains three fields** (it is served only on
 `/v1/operator/tenants/{id}`):
 
@@ -136,9 +139,54 @@ large number, or we leave a ceiling nobody meant to keep.
 
 **4.3 One audit action enum value: `tenant.send_cap`.**
 
+**4.4 A `403` on `setTenantSendCap`, and a `403` added to
+`GET /v1/operator/tenants/{id}`.**
+
+The ceiling is for admins only — a plain `operator` may neither set it nor see
+it. The backend gate is written (`requireOperatorAdmin`), but a handler cannot
+answer 403 on an operation whose contract does not declare one, so both routes
+need it or the gate cannot be applied.
+
+The tenant-detail route needs one because of 4.1: the moment `TenantDetail`
+carries `sendCapPerDay`, every route that returns it can leak the ceiling to a
+non-admin. We will withhold the three fields at the projection for a plain
+operator rather than 403 the whole page — an operator still has a job to do on
+that screen — but the 403 has to exist in the contract for the route that
+*sets* it, and the detail route needs one for the day something on it becomes
+admin-only outright.
+
+A test fails the build if either lands without it:
+`TestTheSendCeilingNeverReachesANonAdmin` reads your `openapi.json` and refuses
+any operation that serves or sets the ceiling without a declared 403.
+
+**Please hide the control for non-admins in the console too.** Not because we
+are trusting the UI for it — the server refuses regardless — but because a
+button that 403s is worse than no button.
+
+**One thing you should know before wiring this up:** `operator_users.role` has
+existed since migration 00018 and, until today, **nothing in the backend read
+it**. It is rendered on `GET /v1/operator/me` and enforced on no route at all.
+So a plain `operator` can currently suspend a tenant, throttle one, credit a
+wallet, void a payment and set a credit limit — none of those declare a 403
+either. The send ceiling is the first thing gated on role. Whether the rest
+should be is a decision for the operator team, not something we changed
+underneath you.
+
 Once those three land I will build the handler against them the same day — the
 store layer underneath (`store.SetSendCap`, `store.ReadSendUsage`) is already
 written and tested.
+
+## 4a. Who may set it
+
+`admin` only. It is the highest role `operator_users` has — the CHECK admits
+`operator` and `admin` and nothing else — so "super admin and admin" is
+expressed today as `role = 'admin'`. If you want a genuine third tier above
+admin, say so: that is a migration, a contract change and a decision about who
+holds it, not a condition we can add quietly.
+
+The gate refuses anything that is not exactly `admin`, including an unknown
+role. A gate that refused only the one name it knew about would open itself the
+day a third role is added.
 
 ## 5. Until then
 
@@ -175,3 +223,5 @@ add the walk behind the console's own read rather than on the send path.
 | `TestTheSingleSendPathIsCappedToo` | the API loop is covered, and gives nothing away |
 | `TestAScheduledCampaignIsQuotedAgainstTheDayItWillSend` | a future send is quoted against a future allowance |
 | `TestAnUncappedTenantSendsAsBefore` | the default path is untouched |
+| `TestOnlyAnAdminPassesTheOperatorAdminGate` | a plain operator is refused, and so is any role that is not exactly `admin` |
+| `TestTheSendCeilingNeverReachesANonAdmin` | no tenant-facing schema carries it, and no route serves it without a 403 |
