@@ -578,10 +578,23 @@ func FindPricingRate(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID
 	//
 	// rate_overrides carries no row-level security, so this is safe on the
 	// tenant pool; the tenant_id predicate is the scope.
+	// An override applies ONLY to what it was agreed for: the exact category, or
+	// every category on the channel when it was set without one. It is never a
+	// fallback for a sibling category — a price somebody signed off for
+	// WhatsApp UTILITY is not a price for WhatsApp MARKETING, and billing one at
+	// the other charges a rate nobody agreed. Without this predicate the ORDER
+	// BY below could reach rank 2, "any other category", which gets more likely
+	// the sparser the override table is — and one or two rows per tenant is its
+	// normal state.
+	//
+	// pricing_rates keeps its three-step fallback, for the reason below: those
+	// are published defaults, not agreements, and the cheapest is an honest
+	// lower bound.
 	override, err := scanPricingRate(pool.QueryRow(ctx, `
 		SELECT country, channel, coalesce(category, ''), per_segment_minor, currency
 		FROM rate_overrides
 		WHERE tenant_id = $1 AND country = $2 AND channel = $3
+		  AND (coalesce(category, '') = $4 OR coalesce(category, '') = '')
 		ORDER BY CASE
 		             WHEN coalesce(category, '') = $4 THEN 0
 		             WHEN coalesce(category, '') = ''  THEN 1
