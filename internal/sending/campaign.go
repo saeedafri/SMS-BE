@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -84,9 +85,14 @@ type FallbackEstimate struct {
 // template.Body alone saw an empty string, found no slots in it and reported
 // that nobody would be skipped — on the one channel where the carrier renders
 // from the values we pass.
+//
+// sendingAt is when the campaign will actually go out: its scheduled time, or
+// now for one being sent immediately. It exists for the daily ceiling below —
+// quoting a campaign scheduled for next week against THIS afternoon's spent
+// allowance would clip it to nothing for a day it is not going to run on.
 func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	listID *uuid.UUID, country, channel string, template store.Template,
-	fallback *FallbackEstimate) (CampaignEstimate, error) {
+	fallback *FallbackEstimate, sendingAt time.Time) (CampaignEstimate, error) {
 
 	category := ""
 	if template.Category != nil {
@@ -134,6 +140,22 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	split, err := s.splitAudience(ctx, identity, listID, channel, template, fallback, total)
 	if err != nil {
 		return CampaignEstimate{}, err
+	}
+
+	// The daily ceiling, applied to the QUOTE and not only to the send.
+	//
+	// A customer who approves a hundred thousand and is handed seventy has been
+	// told one number and given another. Clipping here means the number they
+	// approve IS the number that goes out, so the campaign's recipient count,
+	// its delivery rate and its invoice all agree about it afterwards — and no
+	// money is ever held for a recipient the ceiling was always going to keep.
+	allowance, err := store.ReadSendAllowance(ctx, s.DB, identity, sendingAt)
+	if err != nil {
+		return CampaignEstimate{}, err
+	}
+	if allowance.Capped() {
+		split.primary, split.fallbackForced = clipToRoom(split.primary, split.fallbackForced,
+			allowance.Room(split.primary+split.fallbackForced))
 	}
 
 	// The range, not a guess at one. This used to add 1 to the written count
@@ -204,6 +226,16 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		wallet[entry.Currency] = entry.BalanceMinor
 	}
 
+	// The daily ceiling, read once and spent down page by page like the wallet
+	// above it. The estimate this campaign was approved at was already clipped
+	// to it, so in the ordinary case the list runs out before the ceiling does
+	// and this changes nothing. It bites when the allowance moved in between —
+	// a second campaign ran, or this one was scheduled days ago.
+	allowance, err := store.ReadSendAllowance(ctx, s.DB, identity, s.now())
+	if err != nil {
+		return 0, 0, err
+	}
+
 	// The list's own columns, joined to the template's slots. Absent for a
 	// campaign with no list, and an empty mapping is fine: a file whose headers
 	// already match a template's slots resolves without one. Shared by both
@@ -267,6 +299,10 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	// was stopped on purpose.
 	halted := false
 
+	// What the daily ceiling took off the page in hand, carried to the usage
+	// write at the end of the page and reset there.
+	withheld := 0
+
 	defer func() {
 		if err == nil || halted {
 			return
@@ -322,11 +358,32 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			return sent, failed, err
 		}
 
+		// The ceiling, applied before anyone is priced or held for. A withheld
+		// recipient gets no message row, no wallet hold and no error code —
+		// they are simply not dispatched, the same non-event as a contact this
+		// channel cannot address.
+		//
+		// withheld counts only what was clipped off a page we had already read.
+		// When the ceiling stops the loop outright the untouched tail is not
+		// counted, because counting it would mean walking the rest of the list
+		// to learn a number nothing depends on.
+		if allowance.Capped() {
+			room := allowance.Room(len(contacts))
+			if room <= 0 {
+				break
+			}
+			if room < len(contacts) {
+				withheld += len(contacts) - room
+				contacts = contacts[:room]
+			}
+		}
+
 		forPrimary, forFallback := s.assignLegs(ctx, batch, fallback, contacts)
 		// Each leg reads the SHARED balance and spends it down by what it
 		// actually took, so a wallet that runs dry refuses the rest of the
 		// campaign recipient by recipient instead of overdrawing.
 		batch.balance = wallet[batch.rate.Currency]
+		fallbackSent := 0
 		pageSent, pageFailed, pageSpent, err := s.SendBatch(ctx, identity, batch, forPrimary)
 		sent += pageSent
 		failed += pageFailed
@@ -337,12 +394,21 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		if fallback != nil && len(forFallback) > 0 {
 			fallback.balance = wallet[fallback.rate.Currency]
 			legSent, legFailed, legSpent, legErr := s.SendBatch(ctx, identity, *fallback, forFallback)
+			fallbackSent = legSent
 			sent += legSent
 			failed += legFailed
 			wallet[fallback.rate.Currency] -= legSpent
 			if legErr != nil {
 				return sent, failed, legErr
 			}
+		}
+		if allowance.Capped() {
+			allowance.Spend(pageSent + fallbackSent)
+			if err := store.RecordSendUsage(ctx, s.DB, identity, allowance.Day,
+				pageSent+fallbackSent, withheld); err != nil {
+				return sent, failed, err
+			}
+			withheld = 0
 		}
 		if next == "" {
 			break
@@ -365,6 +431,23 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		return sent, failed, err
 	}
 	return sent, failed, nil
+}
+
+// clipToRoom reduces both legs of a campaign to what the daily ceiling admits.
+//
+// In proportion, because the fan-out stops at a page boundary and a page
+// carries both legs — they shrink together. Emptying one leg first would quote
+// a campaign whose shape nobody is ever going to send.
+func clipToRoom(primary, fallbackForced, room int) (int, int) {
+	total := primary + fallbackForced
+	if total == 0 || room >= total {
+		return primary, fallbackForced
+	}
+	if room <= 0 {
+		return 0, 0
+	}
+	clipped := fallbackForced * room / total
+	return room - clipped, clipped
 }
 
 // audienceSplit is who each leg carries, and who neither can.

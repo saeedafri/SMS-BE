@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -69,6 +70,8 @@ func usage() error {
   operator-admin disable <email>
   operator-admin enable <email>
   operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
+  operator-admin send-cap <tenant-uuid> <messages-per-day|none>
+  operator-admin send-cap <tenant-uuid>          show the ceiling and today's usage
   operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE> <carrier-agent-id>
   operator-admin rcs-connection ...  RCS operator accounts; run it for its own help
   operator-admin bans                 list addresses the abuse guard has banned
@@ -167,6 +170,15 @@ func run() error {
 			return usage()
 		}
 		return creditWallet(ctx, pool, os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	case "send-cap":
+		if len(os.Args) < 3 {
+			return usage()
+		}
+		limit := ""
+		if len(os.Args) > 3 {
+			limit = os.Args[3]
+		}
+		return sendCap(ctx, pool, os.Args[2], limit)
 	default:
 		return usage()
 	}
@@ -494,4 +506,70 @@ func readPassword() (string, error) {
 			minOperatorPassword)
 	}
 	return string(first), nil
+}
+
+// sendCap sets, lifts or reports a tenant's daily send ceiling.
+//
+// Operator-only and deliberately not on the customer's API at all: the ceiling
+// is a commercial decision of ours, and nothing on a tenant's own routes reads
+// it or hints that it exists. With no limit argument it reports rather than
+// changes, because the usual reason to run this is to find out what somebody
+// already set.
+func sendCap(ctx context.Context, pool *pgxpool.Pool, tenant, limit string) error {
+	tenantID, err := uuid.Parse(strings.TrimSpace(tenant))
+	if err != nil {
+		return fmt.Errorf("%q is not a tenant uuid", tenant)
+	}
+
+	var name, country string
+	if err := pool.QueryRow(ctx,
+		`SELECT name, coalesce(country, '') FROM tenants WHERE id = $1`,
+		tenantID).Scan(&name, &country); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("no tenant %s", tenantID)
+		}
+		return err
+	}
+
+	if limit != "" {
+		// nil lifts it. Lifting a ceiling is the same act as never having had
+		// one, so the column goes back to NULL rather than to a very large
+		// number, which would leave a ceiling nobody meant to keep.
+		var perDay *int
+		if !strings.EqualFold(limit, "none") {
+			value, err := strconv.Atoi(limit)
+			if err != nil || value < 0 {
+				return errors.New("give a whole number of messages per day, or 'none' to lift the ceiling")
+			}
+			perDay = &value
+		}
+		what := "lift the daily send ceiling on"
+		if perDay != nil {
+			what = fmt.Sprintf("cap %d messages/day on", *perDay)
+		}
+		if !confirm(fmt.Sprintf("%s %q (%s)?", what, name, tenantID)) {
+			return errors.New("cancelled")
+		}
+		if err := store.SetSendCap(ctx, pool, tenantID, perDay); err != nil {
+			return err
+		}
+	}
+
+	var cap *int
+	if err := pool.QueryRow(ctx,
+		`SELECT send_cap_per_day FROM tenants WHERE id = $1`, tenantID).Scan(&cap); err != nil {
+		return err
+	}
+	day := store.SendDay(country, time.Now())
+	accepted, withheld, err := store.ReadSendUsage(ctx, pool, tenantID, day)
+	if err != nil {
+		return err
+	}
+	ceiling := "none"
+	if cap != nil {
+		ceiling = strconv.Itoa(*cap)
+	}
+	fmt.Printf("%s (%s)\n  ceiling  %s/day\n  %s  %d sent, %d withheld\n",
+		name, tenantID, ceiling, day.Format("2006-01-02"), accepted, withheld)
+	return nil
 }

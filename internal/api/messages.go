@@ -253,6 +253,17 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 				"environment's budget, and retry in a moment.")), nil
 	}
 
+	// The daily volume ceiling. Answered with the SAME 429 the send-rate budget
+	// above uses, and deliberately without naming a number or pointing at a
+	// budget page: this ceiling is ours to set and not the customer's to read,
+	// and a message sending them to GET /v1/developer/rate-limit would show
+	// them a budget they have not exceeded.
+	allowance, admitted := s.admitUnderSendCap(ctx, identity)
+	if !admitted {
+		return gen.SendMessage429JSONResponse(errorBody("rate_limited",
+			"Too many sends right now. Retry in a moment.")), nil
+	}
+
 	service := s.sendingService(ctx)
 	if service == nil {
 		return gen.SendMessage422JSONResponse(errorBody(codeValidation,
@@ -286,6 +297,8 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 			"status", result.Status, "failure_code", result.FailureCode,
 			"sender_id", request.Body.SenderId.String())
 	}
+
+	s.recordSendUnderCap(ctx, identity, allowance, result.Status)
 
 	// 202 whatever the verdict, including a rejection. The request was
 	// well-formed and the outcome is in the body — a caller integrating against

@@ -294,9 +294,17 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		if err != nil {
 			return nil, err
 		}
+		// Quoted against the day it will actually go out. A campaign scheduled
+		// for next week must not be priced against what has already been sent
+		// this afternoon.
+		sendingAt := s.now()
+		if campaign.ScheduledAt != nil {
+			sendingAt = *campaign.ScheduledAt
+		}
 		estimate, err := service.EstimateCampaign(ctx, identity, campaign.ListID,
 			campaign.Country, campaign.Channel, template,
-			s.fallbackEstimate(ctx, identity, campaign.FallbackChannel, campaign.FallbackTemplateID))
+			s.fallbackEstimate(ctx, identity, campaign.FallbackChannel, campaign.FallbackTemplateID),
+			sendingAt)
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
 			campaign.SegmentsPerMessageMin = estimate.SegmentsPerMessageMin
@@ -420,7 +428,7 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 	}
 
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
-		string(body.Country), string(body.Channel), template, fallback)
+		string(body.Country), string(body.Channel), template, fallback, s.now())
 	if errors.Is(err, sending.ErrNoFallbackRate) {
 		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
 			"We do not have a rate for the fallback channel in that country yet, so this campaign cannot be priced. Choose another fallback, or remove it.")), nil

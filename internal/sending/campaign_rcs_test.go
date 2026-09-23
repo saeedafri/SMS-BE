@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -619,7 +620,7 @@ func TestTheEstimateCountsTheFallbackAsDeliveryNotLoss(t *testing.T) {
 		t.Fatalf("load sms: %v", err)
 	}
 	estimate, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "RCS",
-		rcsTemplate, &sending.FallbackEstimate{Channel: "SMS", Template: smsTemplate})
+		rcsTemplate, &sending.FallbackEstimate{Channel: "SMS", Template: smsTemplate}, time.Now())
 	if err != nil {
 		t.Fatalf("estimate: %v", err)
 	}
