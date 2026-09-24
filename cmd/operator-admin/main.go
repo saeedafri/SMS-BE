@@ -72,6 +72,8 @@ func usage() error {
   operator-admin credit-wallet <account-owner-email> <currency> <amount> <bank-reference>
   operator-admin send-cap <tenant-uuid> <messages-per-day|none>
   operator-admin send-cap <tenant-uuid>          show the ceiling and today's usage
+  operator-admin send-share <tenant-uuid> <percent|none>   share of each send this tenant may have
+  operator-admin always-send <tenant-uuid> <msisdn> <on|off>   exempt one contact from the cap
   operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE> <carrier-agent-id>
   operator-admin rcs-connection ...  RCS operator accounts; run it for its own help
   operator-admin bans                 list addresses the abuse guard has banned
@@ -179,6 +181,16 @@ func run() error {
 			limit = os.Args[3]
 		}
 		return sendCap(ctx, pool, os.Args[2], limit)
+	case "send-share":
+		if len(os.Args) < 4 {
+			return usage()
+		}
+		return sendShare(ctx, pool, os.Args[2], os.Args[3])
+	case "always-send":
+		if len(os.Args) < 5 {
+			return usage()
+		}
+		return alwaysSend(ctx, pool, os.Args[2], os.Args[3], os.Args[4])
 	default:
 		return usage()
 	}
@@ -571,5 +583,88 @@ func sendCap(ctx context.Context, pool *pgxpool.Pool, tenant, limit string) erro
 	}
 	fmt.Printf("%s (%s)\n  ceiling  %s/day\n  %s  %d sent, %d withheld\n",
 		name, tenantID, ceiling, day.Format("2006-01-02"), accepted, withheld)
+	return nil
+}
+
+// sendShare sets or lifts the share of each send a tenant may have.
+//
+// A share rather than a daily number, because "send 70% of this campaign"
+// scales with the list: one setting covers a send of a hundred and a send of a
+// lakh, and nobody has to re-derive a ceiling when a customer's list grows.
+func sendShare(ctx context.Context, pool *pgxpool.Pool, tenant, share string) error {
+	tenantID, err := uuid.Parse(strings.TrimSpace(tenant))
+	if err != nil {
+		return fmt.Errorf("%q is not a tenant uuid", tenant)
+	}
+	var name string
+	if err := pool.QueryRow(ctx,
+		`SELECT name FROM tenants WHERE id = $1`, tenantID).Scan(&name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("no tenant %s", tenantID)
+		}
+		return err
+	}
+
+	// nil lifts it, the same way send-cap does: back to NULL rather than to
+	// 100, so an operator can tell "never capped" from "capped at everything".
+	var percent *int
+	if !strings.EqualFold(share, "none") {
+		value, err := strconv.Atoi(share)
+		if err != nil || value < 0 || value > 100 {
+			return errors.New("give a percentage from 0 to 100, or 'none' to lift the cap")
+		}
+		percent = &value
+	}
+	what := "lift the send share cap on"
+	if percent != nil {
+		what = fmt.Sprintf("cap %d%% of each send for", *percent)
+	}
+	if !confirm(fmt.Sprintf("%s %q (%s)?", what, name, tenantID)) {
+		return errors.New("cancelled")
+	}
+	if err := store.SetSendCapPercent(ctx, pool, tenantID, percent); err != nil {
+		return err
+	}
+
+	var exempt int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM contacts WHERE tenant_id = $1 AND always_send`,
+		tenantID).Scan(&exempt); err != nil {
+		return err
+	}
+	fmt.Printf("%s (%s)\n  share    %s\n  exempt   %d contacts no cap may withhold\n",
+		name, tenantID, share, exempt)
+	return nil
+}
+
+// alwaysSend exempts one contact from the tenant's cap, or removes the
+// exemption. Keyed on the msisdn because that is what an operator has in front
+// of them when a customer asks for a number to never be cut.
+func alwaysSend(ctx context.Context, pool *pgxpool.Pool, tenant, msisdn, state string) error {
+	tenantID, err := uuid.Parse(strings.TrimSpace(tenant))
+	if err != nil {
+		return fmt.Errorf("%q is not a tenant uuid", tenant)
+	}
+	var on bool
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "on", "true", "yes":
+		on = true
+	case "off", "false", "no":
+		on = false
+	default:
+		return errors.New("say 'on' to exempt the contact or 'off' to remove the exemption")
+	}
+
+	tag, err := pool.Exec(ctx,
+		`UPDATE contacts SET always_send = $3 WHERE tenant_id = $1 AND msisdn = $2`,
+		tenantID, strings.TrimSpace(msisdn), on)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("tenant %s has no contact %s", tenantID, msisdn)
+	}
+	fmt.Printf("%s is %s\n", msisdn,
+		map[bool]string{true: "exempt from the cap", false: "subject to the cap"}[on])
 	return nil
 }

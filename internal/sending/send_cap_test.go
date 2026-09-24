@@ -275,3 +275,134 @@ func TestACampaignsWalletEntryStillSaysCampaign(t *testing.T) {
 	}
 	t.Fatalf("no charge found for campaign %s in %d ledger entries", campaign.ID, len(entries))
 }
+
+// setSharePercent caps the fixture's tenant to a share of each send.
+func setSharePercent(t *testing.T, f *fixture, percent int) {
+	t.Helper()
+	if _, err := sendAdmin.Exec(context.Background(),
+		`UPDATE tenants SET send_cap_percent = $2 WHERE id = $1`,
+		f.identity.TenantID, percent); err != nil {
+		t.Fatalf("set share cap: %v", err)
+	}
+}
+
+// exemptContacts marks the first n contacts of a list as always_send.
+func exemptContacts(t *testing.T, f *fixture, listID uuid.UUID, n int) []uuid.UUID {
+	t.Helper()
+	rows, err := sendAdmin.Query(context.Background(), `
+		UPDATE contacts SET always_send = true
+		WHERE id IN (SELECT c.id FROM contacts c
+		             JOIN contact_list_members m ON m.contact_id = c.id
+		             WHERE m.list_id = $1 ORDER BY c.created_at, c.id LIMIT $2)
+		RETURNING id`, listID, n)
+	if err != nil {
+		t.Fatalf("exempt contacts: %v", err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != n {
+		t.Fatalf("exempted %d contacts, wanted %d", len(ids), n)
+	}
+	return ids
+}
+
+// The whole feature, end to end: a hundred contacts, a 70% cap, fifteen of them
+// exempt. Seventy messages go out, all fifteen exempt among them, and the
+// wallet moves by seventy — not a hundred.
+func TestACappedSendCarriesItsShareAndEveryExemptContact(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	rate := smsRate(t, f)
+
+	templateID := f.seedSMSTemplate(f.senderID, "Your order has shipped.")
+	listID, _ := f.seedList("Share "+uuid.NewString()[:8], 100)
+	exempt := exemptContacts(t, f, listID, 15)
+	setSharePercent(t, f, 70)
+
+	before := f.balance()
+	campaign := f.seedCampaign(templateID, listID, "queued", 100)
+	sent, failed, err := f.service.LaunchCampaign(ctx, f.identity, campaign)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if sent != 70 || failed != 0 {
+		t.Fatalf("sent=%d failed=%d, want 70 sent and 0 failed", sent, failed)
+	}
+	if spent := before - f.balance(); spent != 70*rate {
+		t.Fatalf("wallet moved %d, want %d — a withheld contact is never charged for",
+			spent, 70*rate)
+	}
+
+	// Every exempt contact was carried. This is the row the whole rebuild is
+	// for: a cap that can skip the customer's own staff is not the feature
+	// that was asked for.
+	var carried int
+	if err := sendAdmin.QueryRow(ctx, `
+		SELECT count(*) FROM contacts
+		WHERE id = ANY($1) AND last_capped_send_at IS NOT NULL`, exempt).Scan(&carried); err != nil {
+		t.Fatalf("count carried: %v", err)
+	}
+	if carried != 15 {
+		t.Fatalf("%d of the 15 exempt contacts were carried, want all 15", carried)
+	}
+}
+
+// A second send to the same list reaches people the first one cut. Without
+// rotation the same thirty are invisible forever, on every send, and nothing
+// on any report says so.
+func TestARepeatedCappedSendReachesDifferentPeople(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	templateID := f.seedSMSTemplate(f.senderID, "Your order has shipped.")
+	listID, _ := f.seedList("Rotation "+uuid.NewString()[:8], 10)
+	setSharePercent(t, f, 50)
+
+	carriedNow := func() map[uuid.UUID]time.Time {
+		t.Helper()
+		rows, err := sendAdmin.Query(ctx, `
+			SELECT c.id, c.last_capped_send_at FROM contacts c
+			JOIN contact_list_members m ON m.contact_id = c.id
+			WHERE m.list_id = $1 AND c.last_capped_send_at IS NOT NULL`, listID)
+		if err != nil {
+			t.Fatalf("read carried: %v", err)
+		}
+		defer rows.Close()
+		out := map[uuid.UUID]time.Time{}
+		for rows.Next() {
+			var id uuid.UUID
+			var at time.Time
+			if err := rows.Scan(&id, &at); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out[id] = at
+		}
+		return out
+	}
+
+	first := f.seedCampaign(templateID, listID, "queued", 10)
+	if sent, _, err := f.service.LaunchCampaign(ctx, f.identity, first); err != nil || sent != 5 {
+		t.Fatalf("first send: sent=%d err=%v, want 5", sent, err)
+	}
+	afterFirst := carriedNow()
+	if len(afterFirst) != 5 {
+		t.Fatalf("first send carried %d, want 5", len(afterFirst))
+	}
+
+	second := f.seedCampaign(templateID, listID, "queued", 10)
+	if sent, _, err := f.service.LaunchCampaign(ctx, f.identity, second); err != nil || sent != 5 {
+		t.Fatalf("second send: sent=%d err=%v, want 5", sent, err)
+	}
+	afterSecond := carriedNow()
+	if len(afterSecond) != 10 {
+		t.Fatalf("after two sends %d of 10 contacts have been carried, want all 10 — "+
+			"the second send repeated the first one's choice", len(afterSecond))
+	}
+}

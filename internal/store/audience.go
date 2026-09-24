@@ -269,6 +269,15 @@ type Contact struct {
 	// so they are always as current as the list the send gate checks.
 	PhoneSuppressed bool
 	EmailSuppressed bool
+	// AlwaysSend exempts this contact from the tenant's send cap. Chosen before
+	// the cut is computed, so a tenant capped to 70% still reaches every one of
+	// them.
+	AlwaysSend bool
+	// LastCappedSendAt is when a capped send last carried this contact. Nil for
+	// a contact no capped send has reached, which puts them FIRST in the queue
+	// rather than last: the cap has to cut somebody, and cutting the same
+	// somebody every time is how a contact never receives anything at all.
+	LastCappedSendAt *time.Time
 }
 
 func scanContact(row pgx.Row) (Contact, error) {
@@ -276,7 +285,8 @@ func scanContact(row pgx.Row) (Contact, error) {
 	var fields, consent, consentedAt []byte
 	if err := row.Scan(&contact.ID, &contact.Msisdn, &contact.Email, &contact.Country,
 		&fields, &consent, &consentedAt, &contact.CreatedAt, &contact.UpdatedAt,
-		&contact.PhoneSuppressed, &contact.EmailSuppressed); err != nil {
+		&contact.PhoneSuppressed, &contact.EmailSuppressed,
+		&contact.AlwaysSend, &contact.LastCappedSendAt); err != nil {
 		return Contact{}, err
 	}
 	contact.Fields = map[string]string{}
@@ -293,7 +303,8 @@ func scanContact(row pgx.Row) (Contact, error) {
 const contactColumns = `c.id, c.msisdn, c.email, c.country, c.fields, c.consent,
 	c.consented_at, c.created_at, c.updated_at,
 	EXISTS (SELECT 1 FROM suppressions s WHERE s.identity = c.msisdn),
-	c.email IS NOT NULL AND EXISTS (SELECT 1 FROM suppressions s WHERE s.identity = c.email)`
+	c.email IS NOT NULL AND EXISTS (SELECT 1 FROM suppressions s WHERE s.identity = c.email),
+	c.always_send, c.last_capped_send_at`
 
 // ListContacts pages contacts, optionally restricted to one list. Total is
 // returned alongside because the audience screen shows "1–50 of 12,480".

@@ -75,7 +75,12 @@ func (s *Service) SendJourneyStep(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return "", err
 	}
-	if allowance.Room(1) == 0 {
+	// A contact no cap may withhold is not held here either. The exemption is
+	// about the contact, not about which path reached them — a customer's own
+	// staff being skipped by a journey is the same failure as being skipped by
+	// a campaign, and harder to notice because nobody is watching a journey's
+	// recipient count.
+	if !contact.AlwaysSend && allowance.Room(1) == 0 {
 		return JourneyHeld, nil
 	}
 	balances, err := store.ListWalletBalances(ctx, s.DB, identity)

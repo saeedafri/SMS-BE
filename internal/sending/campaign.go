@@ -153,6 +153,22 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
+	// The share of this send the tenant may have, applied before the day's
+	// ceiling: a send is first cut to its percentage, and whatever survives
+	// still has to fit inside what is left of the day.
+	if allowance.ShareCapped() {
+		total := split.primary + split.fallbackForced
+		exempt, err := store.CountAlwaysSendOnChannel(ctx, s.DB, identity, listID, channel)
+		if err != nil {
+			return CampaignEstimate{}, err
+		}
+		// Rounded up, and never below the contacts no cap may withhold — a send
+		// whose exempt outnumber its share is quoted at the exempt count,
+		// because that is what will actually go out.
+		allowed := max((total*allowance.Share()+99)/100, exempt)
+		split.primary, split.fallbackForced = clipToRoom(split.primary, split.fallbackForced,
+			min(allowed, total))
+	}
 	if allowance.Capped() {
 		split.primary, split.fallbackForced = clipToRoom(split.primary, split.fallbackForced,
 			allowance.Room(split.primary+split.fallbackForced))
@@ -367,6 +383,18 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		// When the ceiling stops the loop outright the untouched tail is not
 		// counted, because counting it would mean walking the rest of the list
 		// to learn a number nothing depends on.
+		// The share, applied per page. Exempt contacts are carried whatever the
+		// cap says; the rest fill the remaining room least-recently-carried
+		// first, so a repeated send reaches different people rather than
+		// cutting the same tail of the list every time.
+		var carried []store.Contact
+		if allowance.ShareCapped() {
+			var cut []store.Contact
+			contacts, cut = chooseUnderCap(contacts, allowance.Share())
+			withheld += len(cut)
+			carried = contacts
+		}
+
 		if allowance.Capped() {
 			room := allowance.Room(len(contacts))
 			if room <= 0 {
@@ -375,6 +403,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			if room < len(contacts) {
 				withheld += len(contacts) - room
 				contacts = contacts[:room]
+				carried = contacts
 			}
 		}
 
@@ -401,6 +430,26 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			if legErr != nil {
 				return sent, failed, legErr
 			}
+		}
+		// Who this capped send SELECTED, so the next one starts with them at the
+		// back of the queue. Selected rather than delivered on purpose: a contact
+		// the gate then refuses still had their turn, and counting it otherwise
+		// would hand them the front of the queue forever.
+		if allowance.ShareCapped() && len(carried) > 0 {
+			ids := make([]uuid.UUID, 0, len(carried))
+			for _, contact := range carried {
+				ids = append(ids, contact.ID)
+			}
+			if err := store.MarkCarriedUnderCap(ctx, s.DB, identity, ids, s.now()); err != nil {
+				return sent, failed, err
+			}
+		}
+		if allowance.ShareCapped() && !allowance.Capped() && withheld > 0 {
+			if err := store.RecordSendUsage(ctx, s.DB, identity, allowance.Day,
+				pageSent+fallbackSent, withheld); err != nil {
+				return sent, failed, err
+			}
+			withheld = 0
 		}
 		if allowance.Capped() {
 			allowance.Spend(pageSent + fallbackSent)

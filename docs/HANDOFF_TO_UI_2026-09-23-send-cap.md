@@ -1,3 +1,8 @@
+> **SUPERSEDED on 24 Sep 2026** by `HANDOFF_TO_UI_2026-09-24-send-share-and-exempt-contacts.md`.
+> The cap is now a SHARE of each send rather than a daily message count, and
+> the exemption is per CONTACT rather than per tenant. §4's contract ask below
+> is out of date — read §5 of the new document instead.
+
 # Per-tenant daily send ceiling — handoff to UI (23 Sep 2026)
 
 A commercial control we have not had: a ceiling on how much **volume** one

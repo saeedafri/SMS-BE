@@ -33,6 +33,27 @@ type SendAllowance struct {
 
 	// Accepted is what this tenant has already been let through today.
 	Accepted int64
+
+	// CapPercent is the share of each send this tenant may have, 0-100. Nil
+	// means no share cap, which is the default.
+	//
+	// A different control from CapPerDay above, not a second spelling of it.
+	// CapPerDay bounds a DAY across every send; this bounds each send against
+	// its own audience, so one setting covers a campaign of a hundred and one
+	// of a lakh. They compose: a send is cut to its share, and the day's
+	// ceiling still applies to what is left.
+	CapPercent *int
+}
+
+// ShareCapped says whether each send is cut to a share of its audience.
+func (a SendAllowance) ShareCapped() bool { return a.CapPercent != nil }
+
+// Share is the percentage this tenant may send, or 100 when uncapped.
+func (a SendAllowance) Share() int {
+	if a.CapPercent == nil {
+		return 100
+	}
+	return *a.CapPercent
 }
 
 // Room is how many of want this allowance admits: want itself when the tenant
@@ -90,8 +111,8 @@ func ReadSendAllowance(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	allowance := SendAllowance{Day: SendDay(id.Country, at)}
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
-			`SELECT send_cap_per_day FROM tenants WHERE id = $1`,
-			id.TenantID).Scan(&allowance.CapPerDay); err != nil {
+			`SELECT send_cap_per_day, send_cap_percent FROM tenants WHERE id = $1`,
+			id.TenantID).Scan(&allowance.CapPerDay, &allowance.CapPercent); err != nil {
 			return err
 		}
 		// An uncapped tenant's usage is never read and never written. The
@@ -177,4 +198,65 @@ func ReadSendUsage(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID,
 		return 0, 0, fmt.Errorf("store: read send usage: %w", err)
 	}
 	return accepted, withheld, nil
+}
+
+// SetSendCapPercent applies or lifts the share of each send a tenant may have.
+// Operator-only, like SetSendCap.
+func SetSendCapPercent(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID,
+	percent *int) error {
+
+	tag, err := pool.Exec(ctx,
+		`UPDATE tenants SET send_cap_percent = $2 WHERE id = $1`, tenantID, percent)
+	if err != nil {
+		return fmt.Errorf("store: set send cap percent: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// MarkCarriedUnderCap records that a capped send reached these contacts, which
+// is what puts them at the back of the queue next time.
+//
+// Written only for a capped tenant. An uncapped one is never cut, so there is
+// nothing to rotate and no reason to make them pay a write per page for it.
+func MarkCarriedUnderCap(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	contactIDs []uuid.UUID, at time.Time) error {
+
+	if len(contactIDs) == 0 {
+		return nil
+	}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE contacts SET last_capped_send_at = $2 WHERE id = ANY($1)`,
+			contactIDs, at)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: mark carried under cap: %w", err)
+	}
+	return nil
+}
+
+// CountAlwaysSendOnChannel counts the contacts in a list that no cap may
+// withhold. The quote needs it: a send whose exempt contacts outnumber its
+// share is quoted at the exempt count, not at the share.
+func CountAlwaysSendOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, channels ...string) (int, error) {
+
+	var total int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(*) FROM contacts c
+			WHERE c.always_send
+			  AND ($1::uuid IS NULL OR EXISTS (
+			        SELECT 1 FROM contact_list_members m
+			        WHERE m.contact_id = c.id AND m.list_id = $1))
+			  `+reachableOnChannel, listID, channels).Scan(&total)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: count always-send contacts: %w", err)
+	}
+	return total, nil
 }
