@@ -248,6 +248,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Status: string(state), ErrorCode: errorCode,
 			FraudFlag: "none", Segments: uint8(plan.segments), CostMinor: cost,
 			Currency: context.rate.Currency, CampaignID: context.campaignID,
+			JourneyID: context.journeyID, JourneyName: context.journeyName,
 			Carrier: context.carrier, RouteID: context.routeID,
 			DeliveredChannel: carriedBy(context.sender.Channel, plan.refusal != ""),
 			CreatedAt:        now, UpdatedAt: now, Version: 1,
@@ -321,6 +322,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			ErrorClass: errorClass, FraudFlag: "none", Segments: uint8(plan.segments),
 			CostMinor: cost, Currency: context.rate.Currency,
 			CampaignID: context.campaignID, CarrierRef: carrierRef,
+			JourneyID: context.journeyID, JourneyName: context.journeyName,
 			Carrier: context.carrier, RouteID: context.routeID,
 			DeliveredChannel: carriedBy(context.sender.Channel, false),
 			CreatedAt:        now, SentAt: &settled, UpdatedAt: settled, Version: 2,
@@ -392,6 +394,10 @@ type batchContext struct {
 	tenantStatus string
 	balance      int64
 	campaignID   *uuid.UUID
+	// journeyID and journeyName tag a journey send step's messages. Nil on
+	// every campaign leg: the two are never both set.
+	journeyID   *uuid.UUID
+	journeyName *string
 	// carrier and routeID are the path this campaign takes, resolved ONCE with
 	// everything else that is identical across recipients. Empty when the
 	// corridor has no active route, which is normal — Email and WhatsApp do not

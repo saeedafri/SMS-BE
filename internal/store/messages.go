@@ -15,6 +15,10 @@ type MessageRecord struct {
 	ID           uuid.UUID
 	CampaignID   *uuid.UUID
 	CampaignName *string
+	// JourneyID and JourneyName are set on a message a journey send step
+	// sent, and never together with CampaignID.
+	JourneyID    *uuid.UUID
+	JourneyName  *string
 	Channel      string
 	Country      string
 	SenderHeader string
@@ -74,7 +78,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 	for _, record := range records {
 		if err := batch.Append(
 			record.TenantID, record.ID, record.CampaignID, record.CampaignName,
-			nil, nil, nil, // journey id/name, conversation id — Stage 11
+			record.JourneyID, record.JourneyName, nil, // conversation id — Stage 11
 			record.Channel, record.Country, record.SenderHeader, record.TemplateID,
 			record.Msisdn, record.Email, record.Status, record.DeliveredChannel,
 			record.ErrorCode, record.ErrorClass, record.FraudFlag,
@@ -132,6 +136,7 @@ type MessageFilter struct {
 	Channel    string
 	ErrorClass string
 	CampaignID *uuid.UUID
+	JourneyID  *uuid.UUID
 	Page       int
 	Limit      int
 }
@@ -175,6 +180,10 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		where += " AND campaign_id = ?"
 		args = append(args, *filter.CampaignID)
 	}
+	if filter.JourneyID != nil {
+		where += " AND journey_id = ?"
+		args = append(args, *filter.JourneyID)
+	}
 
 	var total uint64
 	if err := conn.QueryRow(ctx,
@@ -190,7 +199,8 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	pageArgs := append(append([]any{}, args...), limit, offset)
 
 	rows, err := conn.Query(ctx, `
-		SELECT id, campaign_id, campaign_name, channel, msisdn, email, status,
+		SELECT id, campaign_id, campaign_name, journey_id, journey_name, channel,
+		       msisdn, email, status,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
 		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at
@@ -207,6 +217,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 	for rows.Next() {
 		var record MessageRecord
 		if err := rows.Scan(&record.ID, &record.CampaignID, &record.CampaignName,
+			&record.JourneyID, &record.JourneyName,
 			&record.Channel, &record.Msisdn, &record.Email, &record.Status,
 			&record.ErrorCode, &record.ErrorClass, &record.FraudFlag, &record.Segments,
 			&record.CostMinor, &record.Currency, &record.DeliveredChannel,
@@ -248,13 +259,14 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 	// carries.
 	err := conn.QueryRow(ctx, `
 		SELECT id, status, segments, cost_minor, currency, campaign_id,
-		       campaign_name, channel, country, sender_header, template_id,
+		       campaign_name, journey_id, journey_name, channel, country, sender_header, template_id,
 		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
 		       created_at, sent_at, version
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
 		&record.Currency, &record.CampaignID, &record.CampaignName,
+		&record.JourneyID, &record.JourneyName,
 		&record.Channel, &record.Country, &record.SenderHeader, &record.TemplateID,
 		&record.Msisdn, &record.Email, &record.RouteID, &record.CarrierRef,
 		&record.Carrier, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
@@ -291,14 +303,16 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 
 	var record MessageRecord
 	err := conn.QueryRow(ctx, `
-		SELECT id, campaign_id, campaign_name, channel, country, sender_header,
+		SELECT id, campaign_id, campaign_name, journey_id, journey_name, channel,
+		       country, sender_header,
 		       msisdn, email, status, error_code, error_class, fraud_flag,
 		       segments, cost_minor, currency, carrier, carrier_ref,
 		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
-	).Scan(&record.ID, &record.CampaignID, &record.CampaignName, &record.Channel,
+	).Scan(&record.ID, &record.CampaignID, &record.CampaignName,
+		&record.JourneyID, &record.JourneyName, &record.Channel,
 		&record.Country, &record.SenderHeader, &record.Msisdn, &record.Email,
 		&record.Status, &record.ErrorCode, &record.ErrorClass, &record.FraudFlag,
 		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,

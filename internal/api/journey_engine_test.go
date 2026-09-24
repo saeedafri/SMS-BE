@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/saeedafri/sms-be/internal/sending"
 )
 
 // Ask 65. A journey runs: its trigger list is enrolled, send steps go through
@@ -211,5 +213,67 @@ func TestAPausedJourneyNeitherEnrolsNorAdvances(t *testing.T) {
 	r.run()
 	if got := r.sentTo(msisdn); got != 0 {
 		t.Errorf("paused journey sent %d", got)
+	}
+}
+
+// Ask 69. A journey's messages carry which journey sent them, through the
+// delivery report that replaces the row, into the log filter and the
+// by-journey usage report.
+func TestJourneyMessagesCarryTheirJourneyIntoTheLogAndTheUsageReport(t *testing.T) {
+	r := newJourneyRig(t)
+	r.h.seedContacts(r.acct, r.listID, []string{"+919876543210"}, "opted_in")
+	id := r.start(map[string]any{"type": "list_entry", "listId": r.listID}, r.send("s1"))
+	r.run()
+
+	conn, err := r.h.server.ClickHouse.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainer := &sending.Service{DB: r.h.server.DB, ClickHouse: conn, Connector: r.h.server.Connector}
+	if _, err := drainer.DrainSandboxReports(context.Background()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+
+	var page struct {
+		Messages []struct {
+			JourneyID   *string `json:"journeyId"`
+			JourneyName *string `json:"journeyName"`
+			CampaignID  *string `json:"campaignId"`
+			Status      string  `json:"status"`
+		} `json:"messages"`
+	}
+	r.h.do(http.MethodGet, "/v1/messages?journeyId="+id, r.acct.Token, nil).decode(t, &page)
+	if len(page.Messages) != 1 {
+		t.Fatalf("messages for the journey = %d, want 1", len(page.Messages))
+	}
+	got := page.Messages[0]
+	if got.JourneyID == nil || *got.JourneyID != id || got.CampaignID != nil {
+		t.Errorf("journeyId = %v, campaignId = %v; want the journey and no campaign",
+			got.JourneyID, got.CampaignID)
+	}
+	if got.JourneyName == nil || *got.JourneyName != "Engine test" {
+		t.Errorf("journeyName = %v, want Engine test", got.JourneyName)
+	}
+
+	var other struct {
+		Messages []any `json:"messages"`
+	}
+	r.h.do(http.MethodGet, "/v1/messages?journeyId=00000000-0000-0000-0000-000000000001",
+		r.acct.Token, nil).decode(t, &other)
+	if len(other.Messages) != 0 {
+		t.Errorf("an unrelated journey filter returned %d messages", len(other.Messages))
+	}
+
+	var usage struct {
+		ByJourney []struct {
+			JourneyID    string `json:"journeyId"`
+			MessageCount int    `json:"messageCount"`
+		} `json:"byJourney"`
+	}
+	r.h.do(http.MethodGet, "/v1/billing/usage", r.acct.Token, nil).decode(t, &usage)
+	if len(usage.ByJourney) != 1 || usage.ByJourney[0].JourneyID != id ||
+		usage.ByJourney[0].MessageCount != 1 {
+		t.Errorf("byJourney = %+v, want one row for the journey with 1 message "+
+			"(the message status was %q)", usage.ByJourney, got.Status)
 	}
 }

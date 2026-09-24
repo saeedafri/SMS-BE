@@ -615,6 +615,7 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		CampaignName: current.CampaignName, DeliveredChannel: current.DeliveredChannel,
 		Status: string(to), Segments: current.Segments, Currency: current.Currency,
 		CostMinor: current.CostMinor, CampaignID: current.CampaignID,
+		JourneyID: current.JourneyID, JourneyName: current.JourneyName,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 	}
 	if report.Delivered {

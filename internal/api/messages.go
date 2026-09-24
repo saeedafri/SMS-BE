@@ -55,6 +55,9 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if request.Params.CampaignId != nil {
 		filter.CampaignID = request.Params.CampaignId
 	}
+	if request.Params.JourneyId != nil {
+		filter.JourneyID = request.Params.JourneyId
+	}
 	page, ok := pageNumber(request.Params.Page)
 	if !ok {
 		return gen.ListMessages422JSONResponse(
@@ -423,6 +426,8 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 	entry.Status = gen.MessageStatus(messaging.ContractStatus(messaging.State(record.Status)))
 	entry.CampaignId = record.CampaignID
 	entry.CampaignName = record.CampaignName
+	entry.JourneyId = record.JourneyID
+	entry.JourneyName = record.JourneyName
 	entry.Channel = gen.ChannelId(record.Channel)
 	if record.ErrorClass != nil && *record.ErrorClass != "" {
 		// Nullable oneOf in the contract, so a generated union type.

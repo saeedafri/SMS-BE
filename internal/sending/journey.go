@@ -37,7 +37,9 @@ const (
 // ponytail: resolves the leg per contact, several queries each; cache per
 // journey step per cycle if journeys ever carry campaign-sized volume.
 func (s *Service) SendJourneyStep(ctx context.Context, identity store.Identity,
-	listID *uuid.UUID, senderID, templateID uuid.UUID, contact store.Contact) (JourneyOutcome, error) {
+	journey store.Journey, senderID, templateID uuid.UUID, contact store.Contact) (JourneyOutcome, error) {
+
+	listID := journey.TriggerListID
 
 	tenantStatus, err := store.TenantStatus(ctx, s.DB, identity)
 	if err != nil {
@@ -58,6 +60,7 @@ func (s *Service) SendJourneyStep(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return "", err
 	}
+	leg.journeyID, leg.journeyName = &journey.ID, &journey.Name
 
 	channel := leg.sender.Channel
 	if (channel == "EMAIL" && contact.EmailSuppressed) ||

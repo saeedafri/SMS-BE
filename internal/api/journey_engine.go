@@ -125,7 +125,7 @@ func (s *Server) advanceEnrollment(ctx context.Context, service *sending.Service
 			e.NextRunAt = now.Add(journeyRetry)
 			return errors.Join(err, store.SaveEnrollment(ctx, s.DB, identity, e))
 		}
-		outcome, err := service.SendJourneyStep(ctx, identity, journey.TriggerListID,
+		outcome, err := service.SendJourneyStep(ctx, identity, journey,
 			senderID, templateID, contact)
 		if err != nil {
 			e.NextRunAt = now.Add(journeyRetry)
