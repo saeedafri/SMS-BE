@@ -61,6 +61,45 @@ It records who was **selected**, not who was delivered to. A contact the gate
 then refuses still had their turn; counting it otherwise would hand them the
 front of the queue permanently.
 
+## 3a. Who was NOT reached — `withheld_contacts`
+
+`tenant_send_usage.withheld` counts what a cap took off. A count answers "how
+much did this cost the customer" and cannot answer the question an operator
+actually gets asked, which is **"did this particular number get the message?"**
+
+That one has no other source. A withheld contact has no message row by design,
+so nothing in ClickHouse knows the send ever considered them. Deriving it later
+from the list is wrong the moment the list changes — a contact added afterwards
+would read as having been withheld by a send that never saw them. So the
+decision is recorded when it is made:
+
+```
+withheld_contacts (tenant_id, contact_id, campaign_id | journey_id, withheld_at)
+```
+
+Exactly one of `campaign_id` / `journey_id` is set, enforced by a CHECK. A
+campaign that is paused and resumed re-reads the page it stopped on, so the
+campaign rows are unique per (campaign, contact) — without that the operator
+would read a number twice the truth.
+
+Two limits worth stating rather than discovering:
+
+- When the **daily** ceiling stops a fan-out outright, the page in hand is
+  recorded but the untouched tail of the list is not. Treat the figure as "at
+  least this many" in that case. The **share** cap has no such gap: it cuts
+  every page it reads.
+- The table grows with every capped send — a lakh-contact list at 70% adds
+  thirty thousand rows a send. Comfortable for Postgres, but a tenant sending
+  daily at that size will want a retention policy. There deliberately is none
+  yet: deleting somebody's record of what we did not send is not a decision a
+  migration should make quietly.
+
+Operator read, from the box:
+
+```
+operator-admin withheld <campaign-uuid>
+```
+
 ## 4. The invariant that has not changed, and must not
 
 **Every number the customer sees is a number that actually happened.**
@@ -108,6 +147,21 @@ body: SetSendShareRequest { percent: integer|null (0-100, required), reason?: st
 operator can tell "never capped" from "capped at everything".
 
 **5.3 Audit action enum value: `tenant.send_share`.**
+
+**5.3a Optional, and only if you want it on the console:** a read for who a send
+did not reach.
+
+```
+GET /v1/operator/campaigns/{id}/withheld?page=&limit=
+operationId: listWithheldContacts
+200 -> { withheld: [{ msisdn, withheldAt, alwaysSend }], total }
+401, 403, 404
+```
+
+Operator-only and admin-gated like everything else here. The store function
+behind it (`store.ListWithheldForCampaign`) is already written and tested, so
+this is a handler and nothing else. Skip it if the CLI is enough for now — we
+would rather not add contract surface you are not going to build against.
 
 **5.4 The `403`s, as before.** Admins only — a plain `operator` may neither set
 the share nor see it. `TestTheSendCeilingNeverReachesANonAdmin` fails our build
@@ -158,3 +212,5 @@ survives still has to fit inside what is left of the day.
 | `TestTheShareRoundsUp` | 70% of 3 is 3 |
 | `TestACappedSendCarriesItsShareAndEveryExemptContact` | end to end, incl. the wallet moving by 70 not 100 |
 | `TestARepeatedCappedSendReachesDifferentPeople` | two sends over one list reach all ten |
+| `TestAWithheldContactIsNamed` | the withheld are recorded by identity, once each, and never an exempt one |
+| `TestCarriedAndWithheldTogetherAccountForEveryone` | the two records add up to the whole audience |

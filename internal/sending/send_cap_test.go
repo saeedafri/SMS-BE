@@ -406,3 +406,96 @@ func TestARepeatedCappedSendReachesDifferentPeople(t *testing.T) {
 			"the second send repeated the first one's choice", len(afterSecond))
 	}
 }
+
+// "Did this number get the message?" — the question a count cannot answer.
+//
+// A withheld contact has no message row by design, so if the identities are not
+// written down at the moment of the decision they cannot be recovered at all.
+// Deriving them later from the list is wrong the moment the list changes: a
+// contact added afterwards would read as having been withheld by a send that
+// never saw them.
+func TestAWithheldContactIsNamed(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	templateID := f.seedSMSTemplate(f.senderID, "Your order has shipped.")
+	listID, _ := f.seedList("Withheld "+uuid.NewString()[:8], 20)
+	exempt := exemptContacts(t, f, listID, 3)
+	setSharePercent(t, f, 50)
+
+	campaign := f.seedCampaign(templateID, listID, "queued", 20)
+	sent, _, err := f.service.LaunchCampaign(ctx, f.identity, campaign)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if sent != 10 {
+		t.Fatalf("sent %d of 20 at 50%%, want 10", sent)
+	}
+
+	withheld, total, err := store.ListWithheldForCampaign(ctx, sendAdmin, campaign.ID, 1, 100)
+	if err != nil {
+		t.Fatalf("list withheld: %v", err)
+	}
+	if total != 10 || len(withheld) != 10 {
+		t.Fatalf("recorded %d withheld (%d returned), want 10 — sent 10 of 20",
+			total, len(withheld))
+	}
+
+	// Every name is real and none of them is exempt: an exempt contact
+	// appearing here would mean the guarantee was broken AND mis-recorded.
+	exemptIDs := map[uuid.UUID]bool{}
+	for _, id := range exempt {
+		exemptIDs[id] = true
+	}
+	for _, one := range withheld {
+		if one.Msisdn == "" {
+			t.Errorf("a withheld row names no number: %+v", one)
+		}
+		if exemptIDs[one.ContactID] || one.AlwaysSend {
+			t.Errorf("exempt contact %s was recorded as withheld", one.Msisdn)
+		}
+	}
+
+	// Nobody is recorded twice. A paused campaign resumes by re-reading the
+	// page it stopped on, and a double-counted withholding reads as twice the
+	// truth to the operator.
+	seen := map[uuid.UUID]bool{}
+	for _, one := range withheld {
+		if seen[one.ContactID] {
+			t.Errorf("contact %s recorded as withheld twice", one.Msisdn)
+		}
+		seen[one.ContactID] = true
+	}
+}
+
+// The withheld list and the carried column are two halves of one answer, and
+// together they must account for the whole audience.
+func TestCarriedAndWithheldTogetherAccountForEveryone(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	templateID := f.seedSMSTemplate(f.senderID, "Your order has shipped.")
+	listID, _ := f.seedList("Accounting "+uuid.NewString()[:8], 20)
+	setSharePercent(t, f, 70)
+
+	campaign := f.seedCampaign(templateID, listID, "queued", 20)
+	if _, _, err := f.service.LaunchCampaign(ctx, f.identity, campaign); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	var carried int
+	if err := sendAdmin.QueryRow(ctx, `
+		SELECT count(*) FROM contacts c
+		JOIN contact_list_members m ON m.contact_id = c.id
+		WHERE m.list_id = $1 AND c.last_capped_send_at IS NOT NULL`, listID).Scan(&carried); err != nil {
+		t.Fatalf("count carried: %v", err)
+	}
+	_, withheld, err := store.ListWithheldForCampaign(ctx, sendAdmin, campaign.ID, 1, 1)
+	if err != nil {
+		t.Fatalf("count withheld: %v", err)
+	}
+	if carried+withheld != 20 {
+		t.Fatalf("%d carried + %d withheld = %d, want the whole audience of 20",
+			carried, withheld, carried+withheld)
+	}
+}

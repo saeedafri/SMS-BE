@@ -81,6 +81,14 @@ func (s *Service) SendJourneyStep(ctx context.Context, identity store.Identity,
 	// a campaign, and harder to notice because nobody is watching a journey's
 	// recipient count.
 	if !contact.AlwaysSend && allowance.Room(1) == 0 {
+		// Recorded for the same reason a campaign's cut is: a held contact has
+		// no message row, so without this there is nothing anywhere saying the
+		// journey ever considered them.
+		if err := store.RecordWithheldForJourney(ctx, s.DB, identity,
+			journey.ID, contact.ID); err != nil && s.Logger != nil {
+			s.Logger.Warn("journey hold not recorded",
+				"journey", journey.ID, "contact", contact.ID, "error", err)
+		}
 		return JourneyHeld, nil
 	}
 	balances, err := store.ListWalletBalances(ctx, s.DB, identity)

@@ -260,3 +260,100 @@ func CountAlwaysSendOnChannel(ctx context.Context, pool *pgxpool.Pool, id Identi
 	}
 	return total, nil
 }
+
+// WithheldContact is one contact a cap did not carry, as the operator reads it.
+type WithheldContact struct {
+	ContactID  uuid.UUID
+	Msisdn     string
+	Email      *string
+	AlwaysSend bool
+	WithheldAt time.Time
+}
+
+// RecordWithheldContacts writes down who a capped send did not carry.
+//
+// ON CONFLICT DO NOTHING because a paused campaign resumes by re-reading the
+// page it stopped on: without it the same withholding is recorded twice and the
+// operator reads a number twice the truth.
+func RecordWithheldContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID, contactIDs []uuid.UUID) error {
+
+	if len(contactIDs) == 0 {
+		return nil
+	}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO withheld_contacts (tenant_id, contact_id, campaign_id)
+			SELECT $1, unnest($2::uuid[]), $3
+			ON CONFLICT (campaign_id, contact_id) WHERE campaign_id IS NOT NULL
+			DO NOTHING`, id.TenantID, contactIDs, campaignID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: record withheld contacts: %w", err)
+	}
+	return nil
+}
+
+// RecordWithheldForJourney writes down one contact a journey step could not
+// carry because the day's ceiling was spent. No uniqueness guard: a journey
+// legitimately reconsiders the same contact on a later cycle, and each refusal
+// is its own fact.
+func RecordWithheldForJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	journeyID, contactID uuid.UUID) error {
+
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO withheld_contacts (tenant_id, contact_id, journey_id)
+			VALUES ($1, $2, $3)`, id.TenantID, contactID, journeyID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: record withheld for journey: %w", err)
+	}
+	return nil
+}
+
+// ListWithheldForCampaign is the answer to "did this number get the message".
+//
+// Operator-side: it takes a pool that can see across tenants, and no tenant
+// route reads it. A customer discovering a list of people we chose not to
+// message is the whole mechanism given away.
+func ListWithheldForCampaign(ctx context.Context, pool *pgxpool.Pool,
+	campaignID uuid.UUID, page, limit int) ([]WithheldContact, int, error) {
+
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	offset := pageOffset(page, limit)
+
+	var total int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM withheld_contacts WHERE campaign_id = $1`,
+		campaignID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("store: count withheld: %w", err)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT w.contact_id, c.msisdn, c.email, c.always_send, w.withheld_at
+		FROM withheld_contacts w
+		JOIN contacts c ON c.id = w.contact_id
+		WHERE w.campaign_id = $1
+		ORDER BY c.msisdn
+		LIMIT $2 OFFSET $3`, campaignID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("store: list withheld: %w", err)
+	}
+	defer rows.Close()
+
+	out := []WithheldContact{}
+	for rows.Next() {
+		var one WithheldContact
+		if err := rows.Scan(&one.ContactID, &one.Msisdn, &one.Email,
+			&one.AlwaysSend, &one.WithheldAt); err != nil {
+			return nil, 0, fmt.Errorf("store: scan withheld: %w", err)
+		}
+		out = append(out, one)
+	}
+	return out, total, rows.Err()
+}

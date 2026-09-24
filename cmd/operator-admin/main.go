@@ -74,6 +74,7 @@ func usage() error {
   operator-admin send-cap <tenant-uuid>          show the ceiling and today's usage
   operator-admin send-share <tenant-uuid> <percent|none>   share of each send this tenant may have
   operator-admin always-send <tenant-uuid> <msisdn> <on|off>   exempt one contact from the cap
+  operator-admin withheld <campaign-uuid>       who this send did NOT reach
   operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE> <carrier-agent-id>
   operator-admin rcs-connection ...  RCS operator accounts; run it for its own help
   operator-admin bans                 list addresses the abuse guard has banned
@@ -191,6 +192,11 @@ func run() error {
 			return usage()
 		}
 		return alwaysSend(ctx, pool, os.Args[2], os.Args[3], os.Args[4])
+	case "withheld":
+		if len(os.Args) < 3 {
+			return usage()
+		}
+		return withheldFor(ctx, pool, os.Args[2])
 	default:
 		return usage()
 	}
@@ -666,5 +672,40 @@ func alwaysSend(ctx context.Context, pool *pgxpool.Pool, tenant, msisdn, state s
 	}
 	fmt.Printf("%s is %s\n", msisdn,
 		map[bool]string{true: "exempt from the cap", false: "subject to the cap"}[on])
+	return nil
+}
+
+// withheldFor lists the contacts a capped send did not reach.
+//
+// The question a count cannot answer. A withheld contact has no message row by
+// design, so this table is the only place "did this particular number get it"
+// can be answered from — and it is the answer an operator needs in front of
+// them when a customer asks about one specific person.
+func withheldFor(ctx context.Context, pool *pgxpool.Pool, campaign string) error {
+	campaignID, err := uuid.Parse(strings.TrimSpace(campaign))
+	if err != nil {
+		return fmt.Errorf("%q is not a campaign uuid", campaign)
+	}
+	var name string
+	if err := pool.QueryRow(ctx,
+		`SELECT name FROM campaigns WHERE id = $1`, campaignID).Scan(&name); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("no campaign %s", campaignID)
+		}
+		return err
+	}
+
+	rows, total, err := store.ListWithheldForCampaign(ctx, pool, campaignID, 1, 500)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s (%s)\n  %d contacts withheld\n", name, campaignID, total)
+	for _, one := range rows {
+		fmt.Printf("  %-18s  withheld %s\n", one.Msisdn,
+			one.WithheldAt.Format("2006-01-02 15:04"))
+	}
+	if total > len(rows) {
+		fmt.Printf("  ... and %d more\n", total-len(rows))
+	}
 	return nil
 }

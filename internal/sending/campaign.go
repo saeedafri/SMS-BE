@@ -387,23 +387,45 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		// cap says; the rest fill the remaining room least-recently-carried
 		// first, so a repeated send reaches different people rather than
 		// cutting the same tail of the list every time.
-		var carried []store.Contact
+		var carried, cutFromPage []store.Contact
 		if allowance.ShareCapped() {
 			var cut []store.Contact
 			contacts, cut = chooseUnderCap(contacts, allowance.Share())
 			withheld += len(cut)
 			carried = contacts
+			cutFromPage = append(cutFromPage, cut...)
 		}
 
 		if allowance.Capped() {
 			room := allowance.Room(len(contacts))
 			if room <= 0 {
+				// The day's ceiling is spent. Everyone left on this page is
+				// withheld and recorded as such; the untouched tail beyond it
+				// is not, which is the documented limit of this figure.
+				cutFromPage = append(cutFromPage, contacts...)
+				withheld += len(contacts)
+				recordWithheld(ctx, s, identity, campaign.ID, cutFromPage)
 				break
 			}
 			if room < len(contacts) {
+				cutFromPage = append(cutFromPage, contacts[room:]...)
 				withheld += len(contacts) - room
 				contacts = contacts[:room]
 				carried = contacts
+			}
+		}
+
+		// WHO was withheld, not just how many. A withheld contact has no
+		// message row by design, so this table is the only place the question
+		// "did this particular number get it" can be answered from.
+		if len(cutFromPage) > 0 {
+			ids := make([]uuid.UUID, 0, len(cutFromPage))
+			for _, contact := range cutFromPage {
+				ids = append(ids, contact.ID)
+			}
+			if err := store.RecordWithheldContacts(ctx, s.DB, identity,
+				campaign.ID, ids); err != nil {
+				return sent, failed, err
 			}
 		}
 
@@ -480,6 +502,27 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		return sent, failed, err
 	}
 	return sent, failed, nil
+}
+
+// recordWithheld writes down a page's withheld contacts on the path that
+// breaks out of the loop, where the ordinary write below is not reached. A
+// failure to record is logged rather than returned: the send itself is correct,
+// and losing the audit line must not turn a finished campaign into an error.
+func recordWithheld(ctx context.Context, s *Service, identity store.Identity,
+	campaignID uuid.UUID, cut []store.Contact) {
+
+	if len(cut) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(cut))
+	for _, contact := range cut {
+		ids = append(ids, contact.ID)
+	}
+	if err := store.RecordWithheldContacts(ctx, s.DB, identity, campaignID, ids); err != nil &&
+		s.Logger != nil {
+		s.Logger.Warn("withheld contacts not recorded",
+			"campaign", campaignID, "count", len(ids), "error", err)
+	}
 }
 
 // clipToRoom reduces both legs of a campaign to what the daily ceiling admits.
