@@ -194,8 +194,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	if holdTotal > 0 {
 		if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
 			Currency: context.rate.Currency, Type: "charge", AmountMinor: holdTotal,
-			Description: fmt.Sprintf("Campaign hold (%d messages)", len(plans)),
+			Description: fmt.Sprintf("%s hold (%d messages)", context.holdKind(), len(plans)),
 			CampaignID:  context.campaignID,
+			JourneyID:   context.journeyID, JourneyName: context.journeyName,
 		}); err != nil {
 			return 0, 0, 0, err
 		}
@@ -346,6 +347,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Currency: context.rate.Currency, Type: "refund", AmountMinor: releaseTotal,
 			Description: "Released holds for messages that were not sent",
 			CampaignID:  context.campaignID,
+			JourneyID:   context.journeyID, JourneyName: context.journeyName,
 		}); err != nil {
 			// The refund did not land, so the whole hold is still out of the wallet.
 			return sent, failed, holdTotal, err
@@ -419,6 +421,24 @@ type batchContext struct {
 	// what actually carried it. Rollups stay on sender.Channel, because the
 	// cost and segments belong to the leg that sent them.
 	campaignChannel string
+}
+
+// holdKind names what a wallet hold was taken for.
+//
+// Not decoration. The wallet screen renders this description as the entry's own
+// label whenever there is no journey name to link instead, so the hardcoded
+// "Campaign hold" this replaces was a journey send telling the customer it was
+// a campaign — a false sentence on the screen about their money, which is a
+// different class of wrong from a missing id.
+//
+// journeyID and campaignID are never both set, so the branch is the whole
+// question. A leg with neither is the single-send path, which does not take a
+// page hold at all.
+func (c batchContext) holdKind() string {
+	if c.journeyID != nil {
+		return "Journey"
+	}
+	return "Campaign"
 }
 
 // recordedChannel is the channel a message row is filed under.

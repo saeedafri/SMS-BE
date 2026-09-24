@@ -2,6 +2,7 @@ package sending_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,4 +236,42 @@ func TestAScheduledCampaignIsQuotedAgainstTheDayItWillSend(t *testing.T) {
 		t.Fatalf("quoted %d for next week, want %d: that day's allowance is untouched",
 			nextWeek.Recipients, ceiling)
 	}
+}
+
+// Ask 70, the other half. A campaign's wallet entry is untouched by the fix
+// that made a journey's say "Journey": still a campaign id, no journey, and the
+// wording it has always had.
+//
+// Here rather than beside the journey test because this is where a campaign
+// actually launches and moves money — asserting the campaign side from the API
+// would mean building a second way to launch one.
+func TestACampaignsWalletEntryStillSaysCampaign(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	templateID := f.seedSMSTemplate(f.senderID, "Your order has shipped.")
+	listID, _ := f.seedList("Wallet wording "+uuid.NewString()[:8], 3)
+	campaign := f.seedCampaign(templateID, listID, "queued", 3)
+	if _, _, err := f.service.LaunchCampaign(ctx, f.identity, campaign); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	entries, _, err := store.LedgerPage(ctx, f.service.DB, f.identity, "INR", 1, 50)
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Type != "charge" || entry.CampaignID == nil || *entry.CampaignID != campaign.ID {
+			continue
+		}
+		if entry.JourneyID != nil {
+			t.Errorf("journeyId = %v on a campaign's hold", *entry.JourneyID)
+		}
+		if !strings.Contains(entry.Description, "Campaign hold") {
+			t.Errorf("description = %q, want the campaign wording left alone",
+				entry.Description)
+		}
+		return
+	}
+	t.Fatalf("no charge found for campaign %s in %d ledger entries", campaign.ID, len(entries))
 }

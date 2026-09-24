@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,4 +277,117 @@ func TestJourneyMessagesCarryTheirJourneyIntoTheLogAndTheUsageReport(t *testing.
 		t.Errorf("byJourney = %+v, want one row for the journey with 1 message "+
 			"(the message status was %q)", usage.ByJourney, got.Status)
 	}
+}
+
+// Ask 70. A journey's money says the journey's name, and never a campaign's.
+//
+// LedgerEntry has carried JourneyID/JourneyName since ask 69 and nothing wrote
+// them, so a journey's hold was recorded with a campaign id it does not have —
+// and worse, with a description hardcoded to the words "Campaign hold". That
+// string is not decoration: the wallet screen renders it as the entry's label
+// whenever there is no journey name to link instead, so a journey send has been
+// telling customers it was a campaign, on the screen about their money.
+func TestAJourneysWalletEntriesNameTheJourneyAndNotACampaign(t *testing.T) {
+	r := newJourneyRig(t)
+	r.h.seedContacts(r.acct, r.listID, []string{"+919876543210"}, "opted_in")
+	id := r.start(map[string]any{"type": "list_entry", "listId": r.listID}, r.send("s1"))
+	r.run()
+
+	var ledger struct {
+		Entries []struct {
+			Type        string  `json:"type"`
+			Description string  `json:"description"`
+			JourneyID   *string `json:"journeyId"`
+			JourneyName *string `json:"journeyName"`
+			CampaignID  *string `json:"campaignId"`
+		} `json:"entries"`
+	}
+	r.h.do(http.MethodGet, "/v1/wallet/ledger", r.acct.Token, nil).decode(t, &ledger)
+
+	var charge *struct {
+		Type        string  `json:"type"`
+		Description string  `json:"description"`
+		JourneyID   *string `json:"journeyId"`
+		JourneyName *string `json:"journeyName"`
+		CampaignID  *string `json:"campaignId"`
+	}
+	for i := range ledger.Entries {
+		if ledger.Entries[i].Type == "charge" {
+			charge = &ledger.Entries[i]
+			break
+		}
+	}
+	if charge == nil {
+		t.Fatalf("the journey sent but took no charge: %+v", ledger.Entries)
+	}
+
+	if charge.JourneyID == nil || *charge.JourneyID != id {
+		t.Errorf("journeyId = %v, want %s — the hold is not attributed to the journey "+
+			"that took it", charge.JourneyID, id)
+	}
+	if charge.JourneyName == nil || *charge.JourneyName != "Engine test" {
+		t.Errorf("journeyName = %v, want Engine test", charge.JourneyName)
+	}
+	if charge.CampaignID != nil {
+		t.Errorf("campaignId = %v on a journey's hold; no campaign was involved",
+			*charge.CampaignID)
+	}
+	// The words themselves. This is what the customer reads when there is no
+	// journey name to link, so "Campaign" here is a false statement about their
+	// money rather than a cosmetic slip.
+	if strings.Contains(charge.Description, "Campaign") {
+		t.Errorf("description = %q — a journey's hold calls itself a campaign",
+			charge.Description)
+	}
+	if !strings.Contains(charge.Description, "Journey") {
+		t.Errorf("description = %q, want it to name the journey as what took the hold",
+			charge.Description)
+	}
+}
+
+// Ask 70's second acceptance row: the REFUND carries the journey too.
+//
+// A hold is taken for the whole page before anything is submitted, so a message
+// the carrier rejects has money to give back — and that entry is a separate
+// ledger row with its own attribution. Tagging only the charge would leave a
+// journey's wallet history half-attributed: money out under the journey's name,
+// money back under nothing.
+//
+// The sandbox rejects any number ending 000 at submit, which is the release
+// path without needing a carrier to misbehave.
+func TestAJourneysRefundCarriesTheJourneyToo(t *testing.T) {
+	r := newJourneyRig(t)
+	r.h.seedContacts(r.acct, r.listID, []string{"+919876543000"}, "opted_in")
+	id := r.start(map[string]any{"type": "list_entry", "listId": r.listID}, r.send("s1"))
+	r.run()
+
+	var ledger struct {
+		Entries []struct {
+			Type        string  `json:"type"`
+			Description string  `json:"description"`
+			JourneyID   *string `json:"journeyId"`
+			JourneyName *string `json:"journeyName"`
+			CampaignID  *string `json:"campaignId"`
+		} `json:"entries"`
+	}
+	r.h.do(http.MethodGet, "/v1/wallet/ledger", r.acct.Token, nil).decode(t, &ledger)
+
+	for _, entry := range ledger.Entries {
+		if entry.Type != "refund" {
+			continue
+		}
+		if entry.JourneyID == nil || *entry.JourneyID != id {
+			t.Errorf("refund journeyId = %v, want %s — the money came back to a "+
+				"journey that the entry does not name", entry.JourneyID, id)
+		}
+		if entry.JourneyName == nil || *entry.JourneyName != "Engine test" {
+			t.Errorf("refund journeyName = %v, want Engine test", entry.JourneyName)
+		}
+		if entry.CampaignID != nil {
+			t.Errorf("refund campaignId = %v; no campaign was involved", *entry.CampaignID)
+		}
+		return
+	}
+	t.Fatalf("the rejected send released no hold, so there is no refund to attribute: %+v",
+		ledger.Entries)
 }
