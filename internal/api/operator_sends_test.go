@@ -45,17 +45,18 @@ type opSentBy struct {
 }
 
 type opMessage struct {
-	ID          string    `json:"id"`
-	TenantName  string    `json:"tenantName"`
-	Source      string    `json:"source"`
-	To          string    `json:"to"`
-	Status      string    `json:"status"`
-	State       string    `json:"state"`
-	ErrorCode   *string   `json:"errorCode"`
-	SentBy      *opSentBy `json:"sentBy"`
-	DeliveredAt *string   `json:"deliveredAt"`
-	ReadAt      *string   `json:"readAt"`
-	Events      []struct {
+	ID           string    `json:"id"`
+	TenantName   string    `json:"tenantName"`
+	CampaignName *string   `json:"campaignName"`
+	Source       string    `json:"source"`
+	To           string    `json:"to"`
+	Status       string    `json:"status"`
+	State        string    `json:"state"`
+	ErrorCode    *string   `json:"errorCode"`
+	SentBy       *opSentBy `json:"sentBy"`
+	DeliveredAt  *string   `json:"deliveredAt"`
+	ReadAt       *string   `json:"readAt"`
+	Events       []struct {
 		To     string `json:"to"`
 		Detail string `json:"detail"`
 	} `json:"events"`
@@ -175,6 +176,9 @@ func TestOperatorSeesEveryTenantsCampaignWithItsAuthorAndOutcomes(t *testing.T) 
 	outcomes := map[string]string{}
 	for _, m := range messages.Messages {
 		outcomes[m.To] = m.Status
+		if m.CampaignName == nil || *m.CampaignName != "Diwali offer" {
+			t.Errorf("%s: campaignName = %v, want the campaign it belongs to", m.To, m.CampaignName)
+		}
 		if m.Source != "campaign" || m.TenantName == "" {
 			t.Errorf("%s: source %q tenant %q", m.To, m.Source, m.TenantName)
 		}
@@ -264,13 +268,32 @@ func TestOperatorSeesWhoSentADirectMessageAndWhetherItWasRead(t *testing.T) {
 			t.Fatalf("send to %s = %d\n%s", to, res.Code, res.Body)
 		}
 	}
+	// One we refuse outright: a number that cannot be a phone number.
+	h.do(http.MethodPost, "/v1/messages", tenant.Token, map[string]any{
+		"senderId": sender, "templateId": template, "to": "12", "body": "Your order shipped."})
 	h.drainSandbox()
+
+	var summary struct {
+		Totals struct {
+			Rejected int `json:"rejected"`
+		} `json:"totals"`
+		ByChannel []struct {
+			Channel  string `json:"channel"`
+			Messages int    `json:"messages"`
+		} `json:"byChannel"`
+	}
+	h.operatorGet(ops, "/v1/operator/messages/summary?tenantId="+tenant.TenantID.String(), &summary)
+	if summary.Totals.Rejected != 1 || len(summary.ByChannel) != 1 ||
+		summary.ByChannel[0].Channel != "SMS" || summary.ByChannel[0].Messages != 3 {
+		t.Errorf("summary = %+v, want the refusal counted under SMS, not a blank channel", summary)
+	}
 
 	var page struct {
 		Messages []opMessage `json:"messages"`
 		Total    int         `json:"total"`
 	}
-	h.operatorGet(ops, "/v1/operator/messages?source=api&tenantId="+tenant.TenantID.String(), &page)
+	h.operatorGet(ops, "/v1/operator/messages?source=api&status=delivered&tenantId="+
+		tenant.TenantID.String(), &page)
 	if page.Total != 2 {
 		t.Fatalf("direct sends = %d, want 2", page.Total)
 	}

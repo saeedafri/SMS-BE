@@ -303,9 +303,11 @@ func (s *Server) operatorMessages(ctx context.Context,
 			users = append(users, *record.SentByID)
 		case record.SentByID != nil && record.SentByKind == "api_key":
 			keys = append(keys, *record.SentByID)
-		case record.CampaignID != nil:
+		}
+		if record.CampaignID != nil {
 			campaigns = append(campaigns, *record.CampaignID)
-		case record.JourneyID != nil:
+		}
+		if record.JourneyID != nil {
 			journeys = append(journeys, *record.JourneyID)
 		}
 	}
@@ -313,7 +315,7 @@ func (s *Server) operatorMessages(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	authors, err := store.SendAuthors(ctx, pool, campaigns, journeys)
+	owners, err := store.SendOwners(ctx, pool, campaigns, journeys)
 	if err != nil {
 		return nil, err
 	}
@@ -346,9 +348,18 @@ func (s *Server) operatorMessages(ctx context.Context,
 			}
 			message.SentBy = sentBy
 		case record.CampaignID != nil:
-			message.SentBy = sentByAuthor(authors[*record.CampaignID], "campaign")
+			message.SentBy = sentByAuthor(owners[*record.CampaignID].Author, "campaign")
 		case record.JourneyID != nil:
-			message.SentBy = sentByAuthor(authors[*record.JourneyID], "journey")
+			message.SentBy = sentByAuthor(owners[*record.JourneyID].Author, "journey")
+		}
+		// The send path writes a journey's name onto its messages and not a
+		// campaign's, so the name comes from the owner row when the message
+		// has none.
+		if record.CampaignID != nil && message.CampaignName == nil {
+			message.CampaignName = nonEmpty(owners[*record.CampaignID].Name)
+		}
+		if record.JourneyID != nil && message.JourneyName == nil {
+			message.JourneyName = nonEmpty(owners[*record.JourneyID].Name)
 		}
 		out = append(out, message)
 	}

@@ -22,6 +22,13 @@ type Author struct {
 	Email  *string
 }
 
+// SendOwner is a campaign or journey as a page of messages needs it: its
+// name, which campaign messages do not carry, and who is answerable for it.
+type SendOwner struct {
+	Name   string
+	Author Author
+}
+
 // OperatorCampaign is one campaign row in the console, with its tenant and
 // the person who created it.
 type OperatorCampaign struct {
@@ -453,6 +460,8 @@ func MessageEvents(ctx context.Context, conn driver.Conn, tenantID,
 }
 
 // MessageTally is one group of the summary: a tenant, a channel and a status.
+// Channel is the one that carried the message, or for a message that never
+// left — a refusal — the one it was sent on, so no group is ever blank.
 type MessageTally struct {
 	TenantID  uuid.UUID
 	Channel   string
@@ -475,7 +484,7 @@ func TallyOperatorMessages(ctx context.Context, conn driver.Conn,
 
 	where, args := filter.where()
 	rows, err := conn.Query(ctx, `
-		SELECT tenant_id, `+deliveredChannelColumn+` AS carried, status, count(),
+		SELECT tenant_id, coalesce(delivered_channel, channel) AS carried, status, count(),
 		       countIf(read_at IS NOT NULL), sum(segments), sum(cost_minor), currency
 		FROM messages FINAL WHERE `+where+`
 		GROUP BY tenant_id, carried, status, currency`, args...)
@@ -556,21 +565,21 @@ func SenderLabels(ctx context.Context, pool *pgxpool.Pool,
 	return out, nil
 }
 
-// SendAuthors resolves who is answerable for a page of campaign and journey
-// messages: a campaign's creator, and whoever last switched a journey on (its
-// creator, if nobody is recorded as having done so).
-func SendAuthors(ctx context.Context, pool *pgxpool.Pool,
-	campaigns, journeys []uuid.UUID) (map[uuid.UUID]Author, error) {
+// SendOwners resolves the campaigns and journeys behind a page of messages:
+// the name, and who is answerable — a campaign's creator, and whoever last
+// switched a journey on (its creator, if nobody is recorded as having done so).
+func SendOwners(ctx context.Context, pool *pgxpool.Pool,
+	campaigns, journeys []uuid.UUID) (map[uuid.UUID]SendOwner, error) {
 
-	out := map[uuid.UUID]Author{}
+	out := map[uuid.UUID]SendOwner{}
 	if len(campaigns) == 0 && len(journeys) == 0 {
 		return out, nil
 	}
 	rows, err := pool.Query(ctx, `
-		SELECT id, created_by_user_id, created_by_name, created_by_email
+		SELECT id, name, created_by_user_id, created_by_name, created_by_email
 		FROM campaigns WHERE id = ANY($1)
 		UNION ALL
-		SELECT id, coalesce(activated_by_user_id, created_by_user_id),
+		SELECT id, name, coalesce(activated_by_user_id, created_by_user_id),
 		       coalesce(activated_by_name, created_by_name),
 		       coalesce(activated_by_email, created_by_email)
 		FROM journeys WHERE id = ANY($2)`, campaigns, journeys)
@@ -580,11 +589,12 @@ func SendAuthors(ctx context.Context, pool *pgxpool.Pool,
 	defer rows.Close()
 	for rows.Next() {
 		var id uuid.UUID
-		var author Author
-		if err := rows.Scan(&id, &author.UserID, &author.Name, &author.Email); err != nil {
+		var owner SendOwner
+		if err := rows.Scan(&id, &owner.Name, &owner.Author.UserID, &owner.Author.Name,
+			&owner.Author.Email); err != nil {
 			return nil, err
 		}
-		out[id] = author
+		out[id] = owner
 	}
 	return out, rows.Err()
 }
