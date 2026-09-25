@@ -355,6 +355,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 
 	messageID := uuid.New()
 	now := time.Now().UTC()
+	sentByKind, sentByID := identity.Sender()
 
 	if gateErr != nil {
 		code := messaging.GateFailureCode(gateErr)
@@ -367,6 +368,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 			Status: string(messaging.StateRejected), ErrorCode: &code,
 			Segments: uint8(segments), CostMinor: 0, Currency: rate.Currency,
 			CampaignID: request.CampaignID, CreatedAt: now, UpdatedAt: now, Version: 1,
+			SentByKind: sentByKind, SentByID: sentByID,
 		}, "", string(messaging.StateRejected), code); err != nil {
 			return SendResult{}, err
 		}
@@ -403,6 +405,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CampaignID: request.CampaignID, Carrier: carrier, RouteID: routeID,
 		DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt:        now, UpdatedAt: now, Version: 1,
+		SentByKind: sentByKind, SentByID: sentByID,
 	}, "", string(messaging.StateQueued), ""); err != nil {
 		return SendResult{}, err
 	}
@@ -455,6 +458,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: outcome.ref,
 		Carrier: carrier, RouteID: routeID, DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
+		SentByKind: sentByKind, SentByID: sentByID,
 	}
 	update.ErrorCode, update.ErrorClass = outcome.codes()
 	if outcome.release {
@@ -575,6 +579,17 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 
 	from := messaging.State(current.Status)
 
+	// A read receipt for a message already delivered is not a transition — the
+	// message stays delivered — but it is the strongest proof of receipt there
+	// is, from the handset itself, so it is written onto the row. Only once:
+	// a replayed READ must not move read_at.
+	if report.Read && from == messaging.StateDelivered {
+		if current.ReadAt != nil {
+			return nil
+		}
+		return s.markRead(ctx, identity, current, report.OccurredAt)
+	}
+
 	// Replayed receipts are common: carriers retry, and a terminal message must
 	// not move again. Refusing the transition here is what makes the ingest
 	// path idempotent.
@@ -616,10 +631,16 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		Status: string(to), Segments: current.Segments, Currency: current.Currency,
 		CostMinor: current.CostMinor, CampaignID: current.CampaignID,
 		JourneyID: current.JourneyID, JourneyName: current.JourneyName,
+		SentByKind: current.SentByKind, SentByID: current.SentByID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 	}
 	if report.Delivered {
 		record.DeliveredAt = &occurred
+		// A READ that arrives with no DELIVERED before it (carriers do skip
+		// it) settles the message and records the read in the same write.
+		if report.Read {
+			record.ReadAt = &occurred
+		}
 	} else {
 		record.CostMinor = 0
 		if report.ErrorCode != "" {
@@ -636,6 +657,33 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		s.Settled(ctx, identity, record)
 	}
 	return nil
+}
+
+// markRead writes the next version of a delivered message with read_at set.
+// Nothing else changes: no money moves and no rollup counts it again, because
+// the message was already counted as delivered.
+func (s *Service) markRead(ctx context.Context, identity store.Identity,
+	current store.MessageRecord, at time.Time) error {
+
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	record := current
+	record.TenantID = identity.TenantID
+	record.ReadAt = &at
+	record.UpdatedAt = time.Now().UTC()
+	record.Version = current.Version + 1
+	if record.FraudFlag == "" {
+		record.FraudFlag = "none"
+	}
+	if err := store.InsertMessages(ctx, s.ClickHouse, []store.MessageRecord{record}); err != nil {
+		return err
+	}
+	return store.InsertMessageEvents(ctx, s.ClickHouse, []store.MessageEvent{{
+		TenantID: identity.TenantID, MessageID: current.ID,
+		FromState: current.Status, ToState: current.Status,
+		Detail: "read", OccurredAt: at,
+	}})
 }
 
 // release returns held money to the wallet.

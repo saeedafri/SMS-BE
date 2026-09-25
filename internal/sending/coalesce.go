@@ -594,6 +594,7 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 			msisdn = plan.pending.request.Msisdn
 		}
 		plan.createdAt = now
+		sentByKind, sentByID := plan.pending.identity.Sender()
 		records = append(records, store.MessageRecord{
 			TenantID: plan.pending.identity.TenantID, ID: plan.messageID,
 			Channel: plan.sender.Channel, Country: plan.sender.Country,
@@ -604,6 +605,7 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 			Carrier: plan.carrier, RouteID: plan.routeID,
 			DeliveredChannel: carriedBy(plan.sender.Channel, plan.refusal != ""),
 			CreatedAt:        now, UpdatedAt: now, Version: 1,
+			SentByKind: sentByKind, SentByID: sentByID,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: plan.pending.identity.TenantID, MessageID: plan.messageID,
@@ -708,7 +710,9 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			releases[plan.walletKey()] += plan.cost
 		}
 
+		sentByKind, sentByID := plan.pending.identity.Sender()
 		records = append(records, store.MessageRecord{
+			SentByKind: sentByKind, SentByID: sentByID,
 			TenantID: plan.pending.identity.TenantID, ID: plan.messageID,
 			Channel: plan.sender.Channel, Country: plan.sender.Country,
 			SenderHeader: plan.sender.Header, TemplateID: plan.pending.request.TemplateID,

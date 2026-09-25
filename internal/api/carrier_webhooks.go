@@ -168,6 +168,7 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 			CarrierRef: event.CarrierRef,
 			MessageID:  messageID.String(),
 			Delivered:  event.Delivered,
+			Read:       event.Read,
 			ErrorCode:  event.ErrorCode,
 			OccurredAt: event.OccurredAt,
 		}

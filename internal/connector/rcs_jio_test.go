@@ -236,6 +236,9 @@ func TestJioWebhookEvents(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
+		if event.Read != (name == "read") {
+			t.Errorf("%s: read = %v", name, event.Read)
+		}
 		if event.Kind != tc.kind || event.Delivered != tc.delivered || event.ErrorCode != tc.code ||
 			event.Text != tc.text || event.Vendor != "jio" || event.AgentID != "asst" {
 			t.Errorf("%s = %+v", name, event)

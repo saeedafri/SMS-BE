@@ -105,6 +105,19 @@ func TestAReadReceiptCountsAsDelivered(t *testing.T) {
 		if !event.Delivered {
 			t.Errorf("%s: a read receipt did not count as delivered", vendor)
 		}
+		if !event.Read {
+			t.Errorf("%s: a read receipt was not marked as a read", vendor)
+		}
+	}
+	for vendor, parse := range map[string]func([]byte) (RCSEvent, error){
+		"airtel": ParseAirtelWebhook, "vi": ParseViWebhook} {
+		event, err := parse([]byte(`{"messageId":"m1","eventType":"DELIVERED"}`))
+		if err != nil {
+			t.Fatalf("%s: %v", vendor, err)
+		}
+		if event.Read {
+			t.Errorf("%s: a delivery receipt was taken for a read", vendor)
+		}
 	}
 }
 

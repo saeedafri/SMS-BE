@@ -365,6 +365,10 @@ func NewRouter(s *Server) http.Handler {
 	// caller's tenant exactly like every other route.
 	s.mountEventRoutes(r)
 
+	// The operator's view of every tenant's sends. Not in the contract yet;
+	// see operator_sends.go.
+	s.mountOperatorSendRoutes(r)
+
 	// Reading an uploaded asset back. Mounted directly because the contract
 	// declares the upload and documents the URL as opaque — the read is ours to
 	// shape, and a signature rather than a session is what authorises it, since

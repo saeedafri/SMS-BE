@@ -173,8 +173,10 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    sender_id, template_id, fallback_channel, fallback_sender_id,
 			    fallback_template_id, status, scheduled_at, recipients,
 			    segments_per_message_min, segments_per_message_max,
-			    cost_minor_min, cost_minor_max, currency, retry_of, held_until, description)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,nullif($21,''))
+			    cost_minor_min, cost_minor_max, currency, retry_of, held_until, description,
+			    created_by_user_id, created_by_name, created_by_email)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,nullif($21,''),
+			    $22, nullif($23,''), nullif($24,''))
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
@@ -183,6 +185,7 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			campaign.SegmentsPerMessageMin, campaign.SegmentsPerMessageMax,
 			campaign.CostMinorMin, campaign.CostMinorMax,
 			campaign.Currency, campaign.RetryOf, campaign.HeldUntil, campaign.Description,
+			userOrNil(id.UserID), id.Name, id.Email,
 		).Scan(&newID); err != nil {
 			return err
 		}

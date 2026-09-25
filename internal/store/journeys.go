@@ -121,11 +121,13 @@ func CreateJourney(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		var err error
 		created, err = scanJourney(tx.QueryRow(ctx, `
 			INSERT INTO journeys (tenant_id, name, trigger_type, trigger_list_id,
-			    trigger_run_at, steps, recipients, description)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''))
+			    trigger_run_at, steps, recipients, description,
+			    created_by_user_id, created_by_name, created_by_email)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,nullif($8,''),$9,nullif($10,''),nullif($11,''))
 			RETURNING `+journeyColumns,
 			id.TenantID, journey.Name, journey.TriggerType, journey.TriggerListID,
-			journey.TriggerRunAt, journey.Steps, journey.Recipients, journey.Description))
+			journey.TriggerRunAt, journey.Steps, journey.Recipients, journey.Description,
+			userOrNil(id.UserID), id.Name, id.Email))
 		return err
 	})
 	if err != nil {
@@ -149,9 +151,17 @@ func SetJourneyStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    activated_at = CASE
 			        WHEN $2 = 'active' AND activated_at IS NULL THEN now()
 			        ELSE activated_at END,
+			    -- Whoever switched it on most recently. A transition with no
+			    -- user behind it leaves the last one standing.
+			    activated_by_user_id = CASE WHEN $2 = 'active' AND $3::uuid IS NOT NULL
+			        THEN $3 ELSE activated_by_user_id END,
+			    activated_by_name = CASE WHEN $2 = 'active' AND $3::uuid IS NOT NULL
+			        THEN nullif($4,'') ELSE activated_by_name END,
+			    activated_by_email = CASE WHEN $2 = 'active' AND $3::uuid IS NOT NULL
+			        THEN nullif($5,'') ELSE activated_by_email END,
 			    updated_at = now()
 			WHERE id = $1
-			RETURNING `+journeyColumns, journeyID, status))
+			RETURNING `+journeyColumns, journeyID, status, userOrNil(id.UserID), id.Name, id.Email))
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -120,6 +120,9 @@ type DeliveryReport struct {
 	CarrierRef string
 	MessageID  string
 	Delivered  bool
+	// Read is set by an RCS read receipt, which the handset itself sends. It
+	// implies Delivered: a message cannot be read without arriving.
+	Read       bool
 	ErrorCode  string
 	OccurredAt time.Time
 }

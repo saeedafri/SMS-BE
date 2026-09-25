@@ -30,6 +30,30 @@ type Identity struct {
 	MFAEnabled   bool
 }
 
+// Sender is who a message is recorded as sent by: the dashboard user behind a
+// session, or the API key when there is no user. Empty for the scheduler and
+// the journey engine, which act for a tenant rather than as anyone.
+func (id Identity) Sender() (string, *uuid.UUID) {
+	switch {
+	case id.UserID != uuid.Nil:
+		user := id.UserID
+		return "user", &user
+	case id.SessionID != uuid.Nil:
+		key := id.SessionID
+		return "api_key", &key
+	}
+	return "", nil
+}
+
+// userOrNil is a user id for a nullable column: the zero id, which a
+// background job carries, is nobody rather than a user that does not exist.
+func userOrNil(user uuid.UUID) *uuid.UUID {
+	if user == uuid.Nil {
+		return nil
+	}
+	return &user
+}
+
 // ResolveSession maps a token hash to its session, tenant and user. It calls a
 // SECURITY DEFINER function because RLS on `sessions` cannot be satisfied
 // before the tenant is known — see migration 00004 for the full reasoning.

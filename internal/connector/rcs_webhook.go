@@ -63,6 +63,9 @@ type RCSEvent struct {
 	// and carriers do sometimes skip the delivery event.
 	Delivered bool
 
+	// Read is true for a read receipt, on top of Delivered.
+	Read bool
+
 	// ErrorCode is set on a failure, in Relay's vocabulary rather than the
 	// carrier's.
 	ErrorCode string
@@ -165,6 +168,7 @@ func ParseAirtelWebhook(payload []byte) (RCSEvent, error) {
 	case "DELIVERED", "READ":
 		event.Kind = RCSEventDelivery
 		event.Delivered = true
+		event.Read = body.EventType == "READ"
 		return event, nil
 
 	case "TTL_EXPIRATION_REVOKED", "TTL_EXPIRATION_REVOKE_FAILED":
@@ -301,6 +305,7 @@ func ParseViWebhook(payload []byte) (RCSEvent, error) {
 	case "DELIVERED", "READ":
 		event.Kind = RCSEventDelivery
 		event.Delivered = true
+		event.Read = body.EventType == "READ"
 	case "FAILED":
 		event.Kind = RCSEventDelivery
 		event.ErrorCode = "carrier_failed"

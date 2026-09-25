@@ -460,6 +460,7 @@ func ParseJioWebhook(payload []byte) (RCSEvent, error) {
 	switch body.EntityType + ":" + body.Entity.EventType {
 	case "USER_EVENT:MESSAGE_DELIVERED", "USER_EVENT:MESSAGE_READ":
 		event.Kind, event.Delivered = RCSEventDelivery, true
+		event.Read = event.Raw == "USER_EVENT:MESSAGE_READ"
 	case "STATUS_EVENT:SEND_MESSAGE_FAILURE":
 		event.Kind, event.ErrorCode = RCSEventDelivery, "carrier_failed"
 		if body.Entity.Error != nil && body.Entity.Error.ErrCode != 0 {

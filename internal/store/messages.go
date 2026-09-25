@@ -51,8 +51,16 @@ type MessageRecord struct {
 	CreatedAt        time.Time
 	SentAt           *time.Time
 	DeliveredAt      *time.Time
-	UpdatedAt        time.Time
-	Version          uint64
+	// ReadAt is when an RCS read receipt said the recipient opened it.
+	ReadAt    *time.Time
+	UpdatedAt time.Time
+	Version   uint64
+
+	// SentByKind and SentByID name who sent a message that no campaign or
+	// journey owns: "user" and the dashboard user, or "api_key" and the key.
+	// Empty on campaign and journey messages, whose author is on their own row.
+	SentByKind string
+	SentByID   *uuid.UUID
 }
 
 // InsertMessages writes a batch. ClickHouse is built for batched inserts and
@@ -71,7 +79,8 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 		conversation_id, channel, country, sender_header, template_id, msisdn,
 		email, status, delivered_channel, error_code, error_class, fraud_flag,
 		segments, cost_minor, currency, route_id, carrier_ref, carrier,
-		created_at, sent_at, delivered_at, updated_at, version)`)
+		created_at, sent_at, delivered_at, updated_at, version,
+		sent_by_kind, sent_by_id, read_at)`)
 	if err != nil {
 		return fmt.Errorf("store: prepare message batch: %w", err)
 	}
@@ -86,6 +95,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.RouteID, record.CarrierRef, record.Carrier,
 			record.CreatedAt, record.SentAt, record.DeliveredAt,
 			record.UpdatedAt, record.Version,
+			record.SentByKind, record.SentByID, record.ReadAt,
 		); err != nil {
 			return fmt.Errorf("store: append message: %w", err)
 		}
@@ -261,7 +271,8 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		SELECT id, status, segments, cost_minor, currency, campaign_id,
 		       campaign_name, journey_id, journey_name, channel, country, sender_header, template_id,
 		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
-		       created_at, sent_at, version
+		       created_at, sent_at, delivered_at, read_at, sent_by_kind, sent_by_id,
+		       error_code, error_class, version
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
@@ -270,7 +281,8 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		&record.Channel, &record.Country, &record.SenderHeader, &record.TemplateID,
 		&record.Msisdn, &record.Email, &record.RouteID, &record.CarrierRef,
 		&record.Carrier, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
-		&record.Version)
+		&record.DeliveredAt, &record.ReadAt, &record.SentByKind, &record.SentByID,
+		&record.ErrorCode, &record.ErrorClass, &record.Version)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
