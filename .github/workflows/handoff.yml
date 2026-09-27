@@ -1,0 +1,96 @@
+name: Handoff
+
+on:
+  repository_dispatch:
+    types: [handoff]
+
+# Fill this in when installing this template into a repo:
+#   CHECKOUT_SOURCE_REPO: "true" only if THIS repo's own CLAUDE.md/AGENTS.md
+#     requires a FULL checkout of the other repo (not just the handoff file)
+#     before doing any work (true for SMS-BE today, per its CLAUDE.md rule #1;
+#     false for sms-platform-frontend today, since it reads openapi.json from
+#     its own committed copy instead).
+#   SOURCE_CHECKOUT_LINK: only used when CHECKOUT_SOURCE_REPO is "true" — the
+#     path, relative to this repo's root, where this repo's own rules expect
+#     the other repo to be checked out (e.g. "../SMS-UI" for SMS-BE).
+env:
+  CHECKOUT_SOURCE_REPO: "true"
+  SOURCE_CHECKOUT_LINK: "../SMS-UI"
+
+concurrency:
+  group: handoff-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    if: >-
+      github.event.client_payload.source_repo == 'SAQIBJH/sms-platform-frontend' &&
+      startsWith(github.event.client_payload.handoff_path, 'docs/HANDOFF_TO_BACKEND_') &&
+      endsWith(github.event.client_payload.handoff_path, '.md') &&
+      !contains(github.event.client_payload.handoff_path, '..')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Keep helper checkouts out of this repo's git tracking
+        run: |
+          mkdir -p .git/info
+          printf '_handoff-source/\n_sources/\n' >> .git/info/exclude
+
+      - name: Fetch the handoff file
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.source_repo }}
+          ref: ${{ github.event.client_payload.ref }}
+          token: ${{ secrets.SOURCE_REPO_READ_TOKEN }}
+          path: _handoff-source
+          sparse-checkout: |
+            ${{ github.event.client_payload.handoff_path }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Checkout source repo in full (contract/context dependency)
+        if: env.CHECKOUT_SOURCE_REPO == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.client_payload.source_repo }}
+          ref: ${{ github.event.client_payload.ref }}
+          token: ${{ secrets.SOURCE_REPO_READ_TOKEN }}
+          path: _sources/full
+          persist-credentials: false
+
+      - name: Link the full source checkout to this repo's expected path
+        if: env.CHECKOUT_SOURCE_REPO == 'true'
+        run: |
+          : "${SOURCE_CHECKOUT_LINK:?SOURCE_CHECKOUT_LINK must be set when CHECKOUT_SOURCE_REPO is true}"
+          mkdir -p "$(dirname "$GITHUB_WORKSPACE/${{ env.SOURCE_CHECKOUT_LINK }}")"
+          ln -s "$GITHUB_WORKSPACE/_sources/full" "$GITHUB_WORKSPACE/${{ env.SOURCE_CHECKOUT_LINK }}"
+
+      - name: Run Claude Code on the handoff
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            A handoff is waiting for you at
+            `_handoff-source/${{ github.event.client_payload.handoff_path }}`
+            (originally from ${{ github.event.client_payload.source_repo }},
+            ref ${{ github.event.client_payload.ref }}).
+            Read it, follow this repo's own CLAUDE.md/AGENTS.md, and act on it.
+            When the work is done, commit it on a new branch — never push to
+            main or master directly — and open a pull request describing what
+            you did and why, referencing the handoff file.
+          claude_args: |
+            --permission-mode dontAsk
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*)"
+            --max-turns 40
+        env:
+          # gh pr create needs this. The default GITHUB_TOKEN works, but GitHub
+          # does not fire pull_request-triggered workflows (CI, review gates)
+          # for PRs opened with it — set PR_TOKEN (a PAT with contents+PR write
+          # on this repo) if you need this repo's own CI to run on the result.
+          GH_TOKEN: ${{ secrets.PR_TOKEN || github.token }}
