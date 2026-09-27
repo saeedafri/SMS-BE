@@ -43,7 +43,7 @@ jobs:
             exit 0
           fi
 
-          repo_slug=$(git remote get-url origin | sed -E 's#.*github\.com[:/](.+)\.git#\1#')
+          repo_slug="$GITHUB_REPOSITORY"
 
           while IFS= read -r file; do
             echo "dispatching handoff: $file -> $TARGET_REPO"
