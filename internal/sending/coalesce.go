@@ -595,7 +595,13 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 		}
 		plan.createdAt = now
 		sentByKind, sentByID := plan.pending.identity.Sender()
+		// A refused message was sent nothing, so there is no text to show.
+		var text *string
+		if plan.refusal == "" {
+			text = storedText(plan.message.text(plan.sender.Channel), plan.pending.request.OneTimeCode)
+		}
 		records = append(records, store.MessageRecord{
+			RenderedText: text, OTP: plan.pending.request.OneTimeCode,
 			TenantID: plan.pending.identity.TenantID, ID: plan.messageID,
 			Channel: plan.sender.Channel, Country: plan.sender.Country,
 			SenderHeader: plan.sender.Header, TemplateID: plan.pending.request.TemplateID,
@@ -713,6 +719,9 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 		sentByKind, sentByID := plan.pending.identity.Sender()
 		records = append(records, store.MessageRecord{
 			SentByKind: sentByKind, SentByID: sentByID,
+			OTP: plan.pending.request.OneTimeCode,
+			RenderedText: storedText(plan.message.text(plan.sender.Channel),
+				plan.pending.request.OneTimeCode),
 			TenantID: plan.pending.identity.TenantID, ID: plan.messageID,
 			Channel: plan.sender.Channel, Country: plan.sender.Country,
 			SenderHeader: plan.sender.Header, TemplateID: plan.pending.request.TemplateID,

@@ -61,6 +61,22 @@ type MessageRecord struct {
 	// Empty on campaign and journey messages, whose author is on their own row.
 	SentByKind string
 	SentByID   *uuid.UUID
+
+	// RenderedText is the string handed to the carrier, after substitution. Set
+	// when the message is queued and carried forward unchanged; nil for a
+	// refusal, a one-time code and every row written before it existed.
+	RenderedText *string
+	// OTP marks a Verify one-time-code message: its text is never stored and the
+	// receipt's own text field is blanked out of DLRRaw.
+	OTP bool
+
+	// The carrier's receipt that settled the message. All nil until one has.
+	DLRStat        *string
+	DLRErr         *string
+	DLRSubmittedAt *time.Time
+	DLRDoneAt      *time.Time
+	DLRReceivedAt  *time.Time
+	DLRRaw         *string
 }
 
 // InsertMessages writes a batch. ClickHouse is built for batched inserts and
@@ -80,7 +96,8 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 		email, status, delivered_channel, error_code, error_class, fraud_flag,
 		segments, cost_minor, currency, route_id, carrier_ref, carrier,
 		created_at, sent_at, delivered_at, updated_at, version,
-		sent_by_kind, sent_by_id, read_at)`)
+		sent_by_kind, sent_by_id, read_at, rendered_text, otp, dlr_stat, dlr_err,
+		dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw)`)
 	if err != nil {
 		return fmt.Errorf("store: prepare message batch: %w", err)
 	}
@@ -96,6 +113,8 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.CreatedAt, record.SentAt, record.DeliveredAt,
 			record.UpdatedAt, record.Version,
 			record.SentByKind, record.SentByID, record.ReadAt,
+			record.RenderedText, record.OTP, record.DLRStat, record.DLRErr,
+			record.DLRSubmittedAt, record.DLRDoneAt, record.DLRReceivedAt, record.DLRRaw,
 		); err != nil {
 			return fmt.Errorf("store: append message: %w", err)
 		}
@@ -272,7 +291,8 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		       campaign_name, journey_id, journey_name, channel, country, sender_header, template_id,
 		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
 		       created_at, sent_at, delivered_at, read_at, sent_by_kind, sent_by_id,
-		       error_code, error_class, version
+		       error_code, error_class, version, rendered_text, otp, dlr_stat, dlr_err,
+		       dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
@@ -282,7 +302,9 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		&record.Msisdn, &record.Email, &record.RouteID, &record.CarrierRef,
 		&record.Carrier, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
 		&record.DeliveredAt, &record.ReadAt, &record.SentByKind, &record.SentByID,
-		&record.ErrorCode, &record.ErrorClass, &record.Version)
+		&record.ErrorCode, &record.ErrorClass, &record.Version, &record.RenderedText,
+		&record.OTP, &record.DLRStat, &record.DLRErr, &record.DLRSubmittedAt,
+		&record.DLRDoneAt, &record.DLRReceivedAt, &record.DLRRaw)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}

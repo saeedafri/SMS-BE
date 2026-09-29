@@ -254,6 +254,10 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			DeliveredChannel: carriedBy(context.sender.Channel, plan.refusal != ""),
 			CreatedAt:        now, UpdatedAt: now, Version: 1,
 		}
+		// A refused recipient was sent nothing, so there is no text to show.
+		if plan.refusal == "" {
+			record.RenderedText = storedText(plan.message.text(context.sender.Channel), false)
+		}
 		records = append(records, record)
 		events = append(events, store.MessageEvent{
 			TenantID: identity.TenantID, MessageID: plan.messageID,
@@ -327,6 +331,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Carrier: context.carrier, RouteID: context.routeID,
 			DeliveredChannel: carriedBy(context.sender.Channel, false),
 			CreatedAt:        now, SentAt: &settled, UpdatedAt: settled, Version: 2,
+			RenderedText: storedText(plan.message.text(context.sender.Channel), false),
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: identity.TenantID, MessageID: plan.messageID,

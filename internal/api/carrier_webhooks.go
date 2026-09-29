@@ -171,6 +171,9 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 			Read:       event.Read,
 			ErrorCode:  event.ErrorCode,
 			OccurredAt: event.OccurredAt,
+			// A webhook has a status and a time and no receipt line, so Raw
+			// stays empty.
+			Stat: rcsStat(event), DoneAt: event.OccurredAt,
 		}
 		// Replays are normal — carriers retry — and settle refuses to move a
 		// terminal message, so this is idempotent without a dedupe table.
@@ -215,6 +218,17 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 	default:
 		log.Debug("carrier event with no consequence")
 	}
+}
+
+// rcsStat is an RCS delivery event's status word in the receipt vocabulary.
+func rcsStat(event connector.RCSEvent) string {
+	switch {
+	case event.Read:
+		return "READ"
+	case event.Delivered:
+		return "DELIVERED"
+	}
+	return "FAILED"
 }
 
 // attributeToAgent resolves a carrier event to the tenant that owns the agent

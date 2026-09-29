@@ -69,10 +69,12 @@ type OperatorSendFilter struct {
 	// Sender matches a campaign's sender header, case-insensitively. Journeys
 	// have no single sender and ignore it.
 	Sender *string
-	From   *time.Time
-	To     *time.Time
-	Page   int
-	Limit  int
+	// CampaignID is an exact match, for a campaign list only.
+	CampaignID *uuid.UUID
+	From       *time.Time
+	To         *time.Time
+	Page       int
+	Limit      int
 }
 
 func (f OperatorSendFilter) pageLimit() (int, int) {
@@ -100,9 +102,10 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		  AND ($5::timestamptz IS NULL OR c.created_at >= $5)
 		  AND ($6::timestamptz IS NULL OR c.created_at <  $6)
 		  AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM sender_ids sf
-		       WHERE sf.id = c.sender_id AND sf.header ILIKE '%' || $7 || '%'))`
+		       WHERE sf.id = c.sender_id AND sf.header ILIKE '%' || $7 || '%'))
+		  AND ($8::uuid IS NULL OR c.id = $8)`
 	args := []any{filter.TenantID, filter.Status, filter.Channel, filter.Search,
-		filter.From, filter.To, filter.Sender}
+		filter.From, filter.To, filter.Sender, filter.CampaignID}
 
 	var total int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaigns c`+where,
@@ -123,7 +126,7 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		LEFT JOIN templates tp  ON tp.id = c.template_id
 		LEFT JOIN contact_lists l ON l.id = c.list_id`+where+`
 		ORDER BY c.created_at DESC, c.id DESC
-		LIMIT $8 OFFSET $9`, append(args, limit, offset)...)
+		LIMIT $9 OFFSET $10`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list operator campaigns: %w", err)
 	}
@@ -343,7 +346,8 @@ const operatorMessageColumns = `
 	` + deliveredChannelColumn + `, country, sender_header, template_id, msisdn, email,
 	status, error_code, error_class, segments, cost_minor, currency, carrier, route_id,
 	carrier_ref, sent_by_kind, sent_by_id, created_at, sent_at, delivered_at, read_at,
-	updated_at`
+	updated_at, rendered_text, dlr_stat, dlr_err, dlr_submitted_at, dlr_done_at,
+	dlr_received_at, dlr_raw`
 
 func scanOperatorMessage(scan func(...any) error) (MessageRecord, error) {
 	var r MessageRecord
@@ -352,8 +356,35 @@ func scanOperatorMessage(scan func(...any) error) (MessageRecord, error) {
 		&r.TemplateID, &r.Msisdn, &r.Email, &r.Status, &r.ErrorCode, &r.ErrorClass,
 		&r.Segments, &r.CostMinor, &r.Currency, &r.Carrier, &r.RouteID, &r.CarrierRef,
 		&r.SentByKind, &r.SentByID, &r.CreatedAt, &r.SentAt, &r.DeliveredAt, &r.ReadAt,
-		&r.UpdatedAt)
+		&r.UpdatedAt, &r.RenderedText, &r.DLRStat, &r.DLRErr, &r.DLRSubmittedAt,
+		&r.DLRDoneAt, &r.DLRReceivedAt, &r.DLRRaw)
 	return r, err
+}
+
+// TemplateNames resolves template ids to their names, across tenants. Joined at
+// read time, so it is the template's current name; a deleted template resolves
+// to nothing.
+func TemplateNames(ctx context.Context, pool *pgxpool.Pool,
+	ids []uuid.UUID) (map[uuid.UUID]string, error) {
+
+	out := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := pool.Query(ctx, `SELECT id, name FROM templates WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("store: template names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
 }
 
 func ListOperatorMessages(ctx context.Context, conn driver.Conn,

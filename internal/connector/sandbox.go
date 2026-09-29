@@ -78,10 +78,13 @@ func (s *Sandbox) Submit(_ context.Context, submissions []Submission) ([]Receipt
 		switch outcome {
 		case outcomeDelivered:
 			report.Delivered = true
+			report.Stat = "DELIVRD"
 		case outcomeAbsentSubscriber:
 			report.ErrorCode = "ABSENT_SUBSCRIBER"
+			report.Stat = "UNDELIV"
 		case outcomeDNDBlocked:
 			report.ErrorCode = "DND_BLOCKED"
+			report.Stat = "REJECTD"
 		}
 		reports = append(reports, report)
 	}

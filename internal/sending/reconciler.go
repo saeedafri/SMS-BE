@@ -45,7 +45,7 @@ func (s *Service) Reconcile(ctx context.Context, window time.Duration, limit int
 		err := s.settle(ctx, store.Identity{TenantID: message.TenantID},
 			connector.DeliveryReport{
 				MessageID: message.ID.String(), Delivered: false,
-				ErrorCode: "EXPIRED", OccurredAt: time.Now().UTC(),
+				ErrorCode: "EXPIRED", Stat: "EXPIRED", OccurredAt: time.Now().UTC(),
 			}, messaging.StateExpired)
 		if err != nil {
 			// One tenant must never stall the sweep for everybody else. This is

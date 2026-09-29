@@ -117,6 +117,9 @@ func (s *Server) listOperatorCampaigns(w http.ResponseWriter, r *http.Request) {
 	if sender := strings.TrimSpace(r.URL.Query().Get("sender")); sender != "" {
 		filter.Sender = &sender
 	}
+	if filter.CampaignID, ok = uuidParam(w, r.URL.Query().Get("campaignId"), "campaignId"); !ok {
+		return
+	}
 	campaigns, total, err := store.ListOperatorCampaigns(r.Context(), s.operatorPool(), filter)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -264,6 +267,34 @@ type operatorMessage struct {
 	DeliveredAt      *time.Time      `json:"deliveredAt"`
 	ReadAt           *time.Time      `json:"readAt"`
 	UpdatedAt        time.Time       `json:"updatedAt"`
+	// TemplateName is the template's name, joined when read.
+	TemplateName *string `json:"templateName"`
+	// RenderedText is the exact text handed to the carrier. Null when there is
+	// none to show: a refusal, a one-time code, a carrier-held RCS template, or
+	// a row written before it was recorded.
+	RenderedText *string `json:"renderedText"`
+	// DLR is the carrier's own receipt that settled the message, null until one
+	// has.
+	DLR *operatorMessageDLR `json:"dlr"`
+}
+
+// operatorMessageDLR is the carrier's receipt, verbatim where it can be.
+type operatorMessageDLR struct {
+	Stat        string     `json:"stat"`
+	ErrorCode   *string    `json:"errorCode"`
+	SubmittedAt *time.Time `json:"submittedAt"`
+	DoneAt      *time.Time `json:"doneAt"`
+	ReceivedAt  *time.Time `json:"receivedAt"`
+	Raw         *string    `json:"raw"`
+}
+
+func dlrOf(record store.MessageRecord) *operatorMessageDLR {
+	if record.DLRStat == nil {
+		return nil
+	}
+	return &operatorMessageDLR{Stat: *record.DLRStat, ErrorCode: nonEmpty(deref(record.DLRErr)),
+		SubmittedAt: record.DLRSubmittedAt, DoneAt: record.DLRDoneAt,
+		ReceivedAt: record.DLRReceivedAt, Raw: record.DLRRaw}
 }
 
 // messageSource says what put a message on the wire.
@@ -299,8 +330,11 @@ func (s *Server) operatorMessages(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	var users, keys, campaigns, journeys []uuid.UUID
+	var users, keys, campaigns, journeys, templates []uuid.UUID
 	for _, record := range records {
+		if record.TemplateID != nil {
+			templates = append(templates, *record.TemplateID)
+		}
 		switch {
 		case record.SentByID != nil && record.SentByKind == "user":
 			users = append(users, *record.SentByID)
@@ -322,6 +356,10 @@ func (s *Server) operatorMessages(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	templateNames, err := store.TemplateNames(ctx, pool, templates)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]operatorMessage, 0, len(records))
 	for _, record := range records {
@@ -339,7 +377,11 @@ func (s *Server) operatorMessages(ctx context.Context,
 			RouteID: record.RouteID, CarrierRef: record.CarrierRef,
 			CreatedAt: record.CreatedAt, SentAt: record.SentAt,
 			DeliveredAt: record.DeliveredAt, ReadAt: record.ReadAt,
-			UpdatedAt: record.UpdatedAt}
+			UpdatedAt: record.UpdatedAt, RenderedText: record.RenderedText,
+			DLR: dlrOf(record)}
+		if record.TemplateID != nil {
+			message.TemplateName = nonEmpty(templateNames[*record.TemplateID])
+		}
 
 		switch {
 		case record.SentByID != nil:
@@ -620,14 +662,21 @@ func (s *Server) exportOperatorMessages(w http.ResponseWriter, r *http.Request) 
 	_ = out.Write([]string{"createdAt", "tenantName", "tenantId", "source", "campaignName",
 		"journeyName", "channel", "deliveredChannel", "sender", "to", "email", "status",
 		"errorCode", "sentAt", "deliveredAt", "readAt", "segments", "costMinor",
-		"currency", "carrier", "sentByName", "sentByEmail", "sentByKeyPrefix", "messageId"})
+		"currency", "carrier", "sentByName", "sentByEmail", "sentByKeyPrefix", "messageId",
+		"templateName", "renderedText", "dlrStat", "dlrErr", "dlrSubmittedAt",
+		"dlrDoneAt", "dlrReceivedAt"})
 	for _, m := range messages {
 		row := []string{stamp(&m.CreatedAt), m.TenantName, m.TenantID.String(), m.Source,
 			deref(m.CampaignName), deref(m.JourneyName), m.Channel, deref(m.DeliveredChannel),
 			m.Sender, m.To, deref(m.Email), m.Status, deref(m.ErrorCode), stamp(m.SentAt),
 			stamp(m.DeliveredAt), stamp(m.ReadAt), strconv.Itoa(m.Segments),
 			strconv.FormatInt(m.CostMinor, 10), m.Currency, deref(m.Carrier), "", "", "",
-			m.ID.String()}
+			m.ID.String(), deref(m.TemplateName), deref(m.RenderedText), "", "", "", "", ""}
+		if m.DLR != nil {
+			row[26], row[27] = m.DLR.Stat, deref(m.DLR.ErrorCode)
+			row[28], row[29], row[30] = stamp(m.DLR.SubmittedAt), stamp(m.DLR.DoneAt),
+				stamp(m.DLR.ReceivedAt)
+		}
 		if m.SentBy != nil {
 			row[20], row[21], row[22] = deref(m.SentBy.Name), deref(m.SentBy.Email),
 				deref(m.SentBy.KeyPrefix)

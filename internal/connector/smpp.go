@@ -645,7 +645,27 @@ func smppParts(s Submission, protocol SMPPProtocol) ([]*pdu.SubmitSM, error) {
 	return parts, nil
 }
 
-var receiptField = regexp.MustCompile(`(?i)(id|stat|err|done date):(\S*)`)
+var receiptField = regexp.MustCompile(`(?i)(id|stat|err|submit date|done date):(\S*)`)
+
+// receiptText is the receipt's trailing `text:` field: the first characters of
+// the message itself, which for a one-time code is the code.
+var receiptText = regexp.MustCompile(`(?i)(text:).*$`)
+
+// BlankReceiptText empties a receipt's text field and leaves the rest of the
+// line as it was.
+func BlankReceiptText(raw string) string {
+	return receiptText.ReplaceAllString(raw, "${1}")
+}
+
+// parseReceiptTime reads a receipt date, which carries no zone.
+func parseReceiptTime(text string) (time.Time, bool) {
+	for _, layout := range []string{"0601021504", "060102150405"} {
+		if at, err := time.ParseInLocation(layout, text, receiptTime); err == nil {
+			return at.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
 
 // receiptTime is the zone an operator's receipt dates are written in. SMPP 3.4
 // receipt dates carry no zone; every operator this client binds to is Indian
@@ -676,14 +696,18 @@ func parseDeliveryReceipt(d *pdu.DeliverSM) (DeliveryReport, bool) {
 	// The done date is when the handset got it, which can be hours before the
 	// receipt reaches us. Receipt time is only the fallback.
 	occurred := time.Now().UTC()
-	for _, layout := range []string{"0601021504", "060102150405"} {
-		if at, err := time.ParseInLocation(layout, fields["done date"], receiptTime); err == nil {
-			occurred = at.UTC()
-			break
-		}
+	done, hasDone := parseReceiptTime(fields["done date"])
+	if hasDone {
+		occurred = done
 	}
 	report := DeliveryReport{CarrierRef: fields["id"], Delivered: stat == "DELIVRD",
-		OccurredAt: occurred}
+		OccurredAt: occurred, Stat: stat, ReceiptErr: fields["err"], Raw: text}
+	if hasDone {
+		report.DoneAt = done
+	}
+	if submitted, ok := parseReceiptTime(fields["submit date"]); ok {
+		report.SubmittedAt = submitted
+	}
 	if !report.Delivered {
 		report.ErrorCode = stat + ":" + fields["err"]
 	}

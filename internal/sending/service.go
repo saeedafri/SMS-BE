@@ -192,6 +192,19 @@ type SendRequest struct {
 	// Priority puts the message ahead of bulk traffic on a shared operator bind.
 	// Set for OTPs, which are useless if they arrive after the user gives up.
 	Priority bool
+
+	// OneTimeCode marks a Verify message whose body is a live code. Its text is
+	// never stored, and the carrier receipt's text field is blanked.
+	OneTimeCode bool
+}
+
+// storedText is the text a message row keeps: nil when there is none to show, and
+// always nil for a one-time code.
+func storedText(text string, oneTimeCode bool) *string {
+	if text == "" || oneTimeCode {
+		return nil
+	}
+	return &text
 }
 
 // SendResult is what happened.
@@ -324,6 +337,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// mapping — but it is the same walk over the same strings the fan-out uses,
 	// so a single send and a campaign of one cannot fill differently.
 	rendered := renderMessage(template, request.Body, request.Variables, nil)
+	// The string the carrier is handed, recorded as it goes.
+	sentText := rendered.text(sender.Channel)
 
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
@@ -368,7 +383,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 			Status: string(messaging.StateRejected), ErrorCode: &code,
 			Segments: uint8(segments), CostMinor: 0, Currency: rate.Currency,
 			CampaignID: request.CampaignID, CreatedAt: now, UpdatedAt: now, Version: 1,
-			SentByKind: sentByKind, SentByID: sentByID,
+			SentByKind: sentByKind, SentByID: sentByID, OTP: request.OneTimeCode,
 		}, "", string(messaging.StateRejected), code); err != nil {
 			return SendResult{}, err
 		}
@@ -405,7 +420,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CampaignID: request.CampaignID, Carrier: carrier, RouteID: routeID,
 		DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt:        now, UpdatedAt: now, Version: 1,
-		SentByKind: sentByKind, SentByID: sentByID,
+		SentByKind: sentByKind, SentByID: sentByID, OTP: request.OneTimeCode,
+		RenderedText: storedText(sentText, request.OneTimeCode),
 	}, "", string(messaging.StateQueued), ""); err != nil {
 		return SendResult{}, err
 	}
@@ -418,7 +434,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	entityID, dltTemplateID := s.dltIDs(ctx, identity, sender.Channel, sender.Country, template)
 	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
-		Body:    rendered.text(sender.Channel),
+		Body:    sentText,
 		Channel: sender.Channel, Country: sender.Country,
 		Carrier: carrier, DLTEntityID: entityID, DLTTemplateID: dltTemplateID,
 		Priority:          request.Priority,
@@ -458,7 +474,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		CostMinor: cost, CampaignID: request.CampaignID, CarrierRef: outcome.ref,
 		Carrier: carrier, RouteID: routeID, DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
-		SentByKind: sentByKind, SentByID: sentByID,
+		SentByKind: sentByKind, SentByID: sentByID, OTP: request.OneTimeCode,
+		RenderedText: storedText(sentText, request.OneTimeCode),
 	}
 	update.ErrorCode, update.ErrorClass = outcome.codes()
 	if outcome.release {
@@ -633,7 +650,9 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		JourneyID: current.JourneyID, JourneyName: current.JourneyName,
 		SentByKind: current.SentByKind, SentByID: current.SentByID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
+		RenderedText: current.RenderedText, OTP: current.OTP,
 	}
+	applyReceipt(&record, report)
 	if report.Delivered {
 		record.DeliveredAt = &occurred
 		// A READ that arrives with no DELIVERED before it (carriers do skip
@@ -657,6 +676,36 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		s.Settled(ctx, identity, record)
 	}
 	return nil
+}
+
+// applyReceipt records the carrier's report on the row that settles the message.
+// Only a terminal transition reaches it, and settle refuses to move a terminal
+// message again, so a replay leaves the first receipt as it was.
+//
+// A one-time code's receipt has its text field blanked before it is stored: the
+// receipt echoes the first characters of the message.
+func applyReceipt(record *store.MessageRecord, report connector.DeliveryReport) {
+	if report.Stat == "" {
+		return
+	}
+	received := time.Now().UTC()
+	stat, receiptErr := report.Stat, report.ReceiptErr
+	record.DLRStat, record.DLRErr, record.DLRReceivedAt = &stat, &receiptErr, &received
+	if !report.SubmittedAt.IsZero() {
+		submitted := report.SubmittedAt
+		record.DLRSubmittedAt = &submitted
+	}
+	if !report.DoneAt.IsZero() {
+		done := report.DoneAt
+		record.DLRDoneAt = &done
+	}
+	if report.Raw != "" {
+		raw := report.Raw
+		if record.OTP {
+			raw = connector.BlankReceiptText(raw)
+		}
+		record.DLRRaw = &raw
+	}
 }
 
 // markRead writes the next version of a delivered message with read_at set.

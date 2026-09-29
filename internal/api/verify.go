@@ -255,7 +255,7 @@ func (s *Server) CreateVerification(ctx context.Context, request gen.CreateVerif
 		body := strings.Replace(config.Body, "{{code}}", code, 1)
 		result, err := sendService.Send(ctx, identity, sending.SendRequest{
 			SenderID: senderID, TemplateID: templateID,
-			Msisdn: request.Body.Msisdn, Body: body, Priority: true,
+			Msisdn: request.Body.Msisdn, Body: body, Priority: true, OneTimeCode: true,
 		})
 		if err != nil && !messaging.IsRefusal(err) && result.FailureCode == "" {
 			return nil, err

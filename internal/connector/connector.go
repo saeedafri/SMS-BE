@@ -125,6 +125,21 @@ type DeliveryReport struct {
 	Read       bool
 	ErrorCode  string
 	OccurredAt time.Time
+
+	// The carrier's own receipt, kept as it arrived so an operator can answer
+	// "what did the network report". Stat is the status word verbatim (DELIVRD,
+	// UNDELIV, ... for SMS; DELIVERED, READ, FAILED for RCS); empty means the
+	// report carried none and no receipt is recorded.
+	Stat string
+	// ReceiptErr is the receipt's own err field. Not ErrorCode, which is ours.
+	ReceiptErr string
+	// SubmittedAt and DoneAt are the receipt's submit date and done date; zero
+	// when it named none.
+	SubmittedAt time.Time
+	DoneAt      time.Time
+	// Raw is the deliver_sm short_message exactly as received, empty for a
+	// webhook channel. Never re-formatted: it is pasted into carrier tickets.
+	Raw string
 }
 
 // InboundSMS is a handset's message to one of our addresses: a deliver_sm that
