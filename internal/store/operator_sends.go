@@ -66,6 +66,9 @@ type OperatorSendFilter struct {
 	// Search matches the campaign or journey name, and the creator's name or
 	// email, case-insensitively.
 	Search *string
+	// Sender matches a campaign's sender header, case-insensitively. Journeys
+	// have no single sender and ignore it.
+	Sender *string
 	From   *time.Time
 	To     *time.Time
 	Page   int
@@ -95,9 +98,11 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		       OR c.created_by_name ILIKE '%' || $4 || '%'
 		       OR c.created_by_email ILIKE '%' || $4 || '%')
 		  AND ($5::timestamptz IS NULL OR c.created_at >= $5)
-		  AND ($6::timestamptz IS NULL OR c.created_at <  $6)`
+		  AND ($6::timestamptz IS NULL OR c.created_at <  $6)
+		  AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM sender_ids sf
+		       WHERE sf.id = c.sender_id AND sf.header ILIKE '%' || $7 || '%'))`
 	args := []any{filter.TenantID, filter.Status, filter.Channel, filter.Search,
-		filter.From, filter.To}
+		filter.From, filter.To, filter.Sender}
 
 	var total int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaigns c`+where,
@@ -118,7 +123,7 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		LEFT JOIN templates tp  ON tp.id = c.template_id
 		LEFT JOIN contact_lists l ON l.id = c.list_id`+where+`
 		ORDER BY c.created_at DESC, c.id DESC
-		LIMIT $7 OFFSET $8`, append(args, limit, offset)...)
+		LIMIT $8 OFFSET $9`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list operator campaigns: %w", err)
 	}

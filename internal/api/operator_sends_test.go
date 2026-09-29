@@ -32,6 +32,7 @@ type opCampaign struct {
 	TenantName string    `json:"tenantName"`
 	ListName   *string   `json:"listName"`
 	Sender     string    `json:"sender"`
+	Status     string    `json:"status"`
 	CreatedBy  *opAuthor `json:"createdBy"`
 	Messages   opCounts  `json:"messages"`
 }
@@ -415,6 +416,65 @@ func TestOperatorSeesWhoCreatedAndActivatedAJourney(t *testing.T) {
 	if len(messages.Messages) != 1 || messages.Messages[0].SentBy == nil ||
 		messages.Messages[0].SentBy.Via != "journey" || messages.Messages[0].Source != "journey" {
 		t.Errorf("journey message = %+v", messages.Messages)
+	}
+}
+
+// An operator looking into one sender's traffic types the header they can see
+// on screen, not the sender's id — the same loose match `q` gives a name.
+func TestOperatorFiltersCampaignsBySenderHeader(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	acme := h.newAccount("owner")
+	h.fundWallet(acme)
+	ops := h.operatorToken()
+
+	retailID := h.launchCampaign(acme, ops, "Retail push", []string{"+919877520010"})
+	h.launchCampaign(acme, ops, "Other sender", []string{"+919877530010"})
+	if _, err := h.admin.Exec(context.Background(), `
+		UPDATE sender_ids SET header = 'ACMERT'
+		WHERE id = (SELECT sender_id FROM campaigns WHERE id = $1)`, retailID); err != nil {
+		t.Fatal(err)
+	}
+
+	var page struct {
+		Campaigns []opCampaign `json:"campaigns"`
+		Total     int          `json:"total"`
+	}
+	scoped := "/v1/operator/campaigns?tenantId=" + acme.TenantID.String()
+	for _, sender := range []string{"ACMERT", "acmert", "mert"} {
+		h.operatorGet(ops, scoped+"&sender="+sender, &page)
+		if page.Total != 1 || len(page.Campaigns) != 1 || page.Campaigns[0].ID != retailID {
+			t.Fatalf("sender=%s: total %d rows %d, want only the ACMERT campaign",
+				sender, page.Total, len(page.Campaigns))
+		}
+	}
+	if page.Campaigns[0].Sender != "ACMERT" {
+		t.Errorf("sender = %q, want the header that matched", page.Campaigns[0].Sender)
+	}
+
+	// It narrows alongside the other filters rather than replacing them.
+	status := page.Campaigns[0].Status
+	h.operatorGet(ops, scoped+"&sender=ACMERT&status="+status, &page)
+	if page.Total != 1 {
+		t.Errorf("sender + status=%s found %d, want 1", status, page.Total)
+	}
+	h.operatorGet(ops, scoped+"&sender=ACMERT&status=cancelled", &page)
+	if page.Total != 0 {
+		t.Errorf("sender + status=cancelled found %d, want 0", page.Total)
+	}
+
+	// Present but blank is no filter at all, exactly like q.
+	for _, sender := range []string{"", "%20"} {
+		h.operatorGet(ops, scoped+"&sender="+sender, &page)
+		if page.Total != 2 {
+			t.Errorf("sender=%q found %d, want both campaigns", sender, page.Total)
+		}
+	}
+
+	res := h.do(http.MethodGet, scoped+"&sender=NOSUCH", ops, nil)
+	if res.Code != http.StatusOK || !strings.Contains(string(res.Body), `"campaigns":[]`) ||
+		!strings.Contains(string(res.Body), `"total":0`) {
+		t.Errorf("no match = %d %s, want 200 with an empty list", res.Code, res.Body)
 	}
 }
 

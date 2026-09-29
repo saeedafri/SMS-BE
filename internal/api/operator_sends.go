@@ -114,6 +114,9 @@ func (s *Server) listOperatorCampaigns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sender := strings.TrimSpace(r.URL.Query().Get("sender")); sender != "" {
+		filter.Sender = &sender
+	}
 	campaigns, total, err := store.ListOperatorCampaigns(r.Context(), s.operatorPool(), filter)
 	if err != nil {
 		s.internalError(w, r, err)
