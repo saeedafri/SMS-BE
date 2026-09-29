@@ -103,9 +103,15 @@ jobs:
               `make build`, and `go test` on packages that need no database.
             - In the PR description, list every test you wrote that still
               needs `make test` against the real databases before merging.
+            - Shell commands are allowed one program at a time: git, gh, go,
+              gofmt, make vet, make build, ls, cat, head, tail, mkdir, echo,
+              printf, cd, find, wc, diff. Run each on its own line; do not chain
+              them with ; && or |. If a command is refused, only that command
+              is refused — try another way, never stop because of it. Use the
+              Write and Edit tools for file content.
           claude_args: |
             --permission-mode dontAsk
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(go:*),Bash(gofmt:*),Bash(make vet),Bash(make build)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(go:*),Bash(gofmt:*),Bash(make vet),Bash(make build),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(mkdir:*),Bash(echo:*),Bash(printf:*),Bash(cd:*),Bash(find:*),Bash(wc:*),Bash(diff:*)"
             --max-turns 80
         env:
           # gh pr create needs this. The default GITHUB_TOKEN works, but GitHub
