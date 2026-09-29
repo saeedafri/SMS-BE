@@ -32,8 +32,12 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
       id-token: write
     steps:
+      - name: Note when this run started
+        run: echo "RUN_STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Checkout this repo
         uses: actions/checkout@v4
 
@@ -71,6 +75,11 @@ jobs:
           mkdir -p "$(dirname "$GITHUB_WORKSPACE/${{ env.SOURCE_CHECKOUT_LINK }}")"
           ln -s "$GITHUB_WORKSPACE/_sources/full" "$GITHUB_WORKSPACE/${{ env.SOURCE_CHECKOUT_LINK }}"
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - name: Run Claude Code on the handoff
         uses: anthropics/claude-code-action@v1
         with:
@@ -84,13 +93,41 @@ jobs:
             When the work is done, commit it on a new branch — never push to
             main or master directly — and open a pull request describing what
             you did and why, referencing the handoff file.
+
+            You are running in GitHub Actions, not on Saeed's laptop:
+            - ../SMS-UI is already checked out at the handoff's ref. Skip
+              CLAUDE.md rule 1's fetch/merge; just read it.
+            - The AWS server, its databases and SSH are unreachable. Skip
+              `make test` and every live step of rule 2. Run `make vet`,
+              `make build`, and `go test` on packages that need no database.
+            - In the PR description, list every test you wrote that still
+              needs `make test` against the real databases before merging.
           claude_args: |
             --permission-mode dontAsk
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*)"
-            --max-turns 40
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(go:*),Bash(gofmt:*),Bash(make vet),Bash(make build)"
+            --max-turns 80
         env:
           # gh pr create needs this. The default GITHUB_TOKEN works, but GitHub
           # does not fire pull_request-triggered workflows (CI, review gates)
           # for PRs opened with it — set PR_TOKEN (a PAT with contents+PR write
           # on this repo) if you need this repo's own CI to run on the result.
           GH_TOKEN: ${{ secrets.PR_TOKEN || github.token }}
+
+      # A handoff that ends without a PR is a failure, however green Claude's
+      # own step looks — and it opens an issue so it cannot go unnoticed.
+      - name: Fail loudly if this handoff produced no pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF: ${{ github.event.client_payload.handoff_path }}
+        run: |
+          name=$(basename "$HANDOFF")
+          opened=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --limit 30 \
+            --json body,createdAt,url \
+            --jq ".[] | select(.createdAt >= \"$RUN_STARTED\") | select(.body | contains(\"$name\")) | .url")
+          if [ -n "$opened" ]; then echo "handoff produced: $opened"; exit 0; fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Handoff produced no PR: $name" \
+            --body "The handoff run for \`$HANDOFF\` ended without opening a pull request. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          echo "::error::handoff $name produced no pull request"
+          exit 1
