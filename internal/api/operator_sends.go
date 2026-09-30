@@ -168,6 +168,7 @@ type campaignProgress struct {
 	// Settled is delivered, failed or refused: nothing more will happen.
 	Settled int `json:"settled"`
 	// Percent is settled over expected, to 2 dp; null when nothing is expected.
+	// Expected is never below created, so it never passes 100.
 	Percent *float64 `json:"percent"`
 }
 
@@ -176,7 +177,7 @@ func progressOf(c store.OperatorCampaign, totals messageTotals) campaignProgress
 		Created: totals.Messages, InFlight: totals.Queued + totals.Sent,
 		Settled: totals.Delivered + totals.Failed + totals.Rejected}
 	if progress.Expected > 0 {
-		percent := float64(min(progress.Settled, progress.Expected)*10000/progress.Expected) / 100
+		percent := float64(progress.Settled*10000/progress.Expected) / 100
 		progress.Percent = &percent
 	}
 	return progress

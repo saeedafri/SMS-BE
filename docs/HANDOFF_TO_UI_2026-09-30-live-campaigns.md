@@ -73,7 +73,7 @@ The same object as a list row, plus:
 | `progress.created` | messages created so far |
 | `progress.inFlight` | queued or with the carrier, no receipt yet |
 | `progress.settled` | delivered + failed + rejected: nothing more will happen to these |
-| `progress.percent` | settled ÷ expected, 2 dp, capped at 100. `null` only when nothing is expected |
+| `progress.percent` | settled ÷ expected, 2 dp, never above 100. `null` only when nothing is expected |
 | `deliveryRate` | delivered ÷ (delivered + failed), 2 dp. `null` until something settles |
 | `byChannel` | by the channel that **carried** it (an RCS campaign's SMS fallbacks show under SMS). Same fields as the summary route |
 | `failureReasons` | failed and refused messages grouped by `status` + carrier/our `errorCode`, most common first, top 20. `errorCode` may be null |

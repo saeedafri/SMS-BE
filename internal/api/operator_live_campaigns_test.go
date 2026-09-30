@@ -2,9 +2,13 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -149,17 +153,28 @@ func TestOperatorFiltersCampaignsBySeveralStatusesAtOnce(t *testing.T) {
 	h.seedCampaignFrom(acme, sender, "done", 2)
 	h.seedCampaignFrom(acme, sender, "running", 1)
 	h.seedCampaignFrom(acme, sender, "held", 0)
-	for name, status := range map[string]string{"running": "sending", "held": "queued"} {
+	h.seedCampaignFrom(acme, sender, "later", 0)
+	h.seedCampaignFrom(acme, sender, "broke", 3)
+	h.seedCampaignFrom(acme, sender, "stopped", 4)
+	for name, set := range map[string]string{
+		"running": "status = 'sending'",
+		"held":    "status = 'queued'",
+		"later":   "status = 'scheduled', scheduled_at = now() + interval '1 hour'",
+		"broke":   "status = 'failed'",
+		"stopped": "status = 'cancelled', cancelled_at = now()",
+	} {
 		if _, err := h.admin.Exec(context.Background(),
-			`UPDATE campaigns SET status = $1 WHERE tenant_id = $2 AND name = $3`,
-			status, acme.TenantID, name); err != nil {
+			`UPDATE campaigns SET `+set+` WHERE tenant_id = $1 AND name = $2`,
+			acme.TenantID, name); err != nil {
 			t.Fatal(err)
 		}
 	}
 	base := "/v1/operator/campaigns?tenantId=" + acme.TenantID.String()
 
+	// The handoff's tabs: Live, Finished, All.
 	for status, want := range map[string]int{
-		"queued,sending,paused": 2, "sending": 1, "sent, queued": 2, "": 3} {
+		"scheduled,queued,sending,paused": 3, "sent,failed,cancelled": 3, "": 6,
+		"sending": 1, "sent, queued": 2} {
 		var page opCampaignPage
 		h.operatorGet(ops, base+"&status="+url.QueryEscape(status), &page)
 		if page.Total != want {
@@ -241,3 +256,220 @@ func TestOperatorTenantSearchSuggestsAsTheOperatorTypes(t *testing.T) {
 		t.Errorf("tenant token = %d, want 401", res.Code)
 	}
 }
+
+func keysOf(t *testing.T, what string, value any) string {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s is %T, want an object", what, value)
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+func sortedList(keys ...string) string {
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// Every field the handoff documents is there, and nothing it does not.
+func TestOperatorLiveCampaignResponsesMatchTheHandoff(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	acme := h.newAccount("owner")
+	h.fundWallet(acme)
+	ops := h.operatorToken()
+	campaignID := h.launchCampaign(acme, ops, "Shape check",
+		[]string{"+919877700010", "+919877700001", "+919877700000"})
+	h.drainSandbox()
+
+	row := []string{"id", "name", "tenantId", "tenantName", "channel", "fallbackChannel",
+		"country", "status", "sender", "template", "listName", "recipients", "withheld",
+		"estimatedCostMinorMin", "estimatedCostMinorMax", "currency", "retryOf", "createdBy",
+		"createdAt", "scheduledAt", "sendStartedAt", "pausedAt", "cancelledAt", "messages"}
+	counts := sortedList("total", "queued", "sent", "delivered", "read", "failed",
+		"rejected", "costMinor")
+
+	var list map[string]any
+	h.operatorGet(ops, "/v1/operator/campaigns?campaignId="+campaignID, &list)
+	listed := list["campaigns"].([]any)[0]
+	if got := keysOf(t, "list row", listed); got != sortedList(row...) {
+		t.Errorf("list row keys = %s", got)
+	}
+
+	var overview map[string]any
+	h.operatorGet(ops, "/v1/operator/campaigns/"+campaignID, &overview)
+	want := sortedList(append(row, "progress", "deliveryRate", "byChannel",
+		"failureReasons", "lastActivityAt")...)
+	if got := keysOf(t, "overview", overview); got != want {
+		t.Errorf("overview keys = %s\nwant          %s", got, want)
+	}
+	if got := keysOf(t, "messages", overview["messages"]); got != counts {
+		t.Errorf("messages keys = %s", got)
+	}
+	if got := keysOf(t, "progress", overview["progress"]); got !=
+		sortedList("expected", "created", "inFlight", "settled", "percent") {
+		t.Errorf("progress keys = %s", got)
+	}
+	channels := overview["byChannel"].([]any)
+	if len(channels) != 1 {
+		t.Fatalf("byChannel = %v", channels)
+	}
+	if got := keysOf(t, "byChannel[0]", channels[0]); got != sortedList("channel", "messages",
+		"queued", "sent", "delivered", "read", "failed", "rejected", "segments",
+		"costMinorByCurrency", "deliveryRate") {
+		t.Errorf("byChannel keys = %s", got)
+	}
+	channel := channels[0].(map[string]any)
+	if channel["segments"] != float64(3) {
+		t.Errorf("byChannel segments = %v, want 3", channel["segments"])
+	}
+	if _, ok := channel["costMinorByCurrency"].(map[string]any)["INR"]; !ok {
+		t.Errorf("costMinorByCurrency = %v, want an INR entry", channel["costMinorByCurrency"])
+	}
+	reasons := overview["failureReasons"].([]any)
+	if len(reasons) == 0 {
+		t.Fatal("failureReasons is empty for a campaign with two failures")
+	}
+	if got := keysOf(t, "failureReasons[0]", reasons[0]); got !=
+		sortedList("status", "errorCode", "messages") {
+		t.Errorf("failureReasons keys = %s", got)
+	}
+
+	var suggestions map[string]any
+	h.operatorGet(ops, "/v1/operator/tenants/suggest?q="+acme.TenantID.String(), &suggestions)
+	tenants := suggestions["tenants"].([]any)
+	if len(tenants) != 1 {
+		t.Fatalf("suggestions = %v", tenants)
+	}
+	if got := keysOf(t, "tenant suggestion", tenants[0]); got !=
+		sortedList("id", "name", "country", "status") {
+		t.Errorf("suggestion keys = %s", got)
+	}
+}
+
+// Ten by default, A to Z; throttled shows as throttled; q is bounded.
+func TestOperatorTenantSearchDefaultsAndBounds(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	ops := h.operatorToken()
+	marker := "zr" + uuid.NewString()[:8]
+	// Created in reverse, so creation order cannot pass for alphabetical.
+	var throttled uuid.UUID
+	for i := 10; i >= 0; i-- {
+		tenant := h.newAccount("owner").TenantID
+		if _, err := h.admin.Exec(context.Background(),
+			`UPDATE tenants SET name = $1 WHERE id = $2`,
+			fmt.Sprintf("%s %02d", marker, i), tenant); err != nil {
+			t.Fatal(err)
+		}
+		if i == 3 {
+			throttled = tenant
+		}
+	}
+	if _, err := h.admin.Exec(context.Background(),
+		`UPDATE tenants SET throttled_at = now(), throttled_rate_per_second = 1 WHERE id = $1`,
+		throttled); err != nil {
+		t.Fatal(err)
+	}
+
+	var got opTenantSuggestions
+	h.operatorGet(ops, "/v1/operator/tenants/suggest?q="+marker, &got)
+	if len(got.Tenants) != 10 {
+		t.Fatalf("default limit returned %d, want 10", len(got.Tenants))
+	}
+	for i, tenant := range got.Tenants {
+		if want := fmt.Sprintf("%s %02d", marker, i); tenant.Name != want {
+			t.Errorf("suggestion %d = %q, want %q", i, tenant.Name, want)
+		}
+		if want := map[bool]string{true: "throttled", false: "active"}[tenant.ID ==
+			throttled.String()]; tenant.Status != want {
+			t.Errorf("%s status = %q, want %q", tenant.Name, tenant.Status, want)
+		}
+	}
+
+	var everyone opTenantSuggestions
+	h.operatorGet(ops, "/v1/operator/tenants/suggest", &everyone)
+	if len(everyone.Tenants) != 10 {
+		t.Errorf("empty q returned %d, want 10", len(everyone.Tenants))
+	}
+	h.operatorGet(ops, "/v1/operator/tenants/suggest?q="+strings.Repeat("a", 100), &everyone)
+	if res := h.do(http.MethodGet, "/v1/operator/tenants/suggest?q="+strings.Repeat("a", 101),
+		ops, nil); res.Code != http.StatusUnprocessableEntity {
+		t.Errorf("q of 101 chars = %d, want 422", res.Code)
+	}
+}
+
+// The failure table stops at the twenty most common reasons.
+func TestOperatorCampaignOverviewListsTheTwentyCommonestFailureReasons(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	acme := h.newAccount("owner")
+	ops := h.operatorToken()
+	sender := h.seedNamedSender(acme, "LIVEFR", "SMS", "approved")
+	h.seedCampaignFrom(acme, sender, "many failures", 0)
+	var page opCampaignPage
+	h.operatorGet(ops, "/v1/operator/campaigns?tenantId="+acme.TenantID.String(), &page)
+	campaignID := uuid.MustParse(page.Campaigns[0].ID)
+
+	ctx := context.Background()
+	conn, err := h.server.ClickHouse.Conn(ctx)
+	if err != nil {
+		t.Fatalf("clickhouse: %v", err)
+	}
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO messages (
+		tenant_id, id, campaign_id, channel, country, sender_header, msisdn, status,
+		error_code, fraud_flag, segments, cost_minor, currency,
+		created_at, updated_at, version)`)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	now := time.Now().UTC()
+	add := func(state, code string, n int) {
+		for i := 0; i < n; i++ {
+			if err := batch.Append(acme.TenantID, uuid.New(), campaignID, "SMS", "IN",
+				"LIVEFR", fmt.Sprintf("+9198766%05d", i), state, code,
+				"none", uint8(1), int64(0), "INR", now, now, uint64(1)); err != nil {
+				t.Fatalf("append: %v", err)
+			}
+		}
+	}
+	add("undelivered", "UNDELIV:001", 5)
+	add("rejected", "insufficient_balance", 4)
+	for i := 0; i < 20; i++ {
+		add("undelivered", fmt.Sprintf("UNDELIV:1%02d", i), 1)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	var overview struct {
+		FailureReasons []struct {
+			Status    string  `json:"status"`
+			ErrorCode *string `json:"errorCode"`
+			Messages  int     `json:"messages"`
+		} `json:"failureReasons"`
+		Messages opCounts `json:"messages"`
+	}
+	h.operatorGet(ops, "/v1/operator/campaigns/"+campaignID.String(), &overview)
+	reasons := overview.FailureReasons
+	if len(reasons) != 20 {
+		t.Fatalf("failureReasons has %d, want 20", len(reasons))
+	}
+	first, second := reasons[0], reasons[1]
+	if first.Status != "failed" || first.ErrorCode == nil || *first.ErrorCode != "UNDELIV:001" || first.Messages != 5 {
+		t.Errorf("first reason = %+v, want UNDELIV:001 x5", first)
+	}
+	if second.Status != "rejected" || second.ErrorCode == nil ||
+		*second.ErrorCode != "insufficient_balance" || second.Messages != 4 {
+		t.Errorf("second reason = %+v, want rejected insufficient_balance x4", second)
+	}
+	if m := overview.Messages; m.Failed != 25 || m.Rejected != 4 {
+		t.Errorf("messages = %+v, want 25 failed, 4 rejected", m)
+	}
+}
+
