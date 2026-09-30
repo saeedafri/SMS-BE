@@ -29,6 +29,8 @@ import (
 // interface without changing on the wire.
 func (s *Server) mountOperatorSendRoutes(r chi.Router) {
 	r.Get("/v1/operator/campaigns", s.listOperatorCampaigns)
+	r.Get("/v1/operator/campaigns/{id}", s.getOperatorCampaign)
+	r.Get("/v1/operator/tenants/suggest", s.suggestOperatorTenants)
 	r.Get("/v1/operator/tenants/{id}/senders", s.listOperatorTenantSenders)
 	r.Get("/v1/operator/journeys", s.listOperatorJourneys)
 	r.Get("/v1/operator/messages", s.listOperatorMessages)
@@ -139,17 +141,159 @@ func (s *Server) listOperatorCampaigns(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]operatorCampaign, 0, len(campaigns))
 	for _, c := range campaigns {
-		out = append(out, operatorCampaign{ID: c.ID, Name: c.Name, TenantID: c.TenantID,
-			TenantName: c.TenantName, Channel: c.Channel, FallbackChannel: c.FallbackChannel,
-			Country: c.Country, Status: c.Status, Sender: c.SenderHeader,
-			Template: c.TemplateName, ListName: c.ListName, Recipients: c.Recipients,
-			Withheld: c.Withheld, CostMinorMin: c.CostMinorMin, CostMinorMax: c.CostMinorMax,
-			Currency: c.Currency, RetryOf: c.RetryOf, CreatedBy: authorOf(c.CreatedBy),
-			CreatedAt: c.CreatedAt, ScheduledAt: c.ScheduledAt,
-			SendStartedAt: c.SendStartedAt, PausedAt: c.PausedAt, CancelledAt: c.CancelledAt,
-			Messages: toSendCounts(counts[c.ID])})
+		out = append(out, toOperatorCampaign(c, toSendCounts(counts[c.ID])))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"campaigns": out, "total": total})
+}
+
+func toOperatorCampaign(c store.OperatorCampaign, counts operatorSendCounts) operatorCampaign {
+	return operatorCampaign{ID: c.ID, Name: c.Name, TenantID: c.TenantID,
+		TenantName: c.TenantName, Channel: c.Channel, FallbackChannel: c.FallbackChannel,
+		Country: c.Country, Status: c.Status, Sender: c.SenderHeader,
+		Template: c.TemplateName, ListName: c.ListName, Recipients: c.Recipients,
+		Withheld: c.Withheld, CostMinorMin: c.CostMinorMin, CostMinorMax: c.CostMinorMax,
+		Currency: c.Currency, RetryOf: c.RetryOf, CreatedBy: authorOf(c.CreatedBy),
+		CreatedAt: c.CreatedAt, ScheduledAt: c.ScheduledAt,
+		SendStartedAt: c.SendStartedAt, PausedAt: c.PausedAt, CancelledAt: c.CancelledAt,
+		Messages: counts}
+}
+
+type campaignProgress struct {
+	// Expected is how many messages the campaign will create: its recipients
+	// less those the send cap withheld, or what it has created if more.
+	Expected int `json:"expected"`
+	Created  int `json:"created"`
+	// InFlight is queued or with the carrier, no receipt yet.
+	InFlight int `json:"inFlight"`
+	// Settled is delivered, failed or refused: nothing more will happen.
+	Settled int `json:"settled"`
+	// Percent is settled over expected, to 2 dp; null when nothing is expected.
+	Percent *float64 `json:"percent"`
+}
+
+func progressOf(c store.OperatorCampaign, totals messageTotals) campaignProgress {
+	progress := campaignProgress{Expected: max(c.Recipients-c.Withheld, totals.Messages, 0),
+		Created: totals.Messages, InFlight: totals.Queued + totals.Sent,
+		Settled: totals.Delivered + totals.Failed + totals.Rejected}
+	if progress.Expected > 0 {
+		percent := float64(min(progress.Settled, progress.Expected)*10000/progress.Expected) / 100
+		progress.Percent = &percent
+	}
+	return progress
+}
+
+type failureReason struct {
+	Status    string  `json:"status"`
+	ErrorCode *string `json:"errorCode"`
+	Messages  int     `json:"messages"`
+}
+
+// getOperatorCampaign is one campaign's live overview: the list row, how far
+// the send has got, delivery by the channel that carried it, and why the
+// failures failed.
+func (s *Server) getOperatorCampaign(w http.ResponseWriter, r *http.Request) {
+	if !s.operatorSignedIn(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "No such campaign.")
+		return
+	}
+	campaigns, _, err := store.ListOperatorCampaigns(r.Context(), s.operatorPool(),
+		store.OperatorSendFilter{CampaignID: &id, Limit: 1})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if len(campaigns) == 0 {
+		writeError(w, http.StatusNotFound, "not_found", "No such campaign.")
+		return
+	}
+	c := campaigns[0]
+	clickhouse, err := s.clickhouse(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	// Messages are created after their campaign; the hour's slack covers a
+	// clock skew between the two databases.
+	tallies, err := store.TallyOperatorMessages(r.Context(), clickhouse, store.OperatorMessageFilter{
+		TenantID: &c.TenantID, CampaignID: &c.ID,
+		From: c.CreatedAt.Add(-time.Hour), To: time.Now().UTC().Add(time.Minute)})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	failedStates := append(contractStatusToStates("failed"), contractStatusToStates("rejected")...)
+	reasons, lastActivity, err := store.CampaignFailures(r.Context(), clickhouse,
+		c.TenantID, c.ID, failedStates, 20)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	totals, channels, _ := summarise(tallies, nil)
+	failures := make([]failureReason, 0, len(reasons))
+	for _, reason := range reasons {
+		failures = append(failures, failureReason{Messages: reason.Messages,
+			Status:    messaging.ContractStatus(messaging.State(reason.Status)),
+			ErrorCode: nonEmpty(reason.ErrorCode)})
+	}
+	counts := operatorSendCounts{Total: totals.Messages, Queued: totals.Queued,
+		Sent: totals.Sent, Delivered: totals.Delivered, Read: totals.Read,
+		Failed: totals.Failed, Rejected: totals.Rejected, CostMinor: totals.Cost[c.Currency]}
+	writeJSON(w, http.StatusOK, struct {
+		operatorCampaign
+		Progress       campaignProgress `json:"progress"`
+		DeliveryRate   *float64         `json:"deliveryRate"`
+		ByChannel      []channelTotals  `json:"byChannel"`
+		FailureReasons []failureReason  `json:"failureReasons"`
+		LastActivityAt *time.Time       `json:"lastActivityAt"`
+	}{toOperatorCampaign(c, counts), progressOf(c, totals), totals.DeliveryRate, channels,
+		failures, lastActivity})
+}
+
+type tenantSuggestion struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	Country string    `json:"country"`
+	Status  string    `json:"status"`
+}
+
+// suggestOperatorTenants feeds the console's tenant search box as the
+// operator types.
+func (s *Server) suggestOperatorTenants(w http.ResponseWriter, r *http.Request) {
+	if !s.operatorSignedIn(w, r) {
+		return
+	}
+	query := r.URL.Query()
+	limit := 10
+	if text := query.Get("limit"); text != "" {
+		value, err := strconv.Atoi(text)
+		if err != nil || value < 1 || value > 50 {
+			writeError(w, http.StatusUnprocessableEntity, codeValidation,
+				"limit must be a whole number from 1 to 50.")
+			return
+		}
+		limit = value
+	}
+	text := strings.TrimSpace(query.Get("q"))
+	if len(text) > 100 {
+		writeError(w, http.StatusUnprocessableEntity, codeValidation,
+			"q may be at most 100 characters.")
+		return
+	}
+	found, err := store.SuggestTenants(r.Context(), s.operatorPool(), text, limit)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	out := make([]tenantSuggestion, 0, len(found))
+	for _, t := range found {
+		out = append(out, tenantSuggestion{ID: t.ID, Name: t.Name, Country: t.Country,
+			Status: t.Status})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tenants": out})
 }
 
 type operatorJourney struct {
@@ -569,29 +713,10 @@ type tenantTotals struct {
 	messageTotals
 }
 
-func (s *Server) operatorMessageSummary(w http.ResponseWriter, r *http.Request) {
-	if !s.operatorSignedIn(w, r) {
-		return
-	}
-	filter, ok := messageFilterFrom(w, r)
-	if !ok {
-		return
-	}
-	clickhouse, err := s.clickhouse(r.Context())
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	tallies, err := store.TallyOperatorMessages(r.Context(), clickhouse, filter)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	names, err := store.TenantNames(r.Context(), s.operatorPool())
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
+// summarise adds tallies up overall, by the channel that carried them and by
+// tenant, each list biggest first.
+func summarise(tallies []store.MessageTally, names map[string]string) (messageTotals,
+	[]channelTotals, []tenantTotals) {
 
 	var totals messageTotals
 	byChannel := map[string]*channelTotals{}
@@ -622,6 +747,34 @@ func (s *Server) operatorMessageSummary(w http.ResponseWriter, r *http.Request) 
 	// Biggest first, so the console's table starts with who is sending most.
 	sort.Slice(channels, func(i, j int) bool { return channels[i].Messages > channels[j].Messages })
 	sort.Slice(tenants, func(i, j int) bool { return tenants[i].Messages > tenants[j].Messages })
+	return totals, channels, tenants
+}
+
+func (s *Server) operatorMessageSummary(w http.ResponseWriter, r *http.Request) {
+	if !s.operatorSignedIn(w, r) {
+		return
+	}
+	filter, ok := messageFilterFrom(w, r)
+	if !ok {
+		return
+	}
+	clickhouse, err := s.clickhouse(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	tallies, err := store.TallyOperatorMessages(r.Context(), clickhouse, filter)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	names, err := store.TenantNames(r.Context(), s.operatorPool())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+
+	totals, channels, tenants := summarise(tallies, names)
 	writeJSON(w, http.StatusOK, map[string]any{"from": filter.From, "to": filter.To,
 		"totals": totals, "byChannel": channels, "byTenant": tenants})
 }
@@ -739,8 +892,16 @@ func sendFilterFrom(w http.ResponseWriter, r *http.Request,
 	if filter.TenantID, ok = uuidParam(w, query.Get("tenantId"), "tenantId"); !ok {
 		return filter, false
 	}
-	if filter.Status, ok = enumParam(w, query.Get("status"), "status", statuses); !ok {
-		return filter, false
+	// Several statuses at once, comma-separated: the live view asks for
+	// queued,sending,paused in one request.
+	for _, status := range strings.Split(query.Get("status"), ",") {
+		if status = strings.TrimSpace(status); status == "" {
+			continue
+		}
+		if _, ok = enumParam(w, status, "status", statuses); !ok {
+			return filter, false
+		}
+		filter.Statuses = append(filter.Statuses, status)
 	}
 	if filter.Channel, ok = enumParam(w, strings.ToUpper(query.Get("channel")), "channel",
 		channelIDs()); !ok {

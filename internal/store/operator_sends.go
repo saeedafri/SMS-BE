@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -61,7 +62,8 @@ type OperatorCampaign struct {
 // values mean "any".
 type OperatorSendFilter struct {
 	TenantID *uuid.UUID
-	Status   *string
+	// Statuses is nil for any status, otherwise the ones to keep.
+	Statuses []string
 	Channel  *string
 	// Search matches the campaign or journey name, and the creator's name or
 	// email, case-insensitively.
@@ -97,7 +99,7 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 	// ones that fell back to SMS, because both put RCS messages on a handset.
 	const where = `
 		WHERE ($1::uuid IS NULL OR c.tenant_id = $1)
-		  AND ($2::text IS NULL OR c.status = $2)
+		  AND ($2::text[] IS NULL OR c.status = ANY($2))
 		  AND ($3::text IS NULL OR c.channel = $3 OR c.fallback_channel = $3)
 		  AND ($4::text IS NULL OR c.name ILIKE '%' || $4 || '%'
 		       OR c.created_by_name ILIKE '%' || $4 || '%'
@@ -108,7 +110,7 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		       WHERE sf.id = c.sender_id AND sf.header ILIKE '%' || $7 || '%'))
 		  AND ($8::uuid IS NULL OR c.id = $8)
 		  AND ($9::uuid IS NULL OR c.sender_id = $9)`
-	args := []any{filter.TenantID, filter.Status, filter.Channel, filter.Search,
+	args := []any{filter.TenantID, filter.Statuses, filter.Channel, filter.Search,
 		filter.From, filter.To, filter.Sender, filter.CampaignID, filter.SenderID}
 
 	var total int
@@ -176,7 +178,7 @@ func ListOperatorJourneys(ctx context.Context, pool *pgxpool.Pool,
 	limit, offset := filter.pageLimit()
 	const where = `
 		WHERE ($1::uuid IS NULL OR j.tenant_id = $1)
-		  AND ($2::text IS NULL OR j.status = $2)
+		  AND ($2::text[] IS NULL OR j.status = ANY($2))
 		  AND ($3::text IS NULL OR EXISTS (SELECT 1 FROM jsonb_array_elements(j.steps) s
 		                                   WHERE s->>'channel' = $3))
 		  AND ($4::text IS NULL OR j.name ILIKE '%' || $4 || '%'
@@ -184,7 +186,7 @@ func ListOperatorJourneys(ctx context.Context, pool *pgxpool.Pool,
 		       OR j.created_by_email ILIKE '%' || $4 || '%')
 		  AND ($5::timestamptz IS NULL OR j.created_at >= $5)
 		  AND ($6::timestamptz IS NULL OR j.created_at <  $6)`
-	args := []any{filter.TenantID, filter.Status, filter.Channel, filter.Search,
+	args := []any{filter.TenantID, filter.Statuses, filter.Channel, filter.Search,
 		filter.From, filter.To}
 
 	var total int
@@ -546,6 +548,93 @@ func TallyOperatorMessages(ctx context.Context, conn driver.Conn,
 		}
 		tally.Messages, tally.Read, tally.Segments = int(messages), int(read), int(segments)
 		out = append(out, tally)
+	}
+	return out, rows.Err()
+}
+
+// FailureReason is one reason a campaign's messages did not arrive: the
+// carrier's code, or ours for a refusal.
+type FailureReason struct {
+	Status    string
+	ErrorCode string
+	Messages  int
+}
+
+// CampaignFailures groups a campaign's failed and refused messages by status
+// and code, most common first, and says when any of its messages last changed.
+func CampaignFailures(ctx context.Context, conn driver.Conn, tenantID, campaignID uuid.UUID,
+	states []string, limit int) ([]FailureReason, *time.Time, error) {
+
+	rows, err := conn.Query(ctx, `
+		SELECT status, coalesce(error_code, ''), count() AS n
+		FROM messages FINAL
+		WHERE tenant_id = ? AND campaign_id = ? AND status IN (?)
+		GROUP BY status, error_code
+		ORDER BY n DESC, error_code
+		LIMIT ?`, tenantID, campaignID, states, limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: campaign failures: %w", err)
+	}
+	defer rows.Close()
+	out := []FailureReason{}
+	for rows.Next() {
+		var reason FailureReason
+		var messages uint64
+		if err := rows.Scan(&reason.Status, &reason.ErrorCode, &messages); err != nil {
+			return nil, nil, fmt.Errorf("store: scan campaign failure: %w", err)
+		}
+		reason.Messages = int(messages)
+		out = append(out, reason)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var last *time.Time
+	if err := conn.QueryRow(ctx, `
+		SELECT if(count() = 0, NULL, max(updated_at)) FROM messages
+		WHERE tenant_id = ? AND campaign_id = ?`, tenantID, campaignID).Scan(&last); err != nil {
+		return nil, nil, fmt.Errorf("store: campaign last activity: %w", err)
+	}
+	return out, last, nil
+}
+
+// TenantSuggestion is one line of the console's tenant picker.
+type TenantSuggestion struct {
+	ID      uuid.UUID
+	Name    string
+	Country string
+	Status  string
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// SuggestTenants is the tenant picker's typeahead: tenants whose name contains
+// the text, those starting with it first, then alphabetical. A full tenant id
+// finds that tenant. Empty text lists tenants alphabetically.
+func SuggestTenants(ctx context.Context, pool *pgxpool.Pool, text string,
+	limit int) ([]TenantSuggestion, error) {
+
+	pattern := likeEscaper.Replace(text)
+	rows, err := pool.Query(ctx, `
+		SELECT id, name, country,
+		       CASE WHEN status = 'suspended'     THEN 'suspended'
+		            WHEN throttled_at IS NOT NULL THEN 'throttled'
+		            ELSE status END
+		FROM tenants
+		WHERE $1 = '' OR name ILIKE '%' || $1 || '%' OR id::text = lower($2)
+		ORDER BY name ILIKE $1 || '%' DESC, lower(name), id
+		LIMIT $3`, pattern, text, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: suggest tenants: %w", err)
+	}
+	defer rows.Close()
+	out := []TenantSuggestion{}
+	for rows.Next() {
+		var tenant TenantSuggestion
+		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.Country, &tenant.Status); err != nil {
+			return nil, fmt.Errorf("store: scan tenant suggestion: %w", err)
+		}
+		out = append(out, tenant)
 	}
 	return out, rows.Err()
 }
