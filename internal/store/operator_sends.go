@@ -71,10 +71,13 @@ type OperatorSendFilter struct {
 	Sender *string
 	// CampaignID is an exact match, for a campaign list only.
 	CampaignID *uuid.UUID
-	From       *time.Time
-	To         *time.Time
-	Page       int
-	Limit      int
+	// SenderID matches a campaign's sender exactly, by id. Unlike Sender it
+	// cannot confuse ACME with ACMERT, or the SMS ACMERT with the RCS one.
+	SenderID *uuid.UUID
+	From     *time.Time
+	To       *time.Time
+	Page     int
+	Limit    int
 }
 
 func (f OperatorSendFilter) pageLimit() (int, int) {
@@ -103,9 +106,10 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		  AND ($6::timestamptz IS NULL OR c.created_at <  $6)
 		  AND ($7::text IS NULL OR EXISTS (SELECT 1 FROM sender_ids sf
 		       WHERE sf.id = c.sender_id AND sf.header ILIKE '%' || $7 || '%'))
-		  AND ($8::uuid IS NULL OR c.id = $8)`
+		  AND ($8::uuid IS NULL OR c.id = $8)
+		  AND ($9::uuid IS NULL OR c.sender_id = $9)`
 	args := []any{filter.TenantID, filter.Status, filter.Channel, filter.Search,
-		filter.From, filter.To, filter.Sender, filter.CampaignID}
+		filter.From, filter.To, filter.Sender, filter.CampaignID, filter.SenderID}
 
 	var total int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM campaigns c`+where,
@@ -126,7 +130,7 @@ func ListOperatorCampaigns(ctx context.Context, pool *pgxpool.Pool,
 		LEFT JOIN templates tp  ON tp.id = c.template_id
 		LEFT JOIN contact_lists l ON l.id = c.list_id`+where+`
 		ORDER BY c.created_at DESC, c.id DESC
-		LIMIT $9 OFFSET $10`, append(args, limit, offset)...)
+		LIMIT $10 OFFSET $11`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list operator campaigns: %w", err)
 	}

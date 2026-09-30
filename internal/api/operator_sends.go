@@ -29,6 +29,7 @@ import (
 // interface without changing on the wire.
 func (s *Server) mountOperatorSendRoutes(r chi.Router) {
 	r.Get("/v1/operator/campaigns", s.listOperatorCampaigns)
+	r.Get("/v1/operator/tenants/{id}/senders", s.listOperatorTenantSenders)
 	r.Get("/v1/operator/journeys", s.listOperatorJourneys)
 	r.Get("/v1/operator/messages", s.listOperatorMessages)
 	r.Get("/v1/operator/messages/summary", s.operatorMessageSummary)
@@ -118,6 +119,9 @@ func (s *Server) listOperatorCampaigns(w http.ResponseWriter, r *http.Request) {
 		filter.Sender = &sender
 	}
 	if filter.CampaignID, ok = uuidParam(w, r.URL.Query().Get("campaignId"), "campaignId"); !ok {
+		return
+	}
+	if filter.SenderID, ok = uuidParam(w, r.URL.Query().Get("senderId"), "senderId"); !ok {
 		return
 	}
 	campaigns, total, err := store.ListOperatorCampaigns(r.Context(), s.operatorPool(), filter)
