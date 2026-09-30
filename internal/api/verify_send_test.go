@@ -59,6 +59,15 @@ func TestAVerificationSendsItsCodeAndNeverLogsIt(t *testing.T) {
 	if strings.Contains(h.logs.String(), verify.DevCode) {
 		t.Error("the OTP code appears in the server log")
 	}
+	// Nor in the message log an operator reads, even after the receipt lands.
+	h.drainSandbox()
+	listed := h.do(http.MethodGet, "/v1/operator/messages?tenantId="+tenant.TenantID.String(),
+		h.operatorToken(), nil)
+	if listed.Code != http.StatusOK || strings.Contains(string(listed.Body), verify.DevCode) ||
+		!strings.Contains(string(listed.Body), `"renderedText":null`) {
+		t.Errorf("operator message log = %d, want the code absent and renderedText null\n%s",
+			listed.Code, listed.Body)
+	}
 
 	checked := h.do(http.MethodPost, "/v1/verify/services/"+service+"/verifications/"+
 		verification.ID+"/check", tenant.Token, map[string]any{"code": verify.DevCode})

@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestOperatorListsEverySenderATenantHasRegistered(t *testing.T) {
 	oldestOnly := h.seedNamedSender(acme, "OLDONLY", "SMS", "approved") // S2
 	h.seedCampaignFrom(acme, oldestOnly, "oldest", 1000)
 	for i := 0; i < 250; i++ {
-		h.seedCampaignFrom(acme, smsID, "recent", i%900)
+		h.seedCampaignFrom(acme, smsID, fmt.Sprintf("recent %d", i), i%900)
 	}
 
 	var page opSenderPage
