@@ -80,7 +80,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Whether the handoff worked is decided by the next step (did a PR come
+      # out), not by this one: a run that opens its PR on turn 95 of 80 exits
+      # non-zero, and that is not a failed handoff.
       - name: Run Claude Code on the handoff
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -111,7 +115,7 @@ jobs:
           claude_args: |
             --permission-mode dontAsk
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh:*),Bash(go:*),Bash(gofmt:*),Bash(make vet),Bash(make build),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(mkdir:*),Bash(echo:*),Bash(printf:*),Bash(cd:*),Bash(find:*),Bash(wc:*),Bash(diff:*)"
-            --max-turns 80
+            --max-turns 250
         env:
           # gh pr create needs this. The default GITHUB_TOKEN works, but GitHub
           # does not fire pull_request-triggered workflows (CI, review gates)
