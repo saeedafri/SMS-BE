@@ -351,7 +351,8 @@ func registeredText(t store.Template) (string, bool) {
 	if t.Body != nil && *t.Body != "" {
 		return *t.Body, true
 	}
-	return rcsTemplateText(t)
+	spec, ok := rcsTemplateContent(t)
+	return spec.Text, ok && spec.Card == nil
 }
 
 // CheckVerification applies one guess.

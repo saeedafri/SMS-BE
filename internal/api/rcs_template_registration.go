@@ -60,28 +60,47 @@ func airtelUseCase(t store.Template) (string, bool) {
 	}
 }
 
-// rcsTemplateText pulls the body out of an RCS template's stored content.
+// rcsTemplateContent reads an RCS template's stored content into the carrier
+// spec: its text, or its one rich card, and its buttons.
 //
 // RCS templates keep their message in rcs_content as the contract's own union,
-// not in `body` — body is null for them. Only the text variant can be
-// registered; a card carries structure the carrier template spec does not
-// describe, and submitting one as text would have the carrier approve something
-// that is not the template Relay holds.
-func rcsTemplateText(t store.Template) (string, bool) {
-	if len(t.RCSContent) == 0 {
-		return "", false
-	}
+// not in `body` — body is null for them. Whether a carrier can take a card is
+// the carrier's to say: Airtel refuses one, Trustsignal registers it.
+func rcsTemplateContent(t store.Template) (connector.RCSTemplateSpec, bool) {
 	var content struct {
 		Kind string `json:"kind"`
 		Text string `json:"text"`
+		Card *struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			MediaURL    string `json:"mediaUrl"`
+		} `json:"card"`
+		Suggestions []struct {
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			URL         string `json:"url"`
+			PhoneNumber string `json:"phoneNumber"`
+		} `json:"suggestions"`
 	}
-	if err := json.Unmarshal(t.RCSContent, &content); err != nil {
-		return "", false
+	if len(t.RCSContent) == 0 || json.Unmarshal(t.RCSContent, &content) != nil {
+		return connector.RCSTemplateSpec{}, false
 	}
-	if content.Kind != "text" || strings.TrimSpace(content.Text) == "" {
-		return "", false
+	var spec connector.RCSTemplateSpec
+	switch {
+	case content.Kind == "text" && strings.TrimSpace(content.Text) != "":
+		spec.Text = content.Text
+	case content.Kind == "card" && content.Card != nil:
+		spec.Card = &connector.RCSCard{Title: content.Card.Title,
+			Description: content.Card.Description, MediaURL: content.Card.MediaURL}
+		spec.Text = content.Card.Description
+	default:
+		return connector.RCSTemplateSpec{}, false
 	}
-	return content.Text, true
+	for _, s := range content.Suggestions {
+		spec.Suggestions = append(spec.Suggestions, connector.RCSSuggestion{Type: s.Type,
+			Text: s.Text, URL: s.URL, PhoneNumber: s.PhoneNumber})
+	}
+	return spec, true
 }
 
 func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
@@ -99,7 +118,7 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 	// Required, and checked by hand. The field is a non-pointer string, so a
 	// body that omits it decodes to "" and reaches here looking like a request
 	// that named nothing — which is exactly the guess this field retires.
-	if request.Body == nil || !request.Body.Vendor.Valid() {
+	if request.Body == nil || connector.RCSIntegrations[string(request.Body.Vendor)] == "" {
 		// Named from the adapters this build holds rather than written out, so
 		// the sentence cannot fall behind the contract the way it did when jio
 		// and google joined the enum.
@@ -172,11 +191,11 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 				"a template to "+vendor+". Attach a template code from "+vendor+"'s portal instead.")), nil
 	}
 
-	text, isText := rcsTemplateText(template)
-	if !isText {
+	spec, readable := rcsTemplateContent(template)
+	if !readable {
 		return gen.RegisterTemplateWithCarrier422JSONResponse(errorBody(codeValidation,
-			"Only text RCS templates can be registered automatically. "+
-				"Create a card or carousel template in the carrier's portal and attach the code.")), nil
+			"This template's RCS content cannot be registered automatically. "+
+				"Create it in the carrier's portal and attach the code.")), nil
 	}
 	useCase, classified := airtelUseCase(template)
 	if !classified {
@@ -185,13 +204,9 @@ func (s *Server) RegisterTemplateWithCarrier(ctx context.Context,
 				"must match the one your RCS agent was approved under.")), nil
 	}
 
-	registration, err := registrar.RegisterTemplate(ctx, carrierAgentID, connector.RCSTemplateSpec{
-		Name:        template.Name,
-		UseCase:     useCase,
-		Text:        text,
-		Variables:   template.Variables,
-		SubmittedBy: identity.Email,
-	})
+	spec.Name, spec.UseCase = template.Name, useCase
+	spec.Variables, spec.SubmittedBy = template.Variables, identity.Email
+	registration, err := registrar.RegisterTemplate(ctx, carrierAgentID, spec)
 	switch {
 	case errors.Is(err, connector.ErrTemplateRegistrationManual):
 		return gen.RegisterTemplateWithCarrier409JSONResponse(errorBody(codeConflict,
@@ -344,7 +359,8 @@ func isCarrierTemplateValidation(err error) bool {
 	}
 	// Anything the carrier itself said is prefixed by the connector.
 	return !strings.HasPrefix(err.Error(), "airtel rcs:") &&
-		!strings.HasPrefix(err.Error(), "vi rcs:")
+		!strings.HasPrefix(err.Error(), "vi rcs:") &&
+		!strings.HasPrefix(err.Error(), "trustsignal rcs:")
 }
 
 func capitalise(text string) string {

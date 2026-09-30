@@ -361,3 +361,108 @@ func parseCarrierTime(value string) time.Time {
 	}
 	return time.Now().UTC()
 }
+
+// trustsignalWebhook is every Trustsignal RCS event. One flat object;
+// webhook_type says which kind, and status says what happened.
+type trustsignalWebhook struct {
+	WebhookType   string `json:"webhook_type"`
+	TransactionID string `json:"transaction_id"`
+	Status        string `json:"status"`
+	To            string `json:"to"`
+	BotID         string `json:"bot_id"`
+	TemplateID    string `json:"template_id"`
+	Error         string `json:"error"`
+	ErrorCode     string `json:"error_code"`
+	St            string `json:"st"`
+	Dlrt          string `json:"dlrt"`
+
+	// User responses.
+	From     string `json:"from"`
+	Phone    string `json:"phone"`
+	Response string `json:"response"`
+	MType    string `json:"mtype"`
+	SendTime string `json:"sendTime"`
+	TLMsgID  string `json:"tlmsgid"`
+}
+
+// ParseTrustsignalWebhook reads Trustsignal's events. Delivery reports quote
+// the transaction_id their send returned, which is our carrier reference.
+//
+// A click arrives as rcs_message too, told apart by status "click", and is
+// ignored like the SMS fallback and bot events: none of them settles a message
+// Relay sent.
+func ParseTrustsignalWebhook(payload []byte) (RCSEvent, error) {
+	var body trustsignalWebhook
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return RCSEvent{}, fmt.Errorf("trustsignal webhook: %w", err)
+	}
+	if body.WebhookType == "" {
+		return RCSEvent{}, fmt.Errorf("trustsignal webhook: no webhook_type")
+	}
+	status := strings.ToLower(strings.TrimSpace(body.Status))
+	event := RCSEvent{
+		Vendor:     "trustsignal",
+		Raw:        body.WebhookType + ":" + status,
+		CarrierRef: body.TransactionID,
+		Msisdn:     body.To,
+		AgentID:    strings.TrimSpace(body.BotID),
+		OccurredAt: parseCarrierTime(firstNonEmpty(body.Dlrt, body.St, body.SendTime)),
+	}
+
+	switch body.WebhookType {
+	case "rcs_message", "rcs_agent_message":
+		event.Kind = RCSEventDelivery
+		switch status {
+		case "delivered", "read":
+			event.Delivered = true
+			event.Read = status == "read"
+		case "nonrcs":
+			// The handset cannot take RCS. Nothing was delivered, and the
+			// hold is released like any other failure.
+			event.ErrorCode = "unreachable_handset"
+		case "failed":
+			event.ErrorCode = "carrier_failed"
+		default:
+			event.Kind = RCSEventIgnored
+		}
+		return event, nil
+
+	case "rcs_template":
+		event.Kind = RCSEventTemplate
+		event.CarrierTemplateID = body.TemplateID
+		switch status {
+		case "active":
+			event.TemplateStatus = RCSTemplateApproved
+		case "rejected", "failed":
+			event.TemplateStatus = RCSTemplateRejected
+			event.RejectionReason = strings.TrimSpace(body.Error)
+		default:
+			event.TemplateStatus = RCSTemplatePending
+		}
+		return event, nil
+
+	case "rcs_user_response":
+		event.Kind = RCSEventInbound
+		event.CarrierRef = ""
+		event.Msisdn = firstNonEmpty(body.From, body.Phone)
+		event.Text = body.Response
+		if body.MType == "suggestion" {
+			event.PostbackData = body.Response
+		}
+		event.ContextRef = body.TLMsgID
+		return event, nil
+
+	default:
+		event.Kind = RCSEventIgnored
+		return event, nil
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}

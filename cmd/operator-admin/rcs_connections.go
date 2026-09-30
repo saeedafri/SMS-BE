@@ -133,7 +133,7 @@ func addRCSConnection(ctx context.Context, pool *pgxpool.Pool, box *secrets.Box,
 	vendor = strings.ToLower(strings.TrimSpace(vendor))
 	keys, known := api.RCSSettingKeys[vendor]
 	if !known {
-		return errors.New("vendor must be airtel, vi, jio or google")
+		return errors.New("vendor must be airtel, vi, jio, google or trustsignal")
 	}
 	if environment != "live" && environment != "test" {
 		return errors.New("environment must be live or test")
@@ -163,6 +163,12 @@ func addRCSConnection(ctx context.Context, pool *pgxpool.Pool, box *secrets.Box,
 			return err
 		}
 		held.ClientSecret = secret
+	case "trustsignal":
+		key, err := askSecret("trustsignal api key (Sigmo portal > API)")
+		if err != nil {
+			return err
+		}
+		held.APIKey = key
 	case "google":
 		path := ask("path to the service account json file")
 		key, err := os.ReadFile(path)

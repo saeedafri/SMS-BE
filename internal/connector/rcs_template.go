@@ -34,10 +34,16 @@ import (
 
 // RCSTemplateSpec is one template offered to a carrier for approval.
 //
-// Only the TEXT shape is modelled. Media, rich card and carousel templates
-// carry structure this does not describe, and half-supporting them would mean
-// submitting a card the carrier stores as text.
+// Text, or one rich card when Card is set. Carousels are not modelled: Relay's
+// templates hold no carousel to offer. Airtel registers text only and refuses
+// a card rather than storing it as text.
 type RCSTemplateSpec struct {
+	// Card is the single rich card, nil for a text template.
+	Card *RCSCard
+
+	// Suggestions are the buttons under the message or card.
+	Suggestions []RCSSuggestion
+
 	// Name is the carrier's friendly name. Airtel caps it at 60 characters.
 	Name string
 
@@ -65,6 +71,23 @@ type RCSTemplateSpec struct {
 	// address and records it in the template's event log, which is the only
 	// audit trail of who submitted what.
 	SubmittedBy string
+}
+
+// RCSCard is a rich card's content, with {{named}} tokens in title and
+// description.
+type RCSCard struct {
+	Title       string
+	Description string
+	MediaURL    string
+}
+
+// RCSSuggestion is one button: Type is reply, open_url or dial, as Relay's
+// templates store it.
+type RCSSuggestion struct {
+	Type        string
+	Text        string
+	URL         string
+	PhoneNumber string
 }
 
 // Template registration states, deliberately lowercase to match how Relay
@@ -162,6 +185,9 @@ var namedTokenPattern = regexp.MustCompile(`\{\{\s*[^{}]+?\s*\}\}`)
 // who wrote the template can act on.
 func ValidateAirtelTemplate(spec RCSTemplateSpec) error {
 	switch {
+	case spec.Card != nil:
+		return errors.New("Airtel takes text templates here; create the card in Airtel's portal " +
+			"and attach its code")
 	case strings.TrimSpace(spec.Name) == "":
 		return errors.New("the template needs a name")
 	case len(spec.Name) > airtelMaxTemplateName:

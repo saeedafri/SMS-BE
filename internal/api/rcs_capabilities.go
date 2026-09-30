@@ -183,6 +183,11 @@ func rcsCarrierError(err error) (gen.CheckRcsCapabilitiesResponseObject, error) 
 		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
 			"This deployment has no RCS carrier configured, so handset reachability cannot be checked")), nil
 	}
+	if errors.Is(err, connector.ErrRCSNoCapabilityLookup) {
+		return gen.CheckRcsCapabilities503JSONResponse(errorBody(codeValidation,
+			"This agent's carrier cannot check handsets before a send. RCS is attempted, "+
+				"and a handset that cannot take it is reported as failed")), nil
+	}
 	if errors.Is(err, connector.ErrRCSTooManyNumbers) {
 		return gen.CheckRcsCapabilities400JSONResponse(errorBody(codeValidation,
 			"Both carriers cap a capability check at 10,000 numbers; split the list")), nil

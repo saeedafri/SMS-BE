@@ -472,4 +472,3 @@ func TestOperatorCampaignOverviewListsTheTwentyCommonestFailureReasons(t *testin
 		t.Errorf("messages = %+v, want 25 failed, 4 rejected", m)
 	}
 }
-

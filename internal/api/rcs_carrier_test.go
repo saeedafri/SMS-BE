@@ -124,6 +124,7 @@ func (h *harness) rcsTemplate(tenant account, name string, variables []string, c
 	suffix := uuid.NewString()[:8]
 	h.launchAgentOnCarrier(tenant, agentID, "AIRTEL", "airtel-agent-"+suffix)
 	h.launchAgentOnCarrier(tenant, agentID, "VI", "vi-agent-"+suffix)
+	h.launchAgentOnCarrier(tenant, agentID, "TRUSTSIGNAL", "ts-bot-"+suffix)
 	h.attachAgentToSender(senderID, agentID)
 
 	content, err := json.Marshal(map[string]any{

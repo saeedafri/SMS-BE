@@ -75,7 +75,7 @@ func usage() error {
   operator-admin send-share <tenant-uuid> <percent|none>   share of each send this tenant may have
   operator-admin always-send <tenant-uuid> <msisdn> <on|off>   exempt one contact from the cap
   operator-admin withheld <campaign-uuid>       who this send did NOT reach
-  operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE> <carrier-agent-id>
+  operator-admin rcs-launch <agent-uuid> <AIRTEL|VI|JIO|GOOGLE|TRUSTSIGNAL> <carrier-agent-id>
   operator-admin rcs-connection ...  RCS operator accounts; run it for its own help
   operator-admin bans                 list addresses the abuse guard has banned
   operator-admin unban <ip>           lift a ban at once and forget its history

@@ -26,7 +26,9 @@ func TestWhatEachRCSVendorNeedsBeforeItCanSend(t *testing.T) {
 		"airtel needs its account ids":       {"airtel", map[string]string{"baseUrl": "https://iq.airtel.test"}, api.RCSSecrets{AuthToken: "x"}, "setting customerId is required for airtel"},
 		"vi needs a client id":               {"vi", map[string]string{"baseUrl": "u", "tokenUrl": "t"}, api.RCSSecrets{ClientSecret: "s"}, "setting clientId is required for vi"},
 		"google needs its key":               {"google", nil, api.RCSSecrets{}, "google needs its service account key"},
-		"an unknown vendor is refused":       {"reliance", nil, api.RCSSecrets{}, `unknown RCS vendor "reliance": use airtel, vi, jio or google`},
+		"trustsignal needs its key":          {"trustsignal", nil, api.RCSSecrets{}, "trustsignal needs its api key"},
+		"trustsignal defaults its host":      {"trustsignal", nil, api.RCSSecrets{APIKey: "k"}, ""},
+		"an unknown vendor is refused":       {"reliance", nil, api.RCSSecrets{}, `unknown RCS vendor "reliance": use airtel, vi, jio, google or trustsignal`},
 	} {
 		if got := api.RCSConnectionProblem(tc.vendor, tc.settings, tc.secrets); got != tc.want {
 			t.Errorf("%s = %q, want %q", name, got, tc.want)

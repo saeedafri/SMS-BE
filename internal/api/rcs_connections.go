@@ -20,6 +20,8 @@ type RCSSecrets struct {
 	ClientSecret string `json:"clientSecret,omitempty"`
 	// ServiceAccountJSON is Google's service account key.
 	ServiceAccountJSON string `json:"serviceAccountJson,omitempty"`
+	// APIKey is Trustsignal's key.
+	APIKey string `json:"apiKey,omitempty"`
 	// Assistants is Jio's secret per assistant id.
 	Assistants map[string]string `json:"assistants,omitempty"`
 }
@@ -33,15 +35,17 @@ const (
 // RCSSettingKeys is each vendor's settings, required ones first. Jio's two
 // hosts default to production, and Google's to its Asia region.
 var RCSSettingKeys = map[string][]string{
-	"airtel": {"baseUrl", "customerId", "subAccountId"},
-	"vi":     {"baseUrl", "tokenUrl", "clientId"},
-	"jio":    {"tokenUrl", "baseUrl"},
-	"google": {"baseUrl"},
+	"airtel":      {"baseUrl", "customerId", "subAccountId"},
+	"vi":          {"baseUrl", "tokenUrl", "clientId"},
+	"jio":         {"tokenUrl", "baseUrl"},
+	"google":      {"baseUrl"},
+	"trustsignal": {"baseUrl"},
 }
 
 var rcsSettingDefaults = map[string]map[string]string{
-	"jio":    {"tokenUrl": JioTokenURL, "baseUrl": JioBaseURL},
-	"google": {"baseUrl": "https://asia-rcsbusinessmessaging.googleapis.com"},
+	"jio":         {"tokenUrl": JioTokenURL, "baseUrl": JioBaseURL},
+	"google":      {"baseUrl": "https://asia-rcsbusinessmessaging.googleapis.com"},
+	"trustsignal": {"baseUrl": "https://rcsapi.trustsignal.io"},
 }
 
 // RCSConnectionProblem is why an account could not send, empty when it could.
@@ -50,7 +54,7 @@ var rcsSettingDefaults = map[string]map[string]string{
 func RCSConnectionProblem(vendor string, settings map[string]string, secrets RCSSecrets) string {
 	keys, known := RCSSettingKeys[vendor]
 	if !known {
-		return fmt.Sprintf("unknown RCS vendor %q: use airtel, vi, jio or google", vendor)
+		return fmt.Sprintf("unknown RCS vendor %q: use airtel, vi, jio, google or trustsignal", vendor)
 	}
 	for _, key := range keys {
 		if strings.TrimSpace(settings[key]) == "" && rcsSettingDefaults[vendor][key] == "" {
@@ -64,6 +68,8 @@ func RCSConnectionProblem(vendor string, settings map[string]string, secrets RCS
 		return "vi needs its client secret"
 	case vendor == "google" && secrets.ServiceAccountJSON == "":
 		return "google needs its service account key"
+	case vendor == "trustsignal" && secrets.APIKey == "":
+		return "trustsignal needs its api key"
 	}
 	for assistant, secret := range secrets.Assistants {
 		if strings.TrimSpace(assistant) == "" || secret == "" {
@@ -115,6 +121,8 @@ func (s *Server) RCSGateway(c store.RCSConnection) (connector.RCSGateway, error)
 	case "vi":
 		return &connector.ViRCS{BaseURL: rcsSetting(c, "baseUrl"), TokenURL: rcsSetting(c, "tokenUrl"),
 			ClientID: rcsSetting(c, "clientId"), ClientSecret: secrets.ClientSecret}, nil
+	case "trustsignal":
+		return &connector.TrustsignalRCS{BaseURL: rcsSetting(c, "baseUrl"), APIKey: secrets.APIKey}, nil
 	case "jio":
 		return &connector.JioRCS{TokenURL: rcsSetting(c, "tokenUrl"), BaseURL: rcsSetting(c, "baseUrl"),
 			Assistants: secrets.Assistants}, nil

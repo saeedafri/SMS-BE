@@ -74,4 +74,8 @@ func (r Registry) Dedicated(channel string) (Connector, bool) {
 //
 // Google is the RBM platform itself rather than a network, used to test on
 // invited handsets; its launches are recorded under GOOGLE.
-var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI", "jio": "JIO", "google": "GOOGLE"}
+//
+// Trustsignal (sold as Sigmo) is an aggregator reaching every Indian network
+// through one account, so its launches are recorded under TRUSTSIGNAL.
+var RCSIntegrations = map[string]string{"airtel": "AIRTEL", "vi": "VI", "jio": "JIO",
+	"google": "GOOGLE", "trustsignal": "TRUSTSIGNAL"}
