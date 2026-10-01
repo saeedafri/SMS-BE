@@ -298,6 +298,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if err := store.MarkCampaignSending(ctx, s.DB, identity, campaign.ID); err != nil {
 		return 0, 0, err
 	}
+	s.campaignStatusChanged(ctx, identity, campaign.ID)
 
 	// From here on the campaign is 'sending', and every early return below has
 	// to move it off that status. Without this, one failed page — a contact
@@ -331,6 +332,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			identity, campaign.ID, status); landErr != nil && s.Logger != nil {
 			s.Logger.Warn("campaign left sending", "campaign", campaign.ID, "error", landErr)
 		}
+		s.campaignStatusChanged(context.WithoutCancel(ctx), identity, campaign.ID)
 	}()
 
 	// Paged so a million-contact list never has to fit in memory at once, and
@@ -453,6 +455,9 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 				return sent, failed, legErr
 			}
 		}
+		// The page's rows now exist, so the queued and sent counts moved. Coalesced
+		// by the notifier: this fires once per page, not once per message.
+		s.campaignProgressed(ctx, identity, &campaignID)
 		// Who this capped send SELECTED, so the next one starts with them at the
 		// back of the queue. Selected rather than delivered on purpose: a contact
 		// the gate then refuses still had their turn, and counting it otherwise
@@ -501,6 +506,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if err := store.SetCampaignStatus(ctx, s.DB, identity, campaign.ID, status); err != nil {
 		return sent, failed, err
 	}
+	s.campaignStatusChanged(ctx, identity, campaign.ID)
 	return sent, failed, nil
 }
 

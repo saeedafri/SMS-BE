@@ -51,6 +51,7 @@ func (s *Server) halt(ctx context.Context, id uuid.UUID, action string) (haltOut
 		return haltOutcome{}, err
 	}
 
+	s.CampaignStatusChanged(ctx, identity.TenantID, id)
 	s.recordActivity(ctx, identity, "campaign."+action,
 		fmt.Sprintf("%s campaign %q", haltVerb(action), campaign.Name))
 

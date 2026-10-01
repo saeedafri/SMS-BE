@@ -56,6 +56,10 @@ type Service struct {
 	// state, after the new state is written. Nil tells nobody.
 	Settled func(context.Context, store.Identity, store.MessageRecord)
 
+	// Notifier is told when a campaign's status or message counts move, so a
+	// screen can refresh without polling. Nil tells nobody.
+	Notifier CampaignNotifier
+
 	// Coalescer batches the transactional send path. Nil means every send pays
 	// for its own round trips, which is correct and slow — see coalesce.go for
 	// why the batched form is the same send rather than a deferred one.
@@ -604,7 +608,11 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		if current.ReadAt != nil {
 			return nil
 		}
-		return s.markRead(ctx, identity, current, report.OccurredAt)
+		if err := s.markRead(ctx, identity, current, report.OccurredAt); err != nil {
+			return err
+		}
+		s.campaignProgressed(ctx, identity, current.CampaignID)
+		return nil
 	}
 
 	// Replayed receipts are common: carriers retry, and a terminal message must
@@ -675,6 +683,7 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 	if s.Settled != nil {
 		s.Settled(ctx, identity, record)
 	}
+	s.campaignProgressed(ctx, identity, record.CampaignID)
 	return nil
 }
 

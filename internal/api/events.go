@@ -33,6 +33,17 @@ import (
 const (
 	eventHeartbeat = 25 * time.Second
 	eventChannel   = "relay:tenant:%s:events"
+
+	// operatorEventChannel carries every tenant's events, for the operator
+	// console, which spans all of them. TenantEvent.TenantID says whose each is.
+	operatorEventChannel = "relay:operator:events"
+
+	eventCampaignStatus   = "campaign.status_changed"
+	eventCampaignProgress = "campaign.progress"
+
+	// campaignProgressGate is the shortest gap between two progress events for
+	// one campaign.
+	campaignProgressGate = time.Second
 )
 
 // TenantEvent is what one change looks like on the wire.
@@ -79,15 +90,92 @@ func (s *Server) publishTenantEvent(ctx context.Context, tenantID uuid.UUID,
 	if err != nil {
 		return
 	}
-	if err := s.Redis.Publish(ctx,
-		fmt.Sprintf(eventChannel, tenantID), payload).Err(); err != nil && s.Logger != nil {
-		s.Logger.Warn("live event not published",
-			"type", eventType, "tenant", tenantID, "error", err)
+	// The tenant's own stream, then the operator's. Two publishes, not one
+	// shared channel: a tenant must never be subscribed to a channel that
+	// carries anyone else's events. A failure on the first does not skip the
+	// second.
+	for _, channel := range []string{fmt.Sprintf(eventChannel, tenantID), operatorEventChannel} {
+		if err := s.Redis.Publish(ctx, channel, payload).Err(); err != nil && s.Logger != nil {
+			s.Logger.Warn("live event not published",
+				"type", eventType, "tenant", tenantID, "channel", channel, "error", err)
+		}
 	}
+}
+
+// Campaign events.
+//
+// Both are nudges like every other event here: the campaign id and nothing
+// else, and the screen re-fetches. A campaign finishes in seconds, so polling
+// misses it entirely and the stream is the only way a live screen can show it.
+
+// CampaignStatusChanged satisfies sending.CampaignNotifier. A status change is
+// rare, so it is published at once and never coalesced.
+func (s *Server) CampaignStatusChanged(ctx context.Context, tenantID, campaignID uuid.UUID) {
+	s.publishTenantEvent(detach(ctx), tenantID, eventCampaignStatus, "", campaignID.String())
+}
+
+// CampaignProgressed satisfies sending.CampaignNotifier. It is called once per
+// settled message, so it is coalesced to at most one event per campaign per
+// campaignProgressGate, with a trailing event guaranteed after the last change.
+//
+// Leading edge: the first change of a burst takes a Redis gate and publishes
+// immediately. Trailing edge: a change that finds the gate held schedules one
+// publish for when the gate clears, so a screen never settles on a stale
+// number. At most one trailing publish is pending per campaign per process;
+// changes arriving meanwhile are covered by it, because the screen re-fetches
+// the current counts rather than reading them from the event.
+func (s *Server) CampaignProgressed(ctx context.Context, tenantID, campaignID uuid.UUID) {
+	if s.Redis == nil {
+		return
+	}
+	ctx = detach(ctx)
+	if s.takeProgressGate(ctx, campaignID) {
+		s.publishTenantEvent(ctx, tenantID, eventCampaignProgress, "", campaignID.String())
+		return
+	}
+	if _, pending := s.progressPending.LoadOrStore(campaignID, struct{}{}); pending {
+		return
+	}
+	wait := s.Redis.PTTL(ctx, progressGateKey(campaignID)).Val()
+	if wait <= 0 || wait > campaignProgressGate {
+		wait = campaignProgressGate
+	}
+	time.AfterFunc(wait+10*time.Millisecond, func() {
+		// Cleared before the gate is tried, so a change landing from here on
+		// schedules its own trailing event instead of trusting this one.
+		s.progressPending.Delete(campaignID)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// Not taking the gate means another publish happened after our change
+		// (the gate was free when we fired, so somebody took it since), and the
+		// screen is already refreshing from it.
+		if s.takeProgressGate(ctx, campaignID) {
+			s.publishTenantEvent(ctx, tenantID, eventCampaignProgress, "", campaignID.String())
+		}
+	})
+}
+
+func progressGateKey(campaignID uuid.UUID) string {
+	return "relay:campaign:" + campaignID.String() + ":progress"
+}
+
+// takeProgressGate reports whether this caller may publish a progress event
+// now. A Redis error answers false: publishing would fail on the same outage.
+func (s *Server) takeProgressGate(ctx context.Context, campaignID uuid.UUID) bool {
+	taken, err := s.Redis.SetNX(ctx, progressGateKey(campaignID), 1, campaignProgressGate).Result()
+	return err == nil && taken
+}
+
+// detach keeps the caller's values but not its cancellation. The caller is often
+// a request or a settle whose context ends the moment it returns, and the nudge
+// still has to go out.
+func detach(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }
 
 func (s *Server) mountEventRoutes(r chi.Router) {
 	r.Get("/v1/events", s.streamEvents)
+	r.Get("/v1/operator/events", s.streamOperatorEvents)
 }
 
 // streamEvents holds one SSE connection open for the caller's tenant.
@@ -102,6 +190,24 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 			"Missing or invalid bearer token")
 		return
 	}
+	s.serveEventStream(w, r, fmt.Sprintf(eventChannel, identity.TenantID))
+}
+
+// streamOperatorEvents is streamEvents for the operator console: every tenant's
+// events, authorised by an operator session. A tenant token resolves to no
+// operator at all (see authenticate), so it is refused here with 401.
+func (s *Server) streamOperatorEvents(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.requireOperator(r.Context()); err != nil {
+		writeError(w, http.StatusUnauthorized, codeUnauthenticated,
+			"Missing or invalid bearer token")
+		return
+	}
+	s.serveEventStream(w, r, operatorEventChannel)
+}
+
+// serveEventStream holds an SSE connection open on one Redis channel. The caller
+// has already decided who may listen.
+func (s *Server) serveEventStream(w http.ResponseWriter, r *http.Request, channel string) {
 	if s.Redis == nil {
 		writeError(w, http.StatusServiceUnavailable, "unavailable",
 			"Live updates are not configured on this deployment.")
@@ -124,7 +230,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	subscription := s.Redis.Subscribe(r.Context(), fmt.Sprintf(eventChannel, identity.TenantID))
+	subscription := s.Redis.Subscribe(r.Context(), channel)
 	defer func() { _ = subscription.Close() }()
 	messages := subscription.Channel()
 

@@ -35,11 +35,14 @@ const StuckCampaignWindow = 15 * time.Minute
 // normally, so a reconciled campaign is indistinguishable from one that landed
 // on its own.
 //
+// notifier is optional; when set it hears about each campaign landed.
+//
 // tenants is the operator pool, used ONLY to enumerate tenant ids — campaigns
 // carry no operator policy, so every campaign read and write below still goes
 // through the ordinary tenant-scoped pool.
 func ReconcileStuckCampaigns(ctx context.Context, tenants, db *pgxpool.Pool,
-	clickhouse driver.Conn, window time.Duration, limit int) (int, error) {
+	clickhouse driver.Conn, window time.Duration, limit int,
+	notifier ...CampaignNotifier) (int, error) {
 
 	if window <= 0 {
 		window = StuckCampaignWindow
@@ -81,6 +84,9 @@ func ReconcileStuckCampaigns(ctx context.Context, tenants, db *pgxpool.Pool,
 				continue
 			}
 			landed++
+			for _, n := range notifier {
+				n.CampaignStatusChanged(ctx, tenantID, campaign.ID)
+			}
 		}
 	}
 	return landed, errors.Join(failures...)
