@@ -54,7 +54,16 @@ type Campaign struct {
 	// DispatchCursor is where fan-out reached, so a resume continues from the
 	// exact recipient a pause stopped at. Empty means from the beginning.
 	DispatchCursor string
+
+	// DripBatchSize and DripIntervalMinutes send the campaign in instalments:
+	// that many recipients, then wait that many minutes. Nil for an ordinary
+	// campaign. Both are set or neither is.
+	DripBatchSize       *int
+	DripIntervalMinutes *int
 }
+
+// Dripping says whether the campaign is sent in instalments.
+func (c Campaign) Dripping() bool { return c.DripBatchSize != nil && c.DripIntervalMinutes != nil }
 
 const campaignColumns = `
 	c.id, c.name, c.description, c.channel, c.country, c.list_id, c.sender_id, c.template_id,
@@ -62,7 +71,8 @@ const campaignColumns = `
 	c.status, c.scheduled_at, c.held_until, c.send_started_at, c.recipients,
 	c.segments_per_message_min, c.segments_per_message_max, c.cost_minor_min, c.cost_minor_max, c.currency,
 	c.retry_of, (SELECT r.id FROM campaigns r WHERE r.retry_of = c.id LIMIT 1),
-	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, '')`
+	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, ''),
+	c.drip_batch_size, c.drip_interval_minutes`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var campaign Campaign
@@ -74,7 +84,8 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 		&campaign.SegmentsPerMessageMax, &campaign.CostMinorMin,
 		&campaign.CostMinorMax, &campaign.Currency, &campaign.RetryOf,
 		&campaign.RetriedByCampaignID, &campaign.CreatedAt,
-		&campaign.PausedAt, &campaign.CancelledAt, &campaign.DispatchCursor)
+		&campaign.PausedAt, &campaign.CancelledAt, &campaign.DispatchCursor,
+		&campaign.DripBatchSize, &campaign.DripIntervalMinutes)
 	return campaign, err
 }
 
@@ -174,9 +185,10 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    fallback_template_id, status, scheduled_at, recipients,
 			    segments_per_message_min, segments_per_message_max,
 			    cost_minor_min, cost_minor_max, currency, retry_of, held_until, description,
-			    created_by_user_id, created_by_name, created_by_email)
+			    created_by_user_id, created_by_name, created_by_email,
+			    drip_batch_size, drip_interval_minutes)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,nullif($21,''),
-			    $22, nullif($23,''), nullif($24,''))
+			    $22, nullif($23,''), nullif($24,''), $25, $26)
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
@@ -186,6 +198,7 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			campaign.CostMinorMin, campaign.CostMinorMax,
 			campaign.Currency, campaign.RetryOf, campaign.HeldUntil, campaign.Description,
 			userOrNil(id.UserID), id.Name, id.Email,
+			campaign.DripBatchSize, campaign.DripIntervalMinutes,
 		).Scan(&newID); err != nil {
 			return err
 		}
@@ -213,7 +226,9 @@ func MarkCampaignSending(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		// this guard that second halt is silently undone and the campaign sends
 		// anyway — the exact failure the brake exists to prevent.
 		_, err := tx.Exec(ctx,
-			`UPDATE campaigns SET status = 'sending', send_started_at = now(),
+			`UPDATE campaigns SET status = 'sending',
+			 send_started_at = CASE WHEN drip_batch_size IS NULL THEN now()
+			                        ELSE coalesce(send_started_at, now()) END,
 			 updated_at = now()
 			 WHERE id = $1 AND status NOT IN ('paused','cancelled')`, campaignID)
 		return err
@@ -599,4 +614,40 @@ func campaignChannels(campaign Campaign) []string {
 		channels = append(channels, *campaign.FallbackChannel)
 	}
 	return channels
+}
+
+// SetDrip changes a campaign's instalment settings, and only while it has not
+// started: a campaign that is part-way through has already shown its recipients
+// one schedule. Nil settings turn dripping off. Reports whether it applied.
+func SetDrip(ctx context.Context, pool *pgxpool.Pool, id Identity, campaignID uuid.UUID,
+	batchSize, intervalMinutes *int) (bool, error) {
+
+	applied := false
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE campaigns
+			SET drip_batch_size = $2, drip_interval_minutes = $3, updated_at = now()
+			WHERE id = $1 AND status = 'scheduled' AND dispatch_cursor IS NULL`,
+			campaignID, batchSize, intervalMinutes)
+		applied = tag.RowsAffected() == 1
+		return err
+	})
+	return applied, err
+}
+
+// ParkDripCampaign reschedules a campaign between instalments: back to
+// 'scheduled' at `next`, cursor kept. Conditional on it still sending, so a
+// pause or cancel that landed during the batch is not undone.
+func ParkDripCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	campaignID uuid.UUID, cursor string, next time.Time) (bool, error) {
+
+	parked := false
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE campaigns
+			SET status = 'scheduled', scheduled_at = $3, held_until = NULL,
+			    dispatch_cursor = $2, updated_at = now()
+			WHERE id = $1 AND status = 'sending'`, campaignID, cursor, next)
+		parked = tag.RowsAffected() == 1
+		return err
+	})
+	return parked, err
 }

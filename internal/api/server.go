@@ -272,6 +272,8 @@ func NewRouter(s *Server) http.Handler {
 	r.Use(limitBody)
 	// Closed vocabularies in the contract are enforced on the query string.
 	r.Use(rejectBadEnums)
+	// Reads drip settings off POST /v1/campaigns until the contract declares them.
+	r.Use(withDripPeek)
 	r.Use(requestLogger(s.Logger, s.Metrics))
 	// After the logger, so a refused flood is still visible in the logs.
 	r.Use(s.abuseGuard)
@@ -386,6 +388,9 @@ func NewRouter(s *Server) http.Handler {
 
 	// Short links, click logs, and the public redirect. See links.go.
 	s.mountLinkRoutes(r)
+
+	// Drip settings for a campaign. See campaign_drip.go.
+	s.mountCampaignDripRoutes(r)
 
 	// Error and latency stats. See analytics_detail.go.
 	s.mountAnalyticsDetailRoutes(r)

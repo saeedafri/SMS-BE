@@ -235,6 +235,11 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		Status:      "queued",
 		Currency:    "INR",
 	}
+	dripBatch, dripInterval, dripProblem := dripFrom(ctx)
+	if dripProblem != "" {
+		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, dripProblem)), nil
+	}
+	campaign.DripBatchSize, campaign.DripIntervalMinutes = dripBatch, dripInterval
 	if body.ListId != nil && *body.ListId != "" {
 		listID, err := uuid.Parse(*body.ListId)
 		if err != nil {

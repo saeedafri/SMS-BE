@@ -338,6 +338,11 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	// Paged so a million-contact list never has to fit in memory at once, and
 	// resumed from where a pause stopped rather than from the top.
 	cursor := campaign.DispatchCursor
+	// Recipients still owed to this instalment. Unused for an ordinary campaign.
+	dripLeft := 0
+	if campaign.Dripping() {
+		dripLeft = *campaign.DripBatchSize
+	}
 	for {
 		// The brake, checked between pages.
 		//
@@ -370,11 +375,19 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		// already in it and never adds anyone: paging the union of both
 		// channels sent the SMS fallback to people who had consented to SMS
 		// and never to this campaign's RCS.
+		pageSize := batchSize
+		if campaign.Dripping() && dripLeft < pageSize {
+			pageSize = dripLeft
+		}
 		contacts, next, err := store.ListContactsAfter(ctx, s.DB, identity,
-			campaign.ListID, cursor, batchSize, batch.sender.Channel)
+			campaign.ListID, cursor, pageSize, batch.sender.Channel)
 		if err != nil {
 			return sent, failed, err
 		}
+		// What this page took off the instalment, counted before any cap clips
+		// it: the instalment is a slice of the LIST, so a recipient the cap
+		// withheld still used up their place in it.
+		dripLeft -= len(contacts)
 
 		// The ceiling, applied before anyone is priced or held for. A withheld
 		// recipient gets no message row, no wallet hold and no error code —
@@ -490,6 +503,29 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			break
 		}
 		cursor = next
+		// The instalment is out. Park the campaign until the next one is due; the
+		// scheduler that launches any scheduled campaign picks it up, and the
+		// cursor above is where it resumes. Conditional on it still sending, so a
+		// pause or cancel that landed during the instalment stands.
+		if campaign.Dripping() && dripLeft <= 0 {
+			wait := time.Duration(*campaign.DripIntervalMinutes) * time.Minute
+			parked, parkErr := store.ParkDripCampaign(ctx, s.DB, identity, campaign.ID,
+				cursor, s.now().Add(wait))
+			if parkErr != nil {
+				return sent, failed, parkErr
+			}
+			halted = !parked
+			if halted {
+				// Paused or cancelled while the instalment was going out. The
+				// cursor still has to be kept, or a resume would send it again.
+				if saveErr := store.SaveDispatchCursor(context.WithoutCancel(ctx), s.DB,
+					identity, campaign.ID, cursor); saveErr != nil {
+					return sent, failed, saveErr
+				}
+			}
+			s.campaignStatusChanged(ctx, identity, campaign.ID)
+			return sent, failed, nil
+		}
 		// Persisted per page rather than only at a halt, so a campaign that
 		// dies mid-fan-out — a crash, a ClickHouse blip — resumes from the last
 		// page it finished instead of re-sending everyone before it.
