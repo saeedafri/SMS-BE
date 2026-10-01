@@ -90,8 +90,11 @@ its wallet funded. Live today: **Acme Retail** has one approved RCS agent
 ### 2.6 SMS fallback (optional)
 Relay runs its own fallback: an RCS campaign can fall back to SMS through our
 SMS route (today the VIDEOCON SMPP bind). It needs an SMS sender and a
-DLT-registered SMS template on the campaign. **We do not use Sigmo's built-in
-SMS fallback**, because it would send the SMS twice.
+DLT-registered SMS template on the campaign. **But with Trustsignal it never
+fires:** Relay picks the fallback *before* sending, from the carrier's "can this
+phone take RCS?" check, and Sigmo has no such API, so every contact goes RCS and
+a phone without RCS fails as `nonrcs` with no SMS. Either use Sigmo's own
+`sms_fallback`, or build an after-failure fallback in Relay (~1–2 days).
 
 ---
 
