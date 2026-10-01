@@ -40,7 +40,7 @@ var (
 	validBindTypes     = []string{"transmitter", "receiver", "transceiver"}
 	validFrequencies   = []string{"daily", "weekly", "monthly"}
 	validCardBrands    = []string{"visa", "mastercard", "amex"}
-	validRoles         = []string{"owner", "admin", "member"}
+	validRoles         = []string{"owner", "admin", "member", "viewer"}
 	validCountries     = []string{"IN", "US", "GB", "AE"}
 	validStandings     = []string{"registered", "grey"}
 	// The webhook catalogue, in lifecycle order. message.inbound leads it

@@ -24,7 +24,7 @@ func TestEnumListsCoverTheValuesTheProductActuallyUses(t *testing.T) {
 		"environments": {"live", "test"},
 		"frequencies":  {"daily", "weekly", "monthly"},
 		"cardBrands":   {"visa", "mastercard", "amex"},
-		"roles":        {"owner", "admin", "member"},
+		"roles":        {"owner", "admin", "member", "viewer"},
 	}
 	lists := map[string][]string{
 		"channels":     validChannels,

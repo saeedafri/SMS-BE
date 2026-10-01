@@ -279,6 +279,9 @@ func NewRouter(s *Server) http.Handler {
 	// an operator login.
 	r.Use(s.restrictOperatorNetwork)
 	r.Use(s.authenticate)
+	// After authenticate, which is what says who the caller is: a viewer's
+	// writes are refused here, for every route at once.
+	r.Use(s.readOnlyViewers)
 	// additionalProperties: false, actually enforced. It is declared on
 	// ConnectionCreate and ConnectionUpdate and is documentation without this:
 	// encoding/json drops unknown keys silently. Middleware rather than a check
