@@ -268,6 +268,10 @@ func NewRouter(s *Server) http.Handler {
 	// address rather than the proxy's, and before authenticate so a session minted during this
 	// request can record the device it was minted on.
 	r.Use(withClientInfo)
+	// Before anything reads a body: the cap has to be in place first.
+	r.Use(limitBody)
+	// Closed vocabularies in the contract are enforced on the query string.
+	r.Use(rejectBadEnums)
 	r.Use(requestLogger(s.Logger, s.Metrics))
 	// After the logger, so a refused flood is still visible in the logs.
 	r.Use(s.abuseGuard)
@@ -374,6 +378,9 @@ func NewRouter(s *Server) http.Handler {
 	// see operator_sends.go.
 	s.mountOperatorSendRoutes(r)
 
+	// Per-recipient frequency caps. Not in the contract yet; see frequency_caps.go.
+	s.mountFrequencyCapRoutes(r)
+
 	// Reading an uploaded asset back. Mounted directly because the contract
 	// declares the upload and documents the URL as opaque — the read is ours to
 	// shape, and a signature rather than a session is what authorises it, since
@@ -396,7 +403,11 @@ func NewRouter(s *Server) http.Handler {
 		// validation_failed rather than 400. The contract declares 400 on
 		// exactly one of its 151 operations but 422 on 57, so 422 is the code
 		// the frontend's error states are actually written against.
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			if isBodyTooLarge(err) {
+				writeTooLarge(w, bodyLimitFor(r))
+				return
+			}
 			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
 		},
 		ResponseErrorHandlerFunc: writeOperationError,

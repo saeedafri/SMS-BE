@@ -319,6 +319,12 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			RCSAgentRequired: plan.sender.Channel == "RCS" && plan.rcsCarrier != "",
 			RCSAgentResolved: plan.agentID != "",
 		})
+		if gateErr == nil {
+			identity := plan.pending.identity
+			gateErr = s.overFrequencyCap(ctx, identity,
+				s.frequencyCapFor(ctx, identity, plan.sender.Channel),
+				plan.sender.Country, plan.msisdn)
+		}
 		if gateErr != nil {
 			plan.refusal = messaging.GateFailureCode(gateErr)
 			plan.refusalErr = gateErr

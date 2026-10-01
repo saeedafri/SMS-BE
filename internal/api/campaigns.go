@@ -572,7 +572,7 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
-		Notifier: s}
+		Notifier: s, Redis: s.Redis}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called

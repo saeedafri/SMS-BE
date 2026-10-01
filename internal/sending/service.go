@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/redis/go-redis/v9"
 	"log/slog"
 	"strings"
 	"time"
@@ -64,6 +65,10 @@ type Service struct {
 	// for its own round trips, which is correct and slow — see coalesce.go for
 	// why the batched form is the same send rather than a deferred one.
 	Coalescer *Coalescer
+
+	// Redis holds the frequency-cap counters. Nil means no cap is enforced,
+	// which is what a deployment without Redis gets and what most tests want.
+	Redis *redis.Client
 }
 
 // rcsPath is the operator an RCS message goes out through, upper-cased into
@@ -371,6 +376,13 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		RCSAgentRequired: sender.Channel == "RCS" && rcsCarrier != "",
 		RCSAgentResolved: agentID != "",
 	})
+
+	// After the gate, so a message refused for any other reason never uses up a
+	// slot, and before the money moves.
+	if gateErr == nil {
+		gateErr = s.overFrequencyCap(ctx, identity,
+			s.frequencyCapFor(ctx, identity, sender.Channel), sender.Country, msisdn)
+	}
 
 	messageID := uuid.New()
 	now := time.Now().UTC()

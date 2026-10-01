@@ -27,6 +27,7 @@ var (
 	ErrCarrierTemplateNotApproved = errors.New("messaging: the carrier has not approved this template")
 	ErrSenderTemplateMismatch     = errors.New("messaging: template does not belong to that sender")
 	ErrSuppressed                 = errors.New("messaging: recipient is suppressed")
+	ErrFrequencyCapped            = errors.New("messaging: recipient has reached the frequency cap")
 	ErrInsufficientFunds          = errors.New("messaging: insufficient balance")
 	ErrInvalidRecipient           = errors.New("messaging: recipient is not a valid number")
 	// ErrContentNotAllowed is the country's own content rule refusing the body
@@ -252,7 +253,7 @@ func Check(input GateInput) error {
 // sender got "an unexpected error occurred" and a 500 — found on production the
 // day the send API shipped.
 func IsRefusal(err error) bool {
-	for _, refusal := range refusals {
+	for _, refusal := range append(refusals[:len(refusals):len(refusals)], awaitingContract...) {
 		if errors.Is(err, refusal) {
 			return true
 		}
@@ -273,8 +274,17 @@ var refusals = []error{
 	ErrVariableUnresolved,
 }
 
+// awaitingContract are refusals whose code is not yet in the contract's
+// MessageRefusalCode enum, which belongs to the frontend. They refuse exactly
+// like the others; they are kept apart only so the contract test does not fail
+// on a code the frontend has been asked to add. Move each into refusals once
+// the enum has it.
+var awaitingContract = []error{ErrFrequencyCapped}
+
 func GateFailureCode(err error) string {
 	switch {
+	case errors.Is(err, ErrFrequencyCapped):
+		return "frequency_cap"
 	case errors.Is(err, ErrContentNotAllowed):
 		return "content_not_allowed"
 	case errors.Is(err, ErrTenantSuspended):

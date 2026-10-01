@@ -89,6 +89,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	}
 
 	now := time.Now().UTC()
+	frequencyCap := s.frequencyCapFor(ctx, identity, context.sender.Channel)
 	plans := make([]sendPlan, 0, len(contacts))
 	var holdTotal int64
 
@@ -179,6 +180,10 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			RCSAgentRequired: context.sender.Channel == "RCS" && context.rcsCarrier != "",
 			RCSAgentResolved: context.agentID != "",
 		})
+		if gateErr == nil {
+			gateErr = s.overFrequencyCap(ctx, identity, frequencyCap,
+				context.sender.Country, msisdn)
+		}
 		if gateErr != nil {
 			plan.refusal = messaging.GateFailureCode(gateErr)
 			plans = append(plans, plan)
