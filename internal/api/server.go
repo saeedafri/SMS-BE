@@ -395,6 +395,9 @@ func NewRouter(s *Server) http.Handler {
 	// Test send to a few of the customer's own handsets. See test_send.go.
 	s.mountTestSendRoutes(r)
 
+	// Keyword chatbots. See chatbots.go.
+	s.mountChatbotRoutes(r)
+
 	// WebEngage, MoEngage and CleverTap webhook formats. See webhook_integrations.go.
 	s.mountWebhookIntegrationRoutes(r)
 

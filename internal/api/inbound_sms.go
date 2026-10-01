@@ -39,13 +39,13 @@ func (s *Server) receiveInboundSMS(in connector.InboundSMS) {
 			return
 		}
 	}
-	s.fileReply(ctx, identity, msisdn, holder.Country, "SMS", in.Text)
+	s.FileReply(ctx, identity, msisdn, holder.Country, "SMS", in.Text)
 }
 
-// fileReply puts a contact's reply in the tenant's inbox and tells the tenant's
+// FileReply puts a contact's reply in the tenant's inbox and tells the tenant's
 // webhooks. ReceiveInboundMessage suppresses the number first when the reply is
 // a stop keyword.
-func (s *Server) fileReply(ctx context.Context, identity store.Identity,
+func (s *Server) FileReply(ctx context.Context, identity store.Identity,
 	msisdn, country, channel, text string) {
 
 	log := s.Logger.With("tenant", identity.TenantID, "channel", channel)
@@ -68,4 +68,9 @@ func (s *Server) fileReply(ctx context.Context, identity store.Identity,
 		"keywordMatched": message.KeywordMatched,
 		"receivedAt":     message.CreatedAt,
 	})
+	// A STOP has been acted on and gets no auto-reply; anything else may be a
+	// keyword one of the tenant's chatbots answers.
+	if message.KeywordMatched == nil {
+		s.answerKeyword(ctx, identity, contactID, msisdn, channel, text)
+	}
 }

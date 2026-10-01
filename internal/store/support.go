@@ -506,6 +506,11 @@ var stopKeywords = map[string]bool{
 	"STOP": true, "UNSUBSCRIBE": true, "CANCEL": true, "END": true, "QUIT": true, "OPTOUT": true,
 }
 
+// IsStopKeyword says whether text, in any case, is a word that opts a person out.
+func IsStopKeyword(text string) bool {
+	return stopKeywords[strings.ToUpper(strings.TrimSpace(text))]
+}
+
 // ReceiveInboundMessage records a message from a contact: it opens or finds the
 // thread, stores the message, and honours a STOP-class keyword by suppressing
 // the contact.

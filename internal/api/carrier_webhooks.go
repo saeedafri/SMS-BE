@@ -215,7 +215,7 @@ func (s *Server) applyRCSEvent(r *http.Request, event connector.RCSEvent) {
 		if text == "" {
 			text = event.PostbackData
 		}
-		s.fileReply(ctx, store.Identity{TenantID: tenantID}, msisdn, "IN", "RCS", text)
+		s.FileReply(ctx, store.Identity{TenantID: tenantID}, msisdn, "IN", "RCS", text)
 
 	default:
 		log.Debug("carrier event with no consequence")
