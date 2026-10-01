@@ -134,7 +134,11 @@ func (s *Service) ApplyLateSubmit(ctx context.Context, late connector.LateSubmit
 	if from == messaging.StateQueued {
 		record.Version = current.Version + 2
 	}
-	return s.record(ctx, identity, record, string(from), string(outcome.state), outcome.code)
+	if err := s.record(ctx, identity, record, string(from), string(outcome.state), outcome.code); err != nil {
+		return err
+	}
+	s.campaignProgressed(ctx, identity, record.CampaignID)
+	return nil
 }
 
 func carrierRefSpellings(ref string) []string {

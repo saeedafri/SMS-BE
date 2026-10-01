@@ -34,6 +34,25 @@ import (
 // guessing from behaviour.
 var commit string
 
+// liveCampaignNotifier hands the background workers' campaign events to the API
+// server, which owns the Redis connection. The workers start before the server
+// exists; until it does they tell nobody.
+type liveCampaignNotifier struct {
+	server *atomic.Pointer[api.Server]
+}
+
+func (n liveCampaignNotifier) CampaignStatusChanged(ctx context.Context, tenantID, campaignID uuid.UUID) {
+	if server := n.server.Load(); server != nil {
+		server.CampaignStatusChanged(ctx, tenantID, campaignID)
+	}
+}
+
+func (n liveCampaignNotifier) CampaignProgressed(ctx context.Context, tenantID, campaignID uuid.UUID) {
+	if server := n.server.Load(); server != nil {
+		server.CampaignProgressed(ctx, tenantID, campaignID)
+	}
+}
+
 func main() {
 	if err := run(); err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
@@ -117,6 +136,8 @@ func run() error {
 		}
 	}
 
+	notifier := liveCampaignNotifier{server: &liveServer}
+
 	if clickhouse.Configured() {
 		// Applies the sandbox carrier's delivery reports. A real carrier POSTs
 		// these to an ingest endpoint; the sandbox queues them in-process, so
@@ -132,7 +153,7 @@ func run() error {
 					return nil // nothing to drain while it is unreachable
 				}
 				drainer := &sending.Service{DB: pool, ClickHouse: conn, Connector: sandbox,
-					Settled: messageSettled}
+					Settled: messageSettled, Notifier: notifier}
 				applied, err := drainer.DrainSandboxReports(ctx)
 				if err != nil {
 					clickhouse.Drop()
@@ -154,7 +175,7 @@ func run() error {
 					return nil
 				}
 				reconciler := &sending.Service{DB: pool, ClickHouse: conn, Logger: logger,
-					Settled: messageSettled}
+					Settled: messageSettled, Notifier: notifier}
 				expired, err := reconciler.Reconcile(ctx, sending.DefaultValidityWindow, 1000)
 				if err != nil {
 					clickhouse.Drop()
@@ -169,7 +190,7 @@ func run() error {
 				// campaign-level version of exactly what the sweep above fixes
 				// per message.
 				landed, campaignErr := sending.ReconcileStuckCampaigns(ctx,
-					operatorPool, pool, conn, sending.StuckCampaignWindow, 100)
+					operatorPool, pool, conn, sending.StuckCampaignWindow, 100, notifier)
 				if landed > 0 {
 					logger.Info("landed abandoned campaigns", "count", landed)
 				}

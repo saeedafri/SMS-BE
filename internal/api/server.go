@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -38,6 +39,10 @@ type Server struct {
 	DB     *pgxpool.Pool
 	Redis  *redis.Client
 	Logger *slog.Logger
+
+	// progressPending holds the campaigns with a trailing progress event
+	// already scheduled in this process; see CampaignProgressed.
+	progressPending sync.Map
 
 	// Hot caches the configuration rows the send path re-reads per message.
 	// Nil disables it and every send goes to Postgres for all of them.

@@ -56,6 +56,7 @@ func (s *Server) LaunchDueCampaigns(ctx context.Context) error {
 		if !claimed {
 			continue
 		}
+		s.CampaignStatusChanged(ctx, identity.TenantID, campaign.ID)
 		sent, failed, err := service.LaunchCampaign(ctx, identity, campaign)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("campaign %s: %w", entry.ID, err))
