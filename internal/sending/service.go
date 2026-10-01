@@ -69,6 +69,10 @@ type Service struct {
 	// Redis holds the frequency-cap counters. Nil means no cap is enforced,
 	// which is what a deployment without Redis gets and what most tests want.
 	Redis *redis.Client
+
+	// Async runs the fallback-after-failure off the delivery report's own path.
+	// Nil runs it inline, which is what tests and the background workers want.
+	Async func(func(context.Context))
 }
 
 // rcsPath is the operator an RCS message goes out through, upper-cased into
@@ -696,6 +700,10 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		s.Settled(ctx, identity, record)
 	}
 	s.campaignProgressed(ctx, identity, record.CampaignID)
+	// A definite failure on a campaign's first leg is its fallback's cue.
+	if to == messaging.StateUndelivered {
+		s.fallbackAfterFailure(ctx, identity, record)
+	}
 	return nil
 }
 

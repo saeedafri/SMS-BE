@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -577,7 +578,7 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
-		Notifier: s, Redis: s.Redis}
+		Notifier: s, Redis: s.Redis, Async: s.runAsync}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called
@@ -757,4 +758,15 @@ func (s *Server) fallbackEstimate(ctx context.Context, identity store.Identity,
 		return nil
 	}
 	return &sending.FallbackEstimate{Channel: *channel, Template: template}
+}
+
+// runAsync runs work off the request that caused it, on its own clock. Used for
+// the fallback a failed delivery report triggers: the carrier's receipt is
+// answered at once and the second send happens behind it.
+func (s *Server) runAsync(work func(context.Context)) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		work(ctx)
+	}()
 }

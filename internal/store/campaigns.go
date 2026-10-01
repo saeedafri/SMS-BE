@@ -651,3 +651,29 @@ func ParkDripCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	})
 	return parked, err
 }
+
+// ClaimFallback records that a failed message is being given its fallback, and
+// reports whether this caller is the one to send it. False means somebody
+// already did.
+func ClaimFallback(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	messageID, campaignID uuid.UUID) (bool, error) {
+
+	claimed := false
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `INSERT INTO fallback_sends (message_id, tenant_id, campaign_id)
+			VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING`,
+			messageID, id.TenantID, campaignID)
+		claimed = tag.RowsAffected() == 1
+		return err
+	})
+	return claimed, err
+}
+
+// ReleaseFallback gives the claim back when the fallback could not even be
+// attempted, so a later report can try again.
+func ReleaseFallback(ctx context.Context, pool *pgxpool.Pool, id Identity, messageID uuid.UUID) error {
+	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM fallback_sends WHERE message_id = $1`, messageID)
+		return err
+	})
+}

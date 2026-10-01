@@ -359,6 +359,34 @@ func ListContactsAfter(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	return contacts, next, nil
 }
 
+// ContactForLeg finds one list member by number, but only if the channel can
+// carry them: the same consent and suppression rules the fan-out applies, so a
+// fallback is never a way round them. ErrNotFound when they are not in the list
+// or cannot be reached on that channel.
+func ContactForLeg(ctx context.Context, pool *pgxpool.Pool, id Identity,
+	listID *uuid.UUID, msisdn, channel string) (Contact, error) {
+
+	var contact Contact
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		contact, err = scanContact(tx.QueryRow(ctx, `
+			SELECT `+contactColumns+` FROM contacts c
+			WHERE c.msisdn = $3
+			  AND ($1::uuid IS NULL OR EXISTS (
+			        SELECT 1 FROM contact_list_members m
+			        WHERE m.contact_id = c.id AND m.list_id = $1))`+
+			reachableOnChannel+` LIMIT 1`, listID, []string{channel}, msisdn))
+		return err
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Contact{}, ErrNotFound
+	}
+	if err != nil {
+		return Contact{}, fmt.Errorf("store: contact for leg: %w", err)
+	}
+	return contact, nil
+}
+
 func ListContacts(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	listID *uuid.UUID, page, limit int) ([]Contact, int, error) {
 

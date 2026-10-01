@@ -54,7 +54,9 @@ func TestATestSendThatTheGateRefusesSaysWhy(t *testing.T) {
 	res := h.do(http.MethodPost, "/v1/messages/test", tenant.Token, map[string]any{
 		"senderId": sender, "templateId": template, "body": "hi",
 		"recipients": []string{"9810000503"}})
-	var out struct{ Results []struct{ Status, FailureCode string } }
+	var out struct {
+		Results []struct{ Status, FailureCode string }
+	}
 	_ = json.Unmarshal(res.Body, &out)
 	if res.Code != 202 || len(out.Results) != 1 || out.Results[0].Status != "rejected" ||
 		out.Results[0].FailureCode != "insufficient_balance" {
