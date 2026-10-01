@@ -392,6 +392,9 @@ func NewRouter(s *Server) http.Handler {
 	// Drip settings for a campaign. See campaign_drip.go.
 	s.mountCampaignDripRoutes(r)
 
+	// Test send to a few of the customer's own handsets. See test_send.go.
+	s.mountTestSendRoutes(r)
+
 	// WebEngage, MoEngage and CleverTap webhook formats. See webhook_integrations.go.
 	s.mountWebhookIntegrationRoutes(r)
 
