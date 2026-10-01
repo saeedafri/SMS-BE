@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,6 +51,14 @@ func Sign(secret string, timestamp int64, body []byte) string {
 
 // Deliver posts a signed payload and reports what happened.
 func Deliver(ctx context.Context, endpoint, eventType string, payload []byte, secret string) Result {
+	return DeliverWith(ctx, endpoint, eventType, payload, secret, nil)
+}
+
+// DeliverWith is Deliver plus the customer's own request headers, which a vendor
+// integration needs to carry its API key. They cannot override ours.
+func DeliverWith(ctx context.Context, endpoint, eventType string, payload []byte, secret string,
+	headers map[string]string) Result {
+
 	timestamp := time.Now().Unix()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
 		bytes.NewReader(payload))
@@ -60,6 +69,11 @@ func Deliver(ctx context.Context, endpoint, eventType string, payload []byte, se
 	request.Header.Set("X-Relay-Event", eventType)
 	request.Header.Set("X-Relay-Timestamp", strconv.FormatInt(timestamp, 10))
 	request.Header.Set("X-Relay-Signature", "v1="+Sign(secret, timestamp, payload))
+	for name, value := range headers {
+		if !ReservedHeader(name) {
+			request.Header.Set(name, value)
+		}
+	}
 
 	response, err := HTTPClient.Do(request)
 	if err != nil {
@@ -146,4 +160,19 @@ func ValidateCIDR(value string) error {
 		}
 	}
 	return nil
+}
+
+// ReservedHeader says whether a customer may not set this header: ours, and the
+// ones that would change what the request is.
+func ReservedHeader(name string) bool {
+	lower := strings.ToLower(name)
+	if strings.HasPrefix(lower, "x-relay-") {
+		return true
+	}
+	switch lower {
+	case "host", "content-length", "content-type", "transfer-encoding", "connection",
+		"upgrade", "te", "trailer", "proxy-authorization", "proxy-authenticate", "expect":
+		return true
+	}
+	return false
 }

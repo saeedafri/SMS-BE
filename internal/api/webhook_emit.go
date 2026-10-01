@@ -168,8 +168,14 @@ func (s *Server) deliverWebhook(ctx context.Context, identity store.Identity,
 	if secret == "" {
 		note := missingSecretNote
 		delivery = webhook.Result{Outcome: "failed", ResponseSnippet: &note, Payload: payload}
+	} else if body, headers, note := s.vendorRequest(ctx, identity, hook, payload); note != "" {
+		delivery = webhook.Result{Outcome: "failed", ResponseSnippet: &note, Payload: payload}
 	} else {
-		delivery = webhook.Deliver(ctx, hook.URL, eventType, payload, secret)
+		// The stored and logged payload stays Relay's own, so a resend or a
+		// retry transforms it afresh; only what goes over the wire is the
+		// vendor's shape.
+		delivery = webhook.DeliverWith(ctx, hook.URL, eventType, body, secret, headers)
+		delivery.Payload = payload
 	}
 	return store.RecordWebhookEvent(ctx, s.DB, identity, store.WebhookDelivery{
 		EndpointID: hook.ID, EventType: eventType, Attempt: attempt,

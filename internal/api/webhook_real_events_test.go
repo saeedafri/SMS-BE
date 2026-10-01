@@ -27,6 +27,7 @@ type receivedHook struct {
 	Timestamp int64
 	Signature string
 	Body      []byte
+	Header    http.Header
 }
 
 // customerEndpoint is a customer's HTTPS receiver. statuses are answered in
@@ -49,7 +50,8 @@ func startCustomerEndpoint(t *testing.T, statuses ...int) *customerEndpoint {
 		ts, _ := strconv.ParseInt(r.Header.Get("X-Relay-Timestamp"), 10, 64)
 		c.mu.Lock()
 		c.got = append(c.got, receivedHook{Event: r.Header.Get("X-Relay-Event"), Timestamp: ts,
-			Signature: strings.TrimPrefix(r.Header.Get("X-Relay-Signature"), "v1="), Body: body})
+			Signature: strings.TrimPrefix(r.Header.Get("X-Relay-Signature"), "v1="), Body: body,
+			Header: r.Header.Clone()})
 		status := c.statuses[min(len(c.got)-1, len(c.statuses)-1)]
 		c.mu.Unlock()
 		w.WriteHeader(status)

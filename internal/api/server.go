@@ -392,6 +392,9 @@ func NewRouter(s *Server) http.Handler {
 	// Drip settings for a campaign. See campaign_drip.go.
 	s.mountCampaignDripRoutes(r)
 
+	// WebEngage, MoEngage and CleverTap webhook formats. See webhook_integrations.go.
+	s.mountWebhookIntegrationRoutes(r)
+
 	// Error and latency stats. See analytics_detail.go.
 	s.mountAnalyticsDetailRoutes(r)
 

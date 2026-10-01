@@ -44,14 +44,14 @@ func TestDripSettingsAreRefusedWhenWrongOrTooLate(t *testing.T) {
 	scheduled := h.seedNamedCampaign(tenant, "Fresh", "scheduled")
 	started := h.seedNamedCampaign(tenant, "Started", "sent")
 	for name, body := range map[string]map[string]any{
-		"batch only":      {"batchSize": 10},
-		"interval only":   {"intervalMinutes": 10},
-		"zero batch":      {"batchSize": 0, "intervalMinutes": 10},
-		"huge batch":      {"batchSize": 100001, "intervalMinutes": 10},
-		"zero interval":   {"batchSize": 10, "intervalMinutes": 0},
-		"over a day":      {"batchSize": 10, "intervalMinutes": 1441},
-		"string batch":    {"batchSize": "ten", "intervalMinutes": 10},
-		"unknown field":   {"batchSize": 10, "intervalMinutes": 10, "pace": "slow"},
+		"batch only":    {"batchSize": 10},
+		"interval only": {"intervalMinutes": 10},
+		"zero batch":    {"batchSize": 0, "intervalMinutes": 10},
+		"huge batch":    {"batchSize": 100001, "intervalMinutes": 10},
+		"zero interval": {"batchSize": 10, "intervalMinutes": 0},
+		"over a day":    {"batchSize": 10, "intervalMinutes": 1441},
+		"string batch":  {"batchSize": "ten", "intervalMinutes": 10},
+		"unknown field": {"batchSize": 10, "intervalMinutes": 10, "pace": "slow"},
 	} {
 		if res := h.do(http.MethodPut, "/v1/campaigns/"+scheduled+"/drip", tenant.Token, body); res.Code != 422 {
 			t.Errorf("%s = %d %s, want 422", name, res.Code, res.Body)
