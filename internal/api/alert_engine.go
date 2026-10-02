@@ -179,7 +179,7 @@ func (s *Server) checkAlerts(ctx context.Context, identity store.Identity,
 // SendDueReports emails every unpaused scheduled report whose time has come and
 // records each send, which is what the report's recentSends then shows.
 func (s *Server) SendDueReports(ctx context.Context) error {
-	if s.OperatorDB == nil || !s.Mail.Enabled() {
+	if s.OperatorDB == nil {
 		return nil
 	}
 	due, err := store.DueScheduledReports(ctx, s.OperatorDB, s.now(), 50)
@@ -197,6 +197,13 @@ func (s *Server) SendDueReports(ctx context.Context) error {
 
 func (s *Server) sendReport(ctx context.Context, report store.ScheduledReport) error {
 	identity := store.Identity{TenantID: report.TenantID}
+	// A report is claimed, and so skipped for its period, the moment it is picked
+	// up. With no mail and no bucket there is nowhere to send it, so leave it due
+	// rather than spend the period on nothing.
+	destination, hasBucket := s.destination(ctx, identity)
+	if !s.Mail.Enabled() && !hasBucket {
+		return nil
+	}
 	claimed, err := store.ClaimScheduledReport(ctx, s.DB, identity, report)
 	if err != nil || !claimed {
 		return err
@@ -205,10 +212,32 @@ func (s *Server) sendReport(ctx context.Context, report store.ScheduledReport) e
 	if err != nil {
 		return err
 	}
-	summary, _, _, err := store.QueryAnalytics(ctx, conn, report.TenantID,
+	summary, buckets, _, err := store.QueryAnalytics(ctx, conn, report.TenantID,
 		store.AnalyticsFilter{Since: rangeSince(report.Range)})
 	if err != nil {
 		return err
+	}
+	// The bucket copy, independent of the email: a customer who wants only the
+	// file, or whose mail is down, still gets it, and a failed upload is shown on
+	// the destination rather than failing the email.
+	uploaded := false
+	if hasBucket {
+		key := fmt.Sprintf("%s/%s-%s.csv", report.Frequency, s.now().UTC().Format("2006-01-02"),
+			report.ID.String()[:8])
+		upCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := s.s3Client().Put(upCtx, destination, key, "text/csv", reportCSV(report, summary, buckets))
+		cancel()
+		store.NoteReportS3Result(context.WithoutCancel(ctx), s.DB, identity, err == nil, errText(err))
+		if err != nil {
+			s.Logger.Warn("report upload to S3 failed", "tenant", report.TenantID, "report", report.ID, "error", err.Error())
+		}
+		uploaded = err == nil
+	}
+	if !s.Mail.Enabled() {
+		if uploaded {
+			return store.RecordReportSend(ctx, s.DB, identity, report.ID, 0)
+		}
+		return fmt.Errorf("the report could not be uploaded and mail is not configured")
 	}
 	rate := 0.0
 	if summary.Sent > 0 {
@@ -230,7 +259,7 @@ func (s *Server) sendReport(ctx context.Context, report store.ScheduledReport) e
 			"Pause or delete it on the analytics page.")
 
 	sent := s.emailAll(ctx, report.Recipients, subject, body)
-	if sent == 0 {
+	if sent == 0 && !uploaded {
 		return fmt.Errorf("no recipient could be emailed")
 	}
 	return store.RecordReportSend(ctx, s.DB, identity, report.ID, sent)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/saeedafri/sms-be/internal/platform/s3put"
 	"log/slog"
 	"net"
 	"net/http"
@@ -112,6 +113,10 @@ type Server struct {
 	// passwords. Nil when no key is configured, in which case storing a bind
 	// password refuses rather than falling back to plaintext.
 	Secrets *secrets.Box
+
+	// S3 uploads scheduled reports to a customer's bucket. The zero value talks to
+	// AWS; a test points its Endpoint at a local server.
+	S3 s3put.Client
 
 	// SMPP holds the live operator binds SMS goes out over. Nil in tests that
 	// never bind. DLTChain is the telemarketer chain hashed into every SMS, and
@@ -397,6 +402,9 @@ func NewRouter(s *Server) http.Handler {
 
 	// Keyword chatbots. See chatbots.go.
 	s.mountChatbotRoutes(r)
+
+	// Report export to the customer's own S3 bucket. See report_s3.go.
+	s.mountReportS3Routes(r)
 
 	// WebEngage, MoEngage and CleverTap webhook formats. See webhook_integrations.go.
 	s.mountWebhookIntegrationRoutes(r)
