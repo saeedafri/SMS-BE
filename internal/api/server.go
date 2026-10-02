@@ -118,6 +118,10 @@ type Server struct {
 	// AWS; a test points its Endpoint at a local server.
 	S3 s3put.Client
 
+	// TXT answers DNS TXT lookups for custom-domain verification. Nil uses the
+	// system resolver; a test supplies its own.
+	TXT func(ctx context.Context, name string) ([]string, error)
+
 	// SMPP holds the live operator binds SMS goes out over. Nil in tests that
 	// never bind. DLTChain is the telemarketer chain hashed into every SMS, and
 	// SMPPEnvironment picks which connections — live or test — are bound.
@@ -405,6 +409,9 @@ func NewRouter(s *Server) http.Handler {
 
 	// Report export to the customer's own S3 bucket. See report_s3.go.
 	s.mountReportS3Routes(r)
+
+	// White-label branding and its public host lookup. See branding.go.
+	s.mountBrandingRoutes(r)
 
 	// WebEngage, MoEngage and CleverTap webhook formats. See webhook_integrations.go.
 	s.mountWebhookIntegrationRoutes(r)
