@@ -346,11 +346,12 @@ func (s *Server) linkStats(w http.ResponseWriter, r *http.Request) {
 // click that nobody made would inflate the number a customer pays attention to.
 // A GET from a known preview fetcher is recorded but flagged as a bot.
 func (s *Server) followLink(w http.ResponseWriter, r *http.Request) {
-	if s.AdminDB == nil {
+	pool := s.operatorPool()
+	if pool == nil {
 		writeError(w, http.StatusServiceUnavailable, "unavailable", "links are not available")
 		return
 	}
-	link, tenant, err := store.ResolveLink(r.Context(), s.AdminDB, chi.URLParam(r, "code"), time.Now())
+	link, tenant, err := store.ResolveLink(r.Context(), pool, chi.URLParam(r, "code"), time.Now())
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		http.Error(w, "This link does not exist.", http.StatusNotFound)
@@ -376,7 +377,7 @@ func (s *Server) followLink(w http.ResponseWriter, r *http.Request) {
 		agent := r.UserAgent()
 		device, osName, isBot := classifyAgent(agent)
 		sum := sha256.Sum256([]byte(r.RemoteAddr))
-		if err := store.RecordClick(r.Context(), s.AdminDB, tenant, link.Code, isBot,
+		if err := store.RecordClick(r.Context(), pool, tenant, link.Code, isBot,
 			device, osName, hex.EncodeToString(sum[:8]), agent); err != nil {
 			s.Logger.Warn("record click", "error", err.Error())
 		}

@@ -14,6 +14,9 @@ type linkResult struct {
 }
 
 func (h *harness) follow(method, code, agent string) *httptest.ResponseRecorder {
+	// Production has no migration-role pool in the API process; the redirect has
+	// to work without one, and the first version did not.
+	h.server.AdminDB = nil
 	req := httptest.NewRequest(method, "/l/"+code, nil)
 	req.Host = "relay.example.test"
 	if agent != "" {
