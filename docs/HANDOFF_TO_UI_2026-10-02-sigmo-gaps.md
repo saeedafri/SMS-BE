@@ -1,4 +1,4 @@
-# Features Relay was missing against Sigmo: built, deployed, screens needed (2 Oct 2026)
+# Features Relay was missing against Sigmo: built, deployed, screens needed (2 Oct 2026, updated with 11 and 12)
 
 We compared Relay page by page with Sigmo (the Trustsignal portal) and built what we lacked.
 **Live on `953ecfd`** (`/healthz` `commit`), API restarted 10:42:49 IST, migrations 69-76 applied.
@@ -150,16 +150,45 @@ validation refusals only (the demo tenant has no variable-free template).
 - Contract drift to fix on your side: `ApprovalType` (operator approvals `type`) lacks **`rcs_agent`**, which
   the server accepts and the console uses; we allowed it explicitly.
 
+## 11. Report export to the customer's own S3 bucket
+Scheduled reports are still emailed. When a destination is set, each send also writes a CSV to the bucket.
+- `GET /v1/report-export/s3` -> `{"configured","bucket","region","prefix","accessKeyIdLast4","lastStatus":"ok|failed|null","lastError","lastAt"}`.
+- `PUT /v1/report-export/s3` `{"bucket","region","prefix"?,"accessKeyId","secretAccessKey"}`. Validated as a real
+  S3 bucket name, region like `ap-south-1`, no `..` in the prefix. The secret is sealed and **never returned**; only the
+  last four characters of the key id come back. Owner/admin only. `DELETE` removes it.
+- `POST /v1/report-export/s3/test` writes one small object and returns `{"ok":true,"key"}` or `{"ok":false,"error":"... AccessDenied"}`.
+  Use it on a "Test connection" button so a customer finds a bad IAM policy before the first report is due.
+- Files land at `<prefix>/<daily|weekly|monthly>/<date>-<id>.csv`: a totals row, then one row per day.
+- A failing bucket never stops the email; the failure shows in `lastStatus`/`lastError`.
+**Screen:** Analytics > Scheduled reports > "Also save to S3": five fields, Save, Test connection, and a status line.
+**Proof:** the request signer matches AWS's own published example signature, so it is correct, not just
+self-consistent; tests cover upload, signing, a refusing bucket, validation and roles. **Not run against a real bucket.**
+
+## 12. White-label branding
+- `GET /v1/branding` -> `{"configured","displayName","logoUrl","primaryColor","secondaryColor","supportEmail","customDomain","domainVerified","dnsRecord"?}`.
+- `PUT /v1/branding` with any of those fields (logo must be `https`, colours `#RRGGBB`, support email a bare address,
+  domain a host name). `DELETE` clears it. Owner/admin write.
+- A custom domain is stored immediately but **not served** until the owner proves control: the response carries
+  `dnsRecord` (`TXT _relay-verify.<domain> = relay-verify=<token>`); after they publish it, `POST /v1/branding/verify-domain`
+  checks DNS and flips `domainVerified`. Changing the domain drops the proof. One account per domain (409 otherwise).
+- `GET /v1/branding/public?host=login.acme.com` is **unauthenticated**: for a verified domain it returns the name, logo, colours and support
+  email so a custom sign-in page can theme itself; every other host, verified or not, is the same 404.
+**Scope, plainly:** this stores and serves the branding and proves domain ownership. It does **not** point DNS at us or
+issue a certificate for the custom domain, and does not change the sender of Relay's emails. Those are infrastructure
+work (a CNAME to the app, a TLS certificate per domain) that the UI deployment would own.
+**Screens:** Settings > "Branding": name, logo URL, two colour pickers, support email, a "Custom domain" field with the DNS
+instructions and a "Verify" button. The sign-in page should call `/v1/branding/public?host=<its own host>` on load.
+**Proof:** tests, including that an unverified or changed domain is never served and that the public lookup leaks no token. Not exercised live yet.
+
 ---
 
 ## Still missing against Sigmo (not built; do not build screens yet)
-| Gap | Why not yet |
+| Gap | Why not |
 |---|---|
-| Real WhatsApp sending and WhatsApp chatbots/QR links | Needs Meta WhatsApp Cloud API credentials and a WABA; we cannot test it. |
-| S3 export of reports | Scheduled reports are email only today; needs a signed-request client. |
-| Sub-accounts / resellers and white-label branding | Large (tenant hierarchy, per-child pricing and credit, custom domain); needs a design decision first. |
+| Real WhatsApp sending, WhatsApp chatbots and QR links | A direct Meta Cloud API connector also needs per-template creation and approval sync, and we have no Meta credentials to test against. We would rather not ship a sender we cannot prove. A BSP such as Trustsignal may be the shorter route; we will look once we can read its WhatsApp API docs. |
+| Sub-accounts / resellers | Moving credit between a parent and a child must be one atomic ledger operation across two tenants, and the wallet ledger is append-only and per tenant today. It also needs your decisions: who is invoiced, how child pricing works, whether a parent may sign in as a child. |
 
 ## What we need back
-1. Screens for sections 1-9 as above (priority: 2 links, 4 drip, 1 frequency cap, 9 chatbots, 3 stats).
+1. Screens for sections 1-9, 11 and 12 as above (priority: 2 links, 4 drip, 1 frequency cap, 9 chatbots, 3 stats, 12 branding, 11 S3).
 2. `frequency_cap` in the refusal vocabulary, `viewer` in `TeamRole`, `rcs_agent` in `ApprovalType`.
 3. Tell us if you want any of these moved into `openapi.json` by us instead.
