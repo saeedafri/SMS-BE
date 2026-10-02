@@ -111,20 +111,20 @@ func TestBrandingRefusesWhatCouldBreakAPageOrAPerson(t *testing.T) {
 		return b
 	}
 	for name, body := range map[string]map[string]any{
-		"http logo":         with("logoUrl", "http://cdn.example.org/l.png"),
-		"javascript logo":   with("logoUrl", "javascript:alert(1)"),
-		"data logo":         with("logoUrl", "data:image/svg+xml,<svg/>"),
-		"credentials logo":  with("logoUrl", "https://u:p@cdn.example.org/l.png"),
-		"css colour":        with("primaryColor", "red;background:url(x)"),
-		"short colour":      with("primaryColor", "#fff"),
-		"bad email":         with("supportEmail", "not-an-email"),
-		"name and address":  with("supportEmail", "Help <help@example.org>"),
-		"ip as domain":      with("customDomain", "10.0.0.1"),
-		"bare domain":       with("customDomain", "localhost"),
-		"domain with path":  with("customDomain", "a.example.org/x"),
-		"domain with port":  with("customDomain", "a.example.org:8080"),
-		"long name":         with("displayName", strings.Repeat("a", 81)),
-		"unknown field":     with("tenantId", uuid.NewString()),
+		"http logo":        with("logoUrl", "http://cdn.example.org/l.png"),
+		"javascript logo":  with("logoUrl", "javascript:alert(1)"),
+		"data logo":        with("logoUrl", "data:image/svg+xml,<svg/>"),
+		"credentials logo": with("logoUrl", "https://u:p@cdn.example.org/l.png"),
+		"css colour":       with("primaryColor", "red;background:url(x)"),
+		"short colour":     with("primaryColor", "#fff"),
+		"bad email":        with("supportEmail", "not-an-email"),
+		"name and address": with("supportEmail", "Help <help@example.org>"),
+		"ip as domain":     with("customDomain", "10.0.0.1"),
+		"bare domain":      with("customDomain", "localhost"),
+		"domain with path": with("customDomain", "a.example.org/x"),
+		"domain with port": with("customDomain", "a.example.org:8080"),
+		"long name":        with("displayName", strings.Repeat("a", 81)),
+		"unknown field":    with("tenantId", uuid.NewString()),
 	} {
 		if res := h.do(http.MethodPut, "/v1/branding", tenant.Token, body); res.Code != 422 {
 			t.Errorf("%s = %d %s, want 422", name, res.Code, res.Body)
