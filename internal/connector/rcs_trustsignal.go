@@ -77,6 +77,12 @@ type trustsignalReply struct {
 		CodeMsg string `json:"codeMsg"`
 		Message string `json:"message"`
 	} `json:"errors"`
+	// A send answers `result` (singular) in practice and `results` in their
+	// Postman example. Both are read: the first live send showed the example
+	// was wrong, and a connector that trusted it refused every accepted send.
+	Result *struct {
+		TransactionID string `json:"transaction_id"`
+	} `json:"result"`
 	Results *struct {
 		TransactionID string `json:"transaction_id"`
 	} `json:"results"`
@@ -88,6 +94,18 @@ type trustsignalTemplate struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	Error  string `json:"error"`
+}
+
+// transactionID is the reference every delivery webhook quotes back, from
+// whichever spelling the reply used.
+func (r trustsignalReply) transactionID() string {
+	if r.Result != nil && r.Result.TransactionID != "" {
+		return r.Result.TransactionID
+	}
+	if r.Results != nil {
+		return r.Results.TransactionID
+	}
+	return ""
 }
 
 // refusal is the carrier's own words for a failed call, codeMsg first.
@@ -187,12 +205,12 @@ func (t *TrustsignalRCS) submitOne(ctx context.Context, submission Submission) R
 		return refused("carrier_unauthorized")
 	case status >= 500:
 		return refused("carrier_unavailable")
-	case !reply.Success || reply.Results == nil || reply.Results.TransactionID == "":
+	case !reply.Success || reply.transactionID() == "":
 		return refused(trustsignalErrorCode(reply))
 	}
 	// transaction_id is what every delivery webhook quotes back.
 	return Receipt{MessageID: submission.MessageID, Accepted: true,
-		CarrierRef: reply.Results.TransactionID}
+		CarrierRef: reply.transactionID()}
 }
 
 // trustsignalErrorCode separates what a customer can act on from the rest.

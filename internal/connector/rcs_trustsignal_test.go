@@ -301,3 +301,22 @@ func TestAirtelRefusesACardRatherThanStoringItAsText(t *testing.T) {
 		t.Errorf("err = %v, want a refusal pointing at the portal", err)
 	}
 }
+
+// The shape Trustsignal's RCS send REALLY answers with, captured from a live
+// send on 8 Oct 2026: `result` (singular) with `phone`, not the `results` and
+// `to` their Postman example shows. The fixtures above followed the example, so
+// every send the carrier accepted was recorded as refused: the customer's
+// handset got the message and the wallet was never charged for it.
+func TestTrustsignalAcceptsTheRealSingularResultReply(t *testing.T) {
+	fake := &fakeTrustsignal{response: `{"message":"Request process successfully","result":{"phone":"+917408485420",` +
+		`"transaction_id":"179139989480908666791740848542048451","cost":0.2,"sms_cost":0},"success":true}`}
+	ts, _ := fake.serve(t)
+	receipts, err := ts.Submit(context.Background(), []Submission{{MessageID: "m1",
+		Msisdn: "+917408485420", CarrierTemplateID: "gqakwexzanh"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receipts[0].Accepted || receipts[0].CarrierRef != "179139989480908666791740848542048451" {
+		t.Errorf("receipt = %+v, want accepted with the transaction id as the carrier ref", receipts[0])
+	}
+}

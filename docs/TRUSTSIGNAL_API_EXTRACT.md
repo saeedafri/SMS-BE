@@ -62,11 +62,11 @@ Business-initiated WhatsApp needs an approved template; free-form text only work
 - **RCS**: connector exists (`internal/connector/rcs_trustsignal.go`), uses the same endpoints (`with_fallback`, `/api/v1/template`, `?api_key=`)
   and webhooks. Registration is `operator-admin rcs-connection add trustsignal`, which prompts for the key and stores it encrypted in
   `rcs_connections`. **The running API does not read the key from `.env`.**
-- **Gap that matters for the RCS test: our send omits the `sms_fallback` block that their docs mark required.** It was left out on
-  purpose so Relay's own fallback does not send a second SMS. If their API refuses without it, every RCS send fails with a
-  `carrier_rejected`/`carrier_unauthorized` style code and the reason is in the message log. If it does accept, a phone without RCS gets
-  nothing from Trustsignal and relies on Relay's fallback-after-failure (a definite `undelivered` report triggers the SMS leg).
-  Putting a real `sms_fallback` on the call would make Trustsignal send it instead, so we would then have to stop Relay's own to avoid two SMS.
+- **`sms_fallback` is NOT required in practice.** Their docs list it as required, but a live send without it was accepted
+  (8 Oct 2026). Relay keeps sending without it and runs its own fallback-after-failure, so there is no second SMS.
+- **The send reply is `result` (singular) with `phone` and `transaction_id`, not the `results`/`to` their example shows.**
+  Our connector trusted the example and refused every accepted send until this was fixed (commit after 7ca4a80); the
+  carrier had delivered the message and Relay recorded it failed with no charge. Treat their examples as hints, not contracts.
 - **Variable names**: their example fills RCS templates with `custom_param0`; we send our template's own variable names. Their templates
   use `[Name]` placeholders and a `csparams` map for tracked URLs. Not yet proven which keys the send accepts.
 - **WhatsApp**: no connector yet. Everything needed is above (sender = WABA phone, Trustsignal's template id, `sample` body variables,
