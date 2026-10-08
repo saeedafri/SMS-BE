@@ -202,7 +202,7 @@ func (s *Server) mountMediaRoutes(r chi.Router) {
 		// rather than taken from the URL. A URL that carried it would let a
 		// caller ask for another tenant's prefix and disclose which customer an
 		// asset belongs to even when the signature failed.
-		asset, err := store.FindMediaAsset(ctx(req), s.AdminDB, assetID)
+		asset, err := store.FindMediaAsset(ctx(req), s.operatorPool(), assetID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, codeNotFound, "No such asset.")
 			return

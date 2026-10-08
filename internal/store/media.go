@@ -74,6 +74,11 @@ func CreateMediaAsset(ctx context.Context, pool *pgxpool.Pool, id Identity,
 
 // FindMediaAsset reads an asset by id alone, WITHOUT a tenant scope.
 //
+// It takes the OPERATOR pool, not the migration role: production never gives the
+// API process the migration role, and a version that did dereferenced a nil
+// pool and answered 500 to every carrier fetch. The operator read policy on
+// media_assets (00046) is what lets this one query cross tenants.
+//
 // Deliberate and narrow: the signed-URL read has no session, so there is no
 // tenant to scope by — the caller is a carrier fetching artwork or a browser
 // following a link. It returns the tenant id so the signature can be checked
