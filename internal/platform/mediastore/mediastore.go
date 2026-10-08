@@ -122,6 +122,16 @@ func (s *Store) SignedURL(tenantID, assetID uuid.UUID, filename string, ttl time
 		s.baseURL, assetID, filename, expires, s.sign(tenantID, assetID, expires))
 }
 
+// PublicURL is the plain, permanent address of an artwork asset: no query
+// string, ending in the image's own extension. A bot or template registration
+// hands this to a carrier, whose validator may insist the URL "be a valid
+// image" by its shape, and which stores the URL and fetches it again days
+// later. Only brand artwork is ever given one; the asset id is a random UUID,
+// which is what makes the path unguessable.
+func (s *Store) PublicURL(assetID uuid.UUID, ext string) string {
+	return fmt.Sprintf("%s/brand/%s%s", s.baseURL, assetID, ext)
+}
+
 // Verify checks a presented signature and returns the storage key it authorises.
 //
 // The tenant id is INSIDE the signature rather than in the URL. It is what the

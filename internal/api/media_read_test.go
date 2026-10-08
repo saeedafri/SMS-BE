@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -41,12 +42,14 @@ func TestASignedMediaUrlServesTheFileWithoutASessionOrAnAdminPool(t *testing.T) 
 		t.Fatalf("upload = %d %s", res.Code, res.Body)
 	}
 	var asset struct {
-		URL string `json:"url"`
+		ID string `json:"id"`
 	}
 	_ = json.Unmarshal(res.Body, &asset)
-	parsed, err := url.Parse(asset.URL)
+	// Artwork is returned at its plain public address; the signed form is still
+	// served, and is what a link issued before that change looks like.
+	parsed, err := url.Parse(h.server.Media.SignedURL(acct.TenantID, uuid.MustParse(asset.ID), "logo.png", time.Hour))
 	if err != nil || !strings.Contains(parsed.Path, "/v1/media/") {
-		t.Fatalf("url = %q", asset.URL)
+		t.Fatalf("signed url = %v", parsed)
 	}
 
 	h.server.AdminDB = nil // the shape of production
@@ -108,5 +111,77 @@ func TestBrandArtworkUrlsOutliveTheirExpiryButDocumentsDoNot(t *testing.T) {
 	}
 	if code := get(expired(doc, "loa.pdf")); code != 403 {
 		t.Errorf("an expired verification document = %d, want 403", code)
+	}
+}
+
+// What a validator sees when it is handed an artwork URL: a plain https path
+// that ends in the image extension, no query string, answering GET and HEAD
+// with the right type and length. Trustsignal rejected our signed-and-expiring
+// URL with "logo url should be a valid image" while accepting a plain
+// .../<uuid>.png from its own storage.
+func TestArtworkGetsAPlainPermanentUrlThatAnswersGetAndHead(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	acct := h.newAccount("owner")
+	h.server.AdminDB = nil
+
+	upload := func(purpose, name, ctype string, body []byte) (id, rawURL string) {
+		res := h.uploadAttempt(acct, purpose, name, ctype, body)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("upload %s = %d %s", purpose, res.Code, res.Body)
+		}
+		var a struct{ ID, URL string }
+		_ = json.Unmarshal(res.Body, &a)
+		return a.ID, a.URL
+	}
+	id, rawURL := upload("agent_logo", "My Logo.PNG", "image/png", png224())
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.RawQuery != "" || parsed.Path != "/brand/"+id+".png" {
+		t.Fatalf("artwork url = %q, want a plain /brand/<id>.png with no query string", rawURL)
+	}
+	do := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.router.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec
+	}
+	get := do(http.MethodGet, parsed.Path)
+	if get.Code != 200 || get.Header().Get("Content-Type") != "image/png" || !bytes.Equal(get.Body.Bytes(), png224()) {
+		t.Fatalf("GET = %d %s", get.Code, get.Header().Get("Content-Type"))
+	}
+	if get.Header().Get("Content-Length") != strconv.Itoa(len(png224())) ||
+		!strings.Contains(get.Header().Get("Cache-Control"), "public") {
+		t.Errorf("headers = %v", get.Header())
+	}
+	head := do(http.MethodHead, parsed.Path)
+	if head.Code != 200 || head.Header().Get("Content-Type") != "image/png" || head.Body.Len() != 0 ||
+		head.Header().Get("Content-Length") != strconv.Itoa(len(png224())) {
+		t.Errorf("HEAD = %d %v (%d body bytes)", head.Code, head.Header(), head.Body.Len())
+	}
+	// Anything that is not exactly that asset with its own extension is a 404,
+	// the same one, so the path cannot be used to find out what exists.
+	for name, path := range map[string]string{
+		"wrong extension": "/brand/" + id + ".jpg",
+		"no extension":    "/brand/" + id,
+		"unknown id":      "/brand/00000000-0000-0000-0000-000000000000.png",
+		"junk":            "/brand/not-a-uuid.png",
+	} {
+		if rec := do(http.MethodGet, path); rec.Code != 404 {
+			t.Errorf("%s = %d, want 404", name, rec.Code)
+		}
+	}
+	// A verification document is never public.
+	docID, docURL := upload("verification_document", "loa.pdf", "application/pdf", []byte("%PDF-1.4\nletter\n"))
+	if !strings.Contains(docURL, "signature=") {
+		t.Errorf("a verification document got a public url: %q", docURL)
+	}
+	for _, ext := range []string{".pdf", ".png"} {
+		if rec := do(http.MethodGet, "/brand/"+docID+ext); rec.Code != 404 {
+			t.Errorf("document at /brand/%s = %d, want 404", ext, rec.Code)
+		}
+	}
+	// The signed form already issued still works.
+	signed, _ := url.Parse(h.server.Media.SignedURL(acct.TenantID, uuid.MustParse(id), "logo.png", time.Hour))
+	if rec := do(http.MethodGet, signed.RequestURI()); rec.Code != 200 {
+		t.Errorf("an issued signed url stopped working: %d", rec.Code)
 	}
 }

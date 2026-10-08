@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,9 +164,14 @@ func (s *Server) mediaAsset(asset store.MediaAsset, filename string) gen.MediaAs
 	if filename == "" {
 		filename = "asset"
 	}
+	link := s.Media.SignedURL(asset.TenantID, asset.ID, safeFilename(filename), mediaReadTTL)
+	// Brand artwork gets the plain permanent address instead. See PublicURL.
+	if ext, ok := artworkExtension(asset.ContentType); ok && outlivesItsLink(asset.Purpose) {
+		link = s.Media.PublicURL(asset.ID, ext)
+	}
 	return gen.MediaAsset{
 		Id:          asset.ID,
-		Url:         s.Media.SignedURL(asset.TenantID, asset.ID, safeFilename(filename), mediaReadTTL),
+		Url:         link,
 		ContentType: asset.ContentType,
 		ByteSize:    int(asset.ByteSize),
 		Width:       asset.Width,
@@ -185,6 +191,8 @@ func (s *Server) mediaAsset(asset store.MediaAsset, filename string) gen.MediaAs
 // carries the tenant inside it so it cannot be replayed against another
 // prefix, and it expires.
 func (s *Server) mountMediaRoutes(r chi.Router) {
+	r.Get("/brand/{file}", s.servePublicArtwork)
+	r.Head("/brand/{file}", s.servePublicArtwork)
 	r.Get("/v1/media/{id}/{filename}", func(w http.ResponseWriter, req *http.Request) {
 		assetID, err := uuid.Parse(chi.URLParam(req, "id"))
 		if err != nil {
@@ -233,6 +241,61 @@ func (s *Server) mountMediaRoutes(r chi.Router) {
 }
 
 func ctx(req *http.Request) context.Context { return req.Context() }
+
+// artworkExtension is the file extension a public artwork URL carries for a
+// content type, and false for a type that is never served publicly.
+func artworkExtension(contentType string) (string, bool) {
+	switch contentType {
+	case "image/png":
+		return ".png", true
+	case "image/jpeg":
+		return ".jpg", true
+	}
+	return "", false
+}
+
+// servePublicArtwork answers GET and HEAD /brand/{id}{.png|.jpg}. Everything
+// that is not exactly a brand-artwork asset requested with its own extension is
+// the same 404, so the path cannot be used to learn what exists.
+func (s *Server) servePublicArtwork(w http.ResponseWriter, req *http.Request) {
+	notFound := func() { writeError(w, http.StatusNotFound, codeNotFound, "No such asset.") }
+	file := chi.URLParam(req, "file")
+	dot := strings.LastIndex(file, ".")
+	if dot < 0 {
+		notFound()
+		return
+	}
+	assetID, err := uuid.Parse(file[:dot])
+	if err != nil {
+		notFound()
+		return
+	}
+	asset, err := store.FindMediaAsset(ctx(req), s.operatorPool(), assetID)
+	if err != nil || !outlivesItsLink(asset.Purpose) {
+		notFound()
+		return
+	}
+	ext, ok := artworkExtension(asset.ContentType)
+	asked := strings.ToLower(file[dot:])
+	if !ok || (asked != ext && !(ext == ".jpg" && asked == ".jpeg")) {
+		notFound()
+		return
+	}
+	opened, err := s.Media.Open(mediastore.Key(asset.TenantID, assetID))
+	if err != nil {
+		notFound()
+		return
+	}
+	defer opened.Close()
+	w.Header().Set("Content-Type", asset.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(asset.ByteSize, 10))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if req.Method == http.MethodHead {
+		return
+	}
+	_, _ = io.Copy(w, opened)
+}
 
 // outlivesItsLink says whether a purpose's URLs keep working after they expire.
 func outlivesItsLink(purpose string) bool {
