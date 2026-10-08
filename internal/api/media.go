@@ -207,7 +207,14 @@ func (s *Server) mountMediaRoutes(r chi.Router) {
 			writeError(w, http.StatusNotFound, codeNotFound, "No such asset.")
 			return
 		}
-		key, err := s.Media.Verify(asset.TenantID, assetID, expires, signature)
+		// Brand artwork is not secret and is fetched by a carrier days after the
+		// link was minted, so for those purposes only the signature is checked.
+		// A verification document is a company's paperwork and keeps its expiry.
+		verify := s.Media.Verify
+		if outlivesItsLink(asset.Purpose) {
+			verify = s.Media.VerifyIgnoringExpiry
+		}
+		key, err := verify(asset.TenantID, assetID, expires, signature)
 		if err != nil {
 			writeError(w, http.StatusForbidden, "forbidden",
 				"That link has expired or is not valid. Read the asset again for a fresh one.")
@@ -226,6 +233,15 @@ func (s *Server) mountMediaRoutes(r chi.Router) {
 }
 
 func ctx(req *http.Request) context.Context { return req.Context() }
+
+// outlivesItsLink says whether a purpose's URLs keep working after they expire.
+func outlivesItsLink(purpose string) bool {
+	switch media.Purpose(purpose) {
+	case media.PurposeAgentLogo, media.PurposeAgentHero, media.PurposeTemplateMedia:
+		return true
+	}
+	return false
+}
 
 // sniffContentType reads the type off the bytes.
 //

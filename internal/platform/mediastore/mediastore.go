@@ -113,8 +113,9 @@ func (s *Store) Remove(key string) error {
 // anyone who guesses a path, and a verification document is a company's
 // incorporation paperwork.
 //
-// The URL is opaque and must be re-read rather than stored — the expiry is the
-// whole point, and a client that caches it holds a URL that stops working.
+// The URL is opaque. For a verification document the expiry is the whole point
+// and a client that caches it holds a URL that stops working. Brand artwork is
+// the exception: see VerifyIgnoringExpiry.
 func (s *Store) SignedURL(tenantID, assetID uuid.UUID, filename string, ttl time.Duration) string {
 	expires := time.Now().Add(ttl).Unix()
 	return fmt.Sprintf("%s/v1/media/%s/%s?expires=%d&signature=%s",
@@ -133,6 +134,17 @@ func (s *Store) Verify(tenantID, assetID uuid.UUID, expires int64, signature str
 	}
 	// Constant time, so a caller cannot learn the signature a byte at a time by
 	// measuring how long the comparison takes.
+	if !hmac.Equal([]byte(signature), []byte(s.sign(tenantID, assetID, expires))) {
+		return "", ErrBadSignature
+	}
+	return Key(tenantID, assetID), nil
+}
+
+// VerifyIgnoringExpiry is Verify for assets that outlive their link: the
+// signature must still be exactly the one we issued for this tenant and asset,
+// and only the clock is not consulted. For brand artwork a carrier stores the
+// URL as sent and fetches it days later during review.
+func (s *Store) VerifyIgnoringExpiry(tenantID, assetID uuid.UUID, expires int64, signature string) (string, error) {
 	if !hmac.Equal([]byte(signature), []byte(s.sign(tenantID, assetID, expires))) {
 		return "", ErrBadSignature
 	}
