@@ -179,6 +179,15 @@ func TestArtworkGetsAPlainPermanentUrlThatAnswersGetAndHead(t *testing.T) {
 			t.Errorf("document at /brand/%s = %d, want 404", ext, rec.Code)
 		}
 	}
+	// The case only the purpose check can stop: a document that happens to be a
+	// PNG has the right extension and a servable type.
+	pngDoc, pngDocURL := upload("verification_document", "scan.png", "image/png", png224())
+	if !strings.Contains(pngDocURL, "signature=") {
+		t.Errorf("a PNG verification document got a public url: %q", pngDocURL)
+	}
+	if rec := do(http.MethodGet, "/brand/"+pngDoc+".png"); rec.Code != 404 {
+		t.Errorf("a PNG verification document at /brand = %d, want 404", rec.Code)
+	}
 	// The signed form already issued still works.
 	signed, _ := url.Parse(h.server.Media.SignedURL(acct.TenantID, uuid.MustParse(id), "logo.png", time.Hour))
 	if rec := do(http.MethodGet, signed.RequestURI()); rec.Code != 200 {
