@@ -10,7 +10,13 @@ import (
 // it — "blocked" with no reason is exactly the opaque behaviour the PRD
 // criticises incumbents for.
 var (
-	ErrTenantSuspended     = errors.New("messaging: tenant is suspended")
+	ErrTenantSuspended = errors.New("messaging: tenant is suspended")
+	// ErrEntityNotRegistered is a tenant whose own registration with the
+	// destination's regulator is not complete — in India, the principal entity
+	// AND the telemarketer mapping. The dashboard has refused to start a
+	// campaign without it since the compliance board shipped; the API sent
+	// regardless, so the same tenant was blocked in the UI and free over HTTP.
+	ErrEntityNotRegistered = errors.New("messaging: the tenant's registration for this country is not approved")
 	ErrSenderNotApproved   = errors.New("messaging: sender is not approved")
 	ErrTemplateNotApproved = errors.New("messaging: template is not approved")
 
@@ -95,11 +101,15 @@ var (
 // order and completeness of these checks is the single most safety-critical
 // thing in the system.
 type GateInput struct {
-	TenantStatus   string
-	SenderStatus   string
-	SenderID       string
-	TemplateStatus string
-	TemplateSender string
+	TenantStatus string
+	// EntityNotRegistered says the tenant's entity-tier registrations for the
+	// sender's country are not all approved. Negative so a caller that never
+	// looked is not mistaken for one that was told no; every dispatch path sets it.
+	EntityNotRegistered bool
+	SenderStatus        string
+	SenderID            string
+	TemplateStatus      string
+	TemplateSender      string
 
 	// CarrierTemplateStatus is the carrier's own verdict: not_submitted,
 	// pending, approved or rejected. Empty means the channel has no carrier
@@ -161,6 +171,12 @@ func Check(input GateInput) error {
 	}
 	if !input.RecipientValid {
 		return ErrInvalidRecipient
+	}
+	// Before the sender, in the order the dashboard reports it: an approved
+	// header under an entity the regulator has not finished with is still
+	// traffic the operator will scrub.
+	if input.EntityNotRegistered {
+		return ErrEntityNotRegistered
 	}
 	if input.SenderStatus != "approved" {
 		return fmt.Errorf("%w (status %s)", ErrSenderNotApproved, input.SenderStatus)
@@ -279,7 +295,7 @@ var refusals = []error{
 // like the others; they are kept apart only so the contract test does not fail
 // on a code the frontend has been asked to add. Move each into refusals once
 // the enum has it.
-var awaitingContract = []error{ErrFrequencyCapped}
+var awaitingContract = []error{ErrFrequencyCapped, ErrEntityNotRegistered}
 
 func GateFailureCode(err error) string {
 	switch {
@@ -289,6 +305,8 @@ func GateFailureCode(err error) string {
 		return "content_not_allowed"
 	case errors.Is(err, ErrTenantSuspended):
 		return "tenant_suspended"
+	case errors.Is(err, ErrEntityNotRegistered):
+		return "entity_not_registered"
 	case errors.Is(err, ErrSenderNotApproved):
 		return "sender_not_approved"
 	case errors.Is(err, ErrCarrierTemplateNotApproved):

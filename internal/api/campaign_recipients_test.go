@@ -219,6 +219,7 @@ func (h *harness) seedOptedOutCampaign(acct account, name string) (string, strin
 		acct.TenantID, fmt.Sprintf("RCP%03d", h.nextSenderSeq())).Scan(&senderID); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(acct.TenantID, "IN")
 	if err := h.admin.QueryRow(ctx, `
 		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status)
 		VALUES ($1, $2, $3, 'SMS', 'IN', 'Hello', 'approved') RETURNING id`,

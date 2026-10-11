@@ -90,6 +90,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 
 	now := time.Now().UTC()
 	frequencyCap := s.frequencyCapFor(ctx, identity, context.sender.Channel)
+	entityRegistered := store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, context.sender.Country)
 	plans := make([]sendPlan, 0, len(contacts))
 	var holdTotal int64
 
@@ -139,7 +140,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, SenderStatus: context.sender.Status,
-			SenderID: context.sender.ID.String(), TemplateStatus: context.templateStatus,
+			EntityNotRegistered: !entityRegistered,
+			SenderID:            context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
 			// The carrier's own approval, which is separate from ours. Checked
 			// per recipient like everything else in the gate, even though it is

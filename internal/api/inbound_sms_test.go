@@ -47,6 +47,7 @@ func inboundHarness(t *testing.T) (*harness, *operatorSMSC, account, string) {
 		VALUES ($1, $2, 'SMS', 'IN', 'approved')`, tenant.TenantID, header); err != nil {
 		t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "IN")
 	return h, smsc, tenant, header
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/domain/messaging"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -117,6 +118,19 @@ func newFixture(t *testing.T) *fixture {
 		`INSERT INTO sender_ids (id, tenant_id, header, channel, country, status)
 		 VALUES ($1, $2, 'SENDCO', 'SMS', 'IN', 'approved')`, senderID, tenantID); err != nil {
 		t.Fatalf("seed sender: %v", err)
+	}
+	// And so is the tenant's India entity, which the gate checks before the
+	// sender: every entity-tier object the regime declares, approved.
+	india, _ := compliance.For("IN")
+	for _, object := range india.RegistrationObjects() {
+		if object.Tier != compliance.TierEntity {
+			continue
+		}
+		if _, err := admin.Exec(ctx,
+			`INSERT INTO registrations (tenant_id, country, object_key, status)
+			 VALUES ($1, 'IN', $2, 'approved')`, tenantID, object.Key); err != nil {
+			t.Fatalf("seed registration %s: %v", object.Key, err)
+		}
 	}
 	t.Cleanup(func() {
 		// The wallet ledger is append-only and its trigger fires on the CASCADE

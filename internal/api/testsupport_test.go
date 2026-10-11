@@ -25,6 +25,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/api"
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -615,4 +616,28 @@ func deleteTenantWithLedger(ctx context.Context, admin *pgxpool.Pool, tenantID u
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// registerEntity approves every entity-tier registration the country's regime
+// declares — India's principal entity and TM mapping, the US brand and campaign
+// — which the send gate requires before any message leaves. Fixtures that seed
+// an approved sender call it; a test about the entity rule itself does not.
+func (h *harness) registerEntity(tenantID uuid.UUID, country string) {
+	h.t.Helper()
+	regime, known := compliance.For(country)
+	if !known {
+		return
+	}
+	for _, object := range regime.RegistrationObjects() {
+		if object.Tier != compliance.TierEntity {
+			continue
+		}
+		if _, err := h.admin.Exec(context.Background(), `
+			INSERT INTO registrations (tenant_id, country, object_key, status)
+			VALUES ($1, $2, $3, 'approved')
+			ON CONFLICT (tenant_id, country, object_key) DO UPDATE SET status = 'approved'`,
+			tenantID, country, object.Key); err != nil {
+			h.t.Fatalf("register entity %s/%s: %v", country, object.Key, err)
+		}
+	}
 }

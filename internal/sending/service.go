@@ -357,7 +357,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
 		TenantStatus: tenantStatus, SenderStatus: sender.Status,
-		SenderID: sender.ID.String(), TemplateStatus: templateStatus,
+		EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
+		SenderID:            sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, rcsCarrier, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,

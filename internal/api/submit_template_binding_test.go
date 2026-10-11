@@ -211,6 +211,7 @@ func TestACountryWithoutTheRuleStillSendsWithNoTemplate(t *testing.T) {
 		tenant.TenantID).Scan(&sender); err != nil {
 		t.Fatalf("seed US sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "US")
 	h.appendTopup(tenant, "USD", 1_000_000)
 
 	out := h.sendIndia(tenant, map[string]any{

@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/saeedafri/sms-be/internal/domain/compliance"
 )
 
 // SenderID is a registered sending identity. The channel-specific fields are
@@ -1050,4 +1052,53 @@ func CachedDLTEntityID(ctx context.Context, pool *pgxpool.Pool, cache *HotCache,
 	}
 	cache.Put(key, entityID)
 	return entityID
+}
+
+// EntityRegistered reports whether every entity-tier registration the country's
+// regime declares is approved for this tenant: India's principal entity and
+// telemarketer mapping, the US brand and campaign. A country with no regime, or
+// a stub regime with nothing to register, has nothing outstanding.
+func EntityRegistered(ctx context.Context, pool *pgxpool.Pool, id Identity, country string) (bool, error) {
+	regime, known := compliance.For(country)
+	if !known {
+		return true, nil
+	}
+	var keys []string
+	for _, object := range regime.RegistrationObjects() {
+		if object.Tier == compliance.TierEntity {
+			keys = append(keys, object.Key)
+		}
+	}
+	if len(keys) == 0 {
+		return true, nil
+	}
+	var approved int
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT count(DISTINCT object_key) FROM registrations
+			 WHERE country = $1 AND object_key = ANY($2) AND status = 'approved'`,
+			regime.Country(), keys).Scan(&approved)
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: entity registered: %w", err)
+	}
+	return approved == len(keys), nil
+}
+
+// CachedEntityRegistered is EntityRegistered behind the send path's cache. A
+// lookup that fails counts as not registered, like every unreadable compliance
+// answer, and is not cached so the next message asks again.
+func CachedEntityRegistered(ctx context.Context, pool *pgxpool.Pool, cache *HotCache,
+	id Identity, country string) bool {
+
+	key := "entityregistered:" + id.TenantID.String() + ":" + country
+	if value, found := cache.Get(key); found {
+		return value.(bool)
+	}
+	registered, err := EntityRegistered(ctx, pool, id, country)
+	if err != nil {
+		return false
+	}
+	cache.Put(key, registered)
+	return registered
 }

@@ -26,6 +26,7 @@ func (h *harness) categorisedTemplate(tenant account, category string) (sender, 
 		tenant.TenantID, fmt.Sprintf("PRM%03d", h.nextSenderSeq())).Scan(&sender); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "IN")
 	if err := h.admin.QueryRow(ctx, `
 		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status,
 		    external_id, dlt_category)

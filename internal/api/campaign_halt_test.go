@@ -28,6 +28,7 @@ func (h *harness) seedNamedCampaign(tenant account, name, status string) string 
 		tenant.TenantID, fmt.Sprintf("HLT%03d", h.nextSenderSeq())).Scan(&senderID); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "IN")
 	if err := h.admin.QueryRow(ctx, `
 		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status)
 		VALUES ($1, $2, $3, 'SMS', 'IN', 'Hello', 'approved') RETURNING id`,

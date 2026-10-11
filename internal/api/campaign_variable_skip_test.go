@@ -46,6 +46,7 @@ func seedSlotTemplate(t *testing.T, h *harness, acct account, body string) strin
 		acct.TenantID, fmt.Sprintf("SKP%03d", h.nextSenderSeq())).Scan(&senderID); err != nil {
 		t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(acct.TenantID, "IN")
 	if err := h.admin.QueryRow(ctx, `
 		INSERT INTO templates (tenant_id, sender_id, name, channel, country, body, status)
 		VALUES ($1, $2, $3, 'SMS', 'IN', $4, 'approved') RETURNING id`,

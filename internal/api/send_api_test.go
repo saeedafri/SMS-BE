@@ -209,6 +209,7 @@ func (h *harness) approvedSenderOn(tenant account, channel string) string {
 		tenant.TenantID, channel).Scan(&id); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "IN")
 	return id
 }
 

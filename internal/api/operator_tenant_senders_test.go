@@ -23,6 +23,9 @@ func (h *harness) seedNamedSender(tenant account, header, channel, status string
 		tenant.TenantID, header, channel, status).Scan(&id); err != nil {
 		h.t.Fatalf("seed sender %s: %v", header, err)
 	}
+	if status == "approved" {
+		h.registerEntity(tenant.TenantID, "IN")
+	}
 	return id
 }
 

@@ -292,6 +292,8 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 		state := tenants[plan.pending.identity.TenantID]
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: state.status, SenderStatus: plan.sender.Status,
+			EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot,
+				plan.pending.identity, plan.sender.Country),
 			SenderID:       plan.sender.ID.String(),
 			TemplateStatus: plan.templateStatus(), TemplateSender: plan.templateSender(),
 			Suppressed:            state.suppressed[plan.msisdn],

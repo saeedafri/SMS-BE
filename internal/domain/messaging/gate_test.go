@@ -47,6 +47,9 @@ func TestGateRefusesEachViolation(t *testing.T) {
 			i.RCSAgentRequired = true
 			i.RCSAgentResolved = false
 		}, messaging.ErrRCSAgentNotResolved},
+		{"an entity the regulator has not finished with", func(i *messaging.GateInput) {
+			i.EntityNotRegistered = true
+		}, messaging.ErrEntityNotRegistered},
 		{"promotional outside the permitted hours", func(i *messaging.GateInput) {
 			i.OutsidePromotionalWindow = true
 		}, messaging.ErrOutsidePromotionalWindow},
@@ -76,6 +79,18 @@ func TestComplianceFailuresAreReportedBeforeMoney(t *testing.T) {
 
 	if err := messaging.Check(input); !errors.Is(err, messaging.ErrSenderNotApproved) {
 		t.Fatalf("err = %v, want the sender problem reported before the balance", err)
+	}
+}
+
+// The dashboard reports the entity before the sender, so the API must too: a
+// customer told "sender not approved" goes to fix a header that is fine.
+func TestTheEntityIsReportedBeforeTheSender(t *testing.T) {
+	input := validInput()
+	input.EntityNotRegistered = true
+	input.SenderStatus = "pending_review"
+
+	if err := messaging.Check(input); !errors.Is(err, messaging.ErrEntityNotRegistered) {
+		t.Fatalf("err = %v, want the entity problem reported before the sender", err)
 	}
 }
 

@@ -113,6 +113,7 @@ func (h *harness) rcsTemplate(tenant account, name string, variables []string, c
 		tenant.TenantID, "RCS"+name[:3]).Scan(&senderID); err != nil {
 		h.t.Fatalf("seed rcs sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "IN")
 
 	// Every RCS sender needs an agent: a send resolves its identity from the
 	// sender, and a carrier registration is scoped to that same agent, so a

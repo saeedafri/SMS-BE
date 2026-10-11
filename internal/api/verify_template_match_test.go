@@ -51,6 +51,7 @@ func (h *harness) usSender(tenant account) string {
 		VALUES ($1, '+15550100', 'SMS', 'US', 'approved') RETURNING id`, tenant.TenantID).Scan(&id); err != nil {
 		h.t.Fatalf("seed US sender: %v", err)
 	}
+	h.registerEntity(tenant.TenantID, "US")
 	return id
 }
 
