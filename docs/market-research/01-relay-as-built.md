@@ -929,3 +929,523 @@ customers as `sent`, never `delivered` (`state.go:95-100`).
   `internal/api/*.go`).
 
 ---
+
+## 5. Channels
+
+The enum has five members: SMS, RCS, WHATSAPP, EMAIL, VOICE (`internal/api/enums.go:33`). The
+frontend's channel registry lists all five with no availability flag
+(`SMS-UI/src/lib/registries/channels.ts:187-189`, every entry sets `deliveryReceipts: true` at
+`:74`, `:106`, `:125`, `:144`, `:162`). The only "coming soon" in the UI is a **code comment**
+(`SMS-UI/src/lib/templates/message-content.ts:45`,
+`SMS-UI/src/app/(dashboard)/templates/template-edit-sheet.tsx:138`) — nothing a user sees.
+
+How a message picks a carrier: `Registry.For(channel)` returns the dedicated connector for the
+channel if one exists, else `Default` (`internal/connector/registry.go`). Production gives only
+`RCS` a dedicated connector (`cmd/control-api/main.go:276-286`); `Default` is the SMPP router,
+which sends any non-SMS channel to the sandbox (`internal/connector/smpp.go:802`).
+
+### 5.1 SMS — REAL
+
+| Aspect | As built |
+|---|---|
+| Data model | `sender_ids` (header) `00008:18`; `templates` with `external_id` (DLT template id) and `dlt_category` (`00038:40`); DLT entity in `registrations` (`00008:2`) |
+| Templates | DLT content templates recorded by the customer, approved by an operator (`/v1/operator/templates/{id}/approve`); body match enforced at send (`gate.go:212-215`, `internal/domain/messaging/template_binding.go`) |
+| Senders | 6-alphanumeric header rule for India (`internal/domain/compliance/india.go:126`); operator approval |
+| Sending | `SMPPRouter` → per-carrier binds, round robin across parallel binds (`smpp.go:814-818`), per-bind TPS ticker + window (`smpp.go:186-206`), GSM-7/UCS-2 with UDH concatenation (`smpp.go:590-631`), DLT TLVs 0x1400/0x1401/0x1402 overridable per connection (`smpp.go:24-32`, `00051`) |
+| DLR | `deliver_sm` receipts parsed (`smpp.go:680`), stored raw (`dlr_raw`) |
+| Inbound (MO) | `deliver_sm` non-receipts → `receiveInboundSMS` (`internal/api/inbound_sms.go:18`) → conversation; STOP/UNSUBSCRIBE/CANCEL/END/QUIT/OPTOUT → suppression (`internal/store/support.go:506-521`) |
+| Billing | per segment (`internal/domain/billing/segments.go:57`), pay on delivery |
+| Live | VIDEOCON is the first direct operator (`docs/HANDOFF_TO_UI_2026-09-14-operator-names.md:5`); live traffic **UNVERIFIED** from the repo |
+| Missing | DND register (§7); TLS binds; multiple-operator least-cost routing is priority-only (no cost/quality routing); HLR/number lookup; MNP; no flash/binary SMS |
+
+### 5.2 RCS — REAL on one vendor
+
+| Aspect | As built |
+|---|---|
+| Data model | `rcs_agents` + carrier launches (`00045:14`, `:86`); `templates.rcs_content` (`00024:19`) + carrier template columns (`00037:17`); `rcs_connections` (`00053:10`) |
+| Templates | text or **one** rich card + suggestions (reply / open_url / dial) (`internal/api/rcs_template_registration.go:70-104`); carousels not modelled (`internal/connector/rcs_template.go:37-39`) |
+| Agents | brand verification by customer, approval by operator (`/v1/operator/rcs-agents/{id}/approve`), per-carrier launch; launch admission set via CLI `rcs-launch` |
+| Sending | `RCSRouter` picks the vendor by route priority (`internal/sending/service.go:83-134`); agent per submission (`connector.go` `AgentID`) |
+| Capability | `POST /v1/rcs/capabilities`; works on Airtel, Vi, Jio, Google — **not Trustsignal** (`rcs_trustsignal.go:62-68`) |
+| Fallback | pre-send (capability) and after `undelivered` (`fallback_after_failure.go`); on Trustsignal only the after-failure path fires (commit `732c531` "SMS fallback never fires on Trustsignal") |
+| DLR / read / inbound | carrier webhook (`internal/api/carrier_webhooks.go:39`) parsed per vendor (`rcs_webhook.go:128`, `:243`, `:394`; `rcs_jio.go:438`; `rcs_google.go:385`) |
+| Live | Trustsignal live-proven 8–11 Oct per shared context; last fix `b2448f7` (8 Oct) "read Trustsignal's real send reply"; Jio/Airtel/Vi/Google never sent live (UNVERIFIED either way from code) |
+| Missing | carousels; RCS conversational (free-form within session) UI; RCS connection management in the console (CLI only); capability lookup on the live vendor |
+
+### 5.3 WhatsApp — SANDBOX ONLY (charged)
+
+| Aspect | As built |
+|---|---|
+| Data model | `sender_ids.waba_id`, `quality_rating`, `messaging_tier` (`00008:18`, `00022:14`); `templates.wa_content` (`00024:19`); consent key `WHATSAPP`; session-window count (`internal/store/audience.go:37-60`) |
+| Templates/senders | stored and approved by an operator; **no Meta/BSP API** anywhere in `internal/` |
+| Sending | sandbox (`smpp.go:802`); billed per SMS segment of the body |
+| Inbound | none (no webhook route for any BSP); chatbots claim WhatsApp (commit `6f78fcc`) but nothing can receive a WhatsApp message |
+| Missing to be real | BSP/Cloud API connector (Meta Cloud API or Gupshup/Trustsignal WA — Trustsignal's WA API is documented in `docs/TRUSTSIGNAL_API_EXTRACT.md` but not coded), template sync with Meta, 24 h session logic at send, media messages, inbound webhook, conversation-category pricing, opt-in capture |
+
+### 5.4 Email — SANDBOX ONLY (charged)
+
+| Aspect | As built |
+|---|---|
+| Data model | `sender_ids.email_domain/from_address/from_name` (`00008:18`); `sender_dns_records` (`00017:9`); `templates.email_content`; suppression by email (`00010:40`) |
+| Domain verification | **no DNS lookup** for email senders — the only `LookupTXT` in the codebase is branding (`internal/api/branding.go:49`); records advance by operator approval or `/v1/dev/advance-email-dns` |
+| Sending | sandbox; Resend is used only for platform mail — password reset, invites, alerts, reports (`internal/mailer/mailer.go:20`) |
+| Missing | ESP connector (SES/Resend/SendGrid), DKIM/SPF/DMARC verification, bounce/complaint handling, open/click tracking for email, unsubscribe headers (RFC 8058), HTML builder |
+
+### 5.5 Voice — SANDBOX ONLY (charged)
+
+| Aspect | As built |
+|---|---|
+| Data model | `sender_ids.caller_id_number`, `voice_code`, `voice_verified` (`00008:18`) |
+| Caller-ID verification | `POST /v1/sender-ids/{id}/voice-call` generates a 6-digit code and **returns it in the HTTP response** (`internal/api/senders.go:243-254`); no call is placed |
+| Sending | sandbox; priced per text segment |
+| Missing | telephony connector (SIP trunk / Exotel / Twilio), TTS, IVR, OBD campaigns, call DLRs/durations, per-minute billing |
+
+### 5.6 Channel scorecard
+
+| Channel | Data model | Templates | Real send | Inbound | DLR | Billing correct | UI honest |
+|---|---|---|---|---|---|---|---|
+| SMS | yes | yes (DLT) | **yes** | yes | yes | yes | yes |
+| RCS | yes | yes (card, no carousel) | **yes (Trustsignal)** | yes | yes | yes (but SMS-segment pricing of RCS text) | mostly |
+| WhatsApp | yes | stored only | no (sandbox) | no | fake | **charges for fake delivery** | **no** |
+| Email | yes | stored only | no (sandbox) | no | fake | **charges for fake delivery** | **no** |
+| Voice | yes | n/a | no (sandbox) | no | fake | **charges for fake delivery** | **no** |
+
+---
+
+## 6. Connectors (`internal/connector`, 8,059 lines incl. tests)
+
+Interface: `Name()`, `Submit(ctx, []Submission) ([]Receipt, error)`, `Health(ctx)`
+(`internal/connector/connector.go:106-110`). `Submission` carries channel, carrier, DLT ids,
+carrier template id, ordered named variables, RCS agent id, priority, promotional flag, TTL
+(`connector.go:11-80`).
+
+| Connector | File (lines) | Protocol / auth | Rich card | Carousel | Suggestions | Template API | Capability | DLR/inbound | Tests (`func Test`) | Live |
+|---|---|---|---|---|---|---|---|---|---|---|
+| SMPP | `smpp.go` (894) | SMPP 3.4 via `linxGnu/gosmpp`, plain TCP (`:303-306`), TX/RX/TRX bind, enquire_link 30 s default (`:322-323`) | n/a | n/a | n/a | n/a | n/a | DLR + MO (`:366`, `:680`) | 30 across `smpp_test.go` (7), `smpp_dlr_test.go` (3), `smpp_inbound_test.go` (3), `smpp_protocol_test.go` (4), `smpp_ask35_test.go` (5), `smpp_ask35_events_test.go` (8) | VIDEOCON per docs |
+| Sandbox | `sandbox.go` (182) | in-process; outcome by last digits (`:18-27`) | — | — | — | — | — | queued reports drained every 2 s | 1 | default for WA/Email/Voice |
+| Trustsignal (Sigmo) | `rcs_trustsignal.go` (354) | HTTPS, **API key in query string** `api_key` (`:131`) | yes (`:278-288`) | no | yes (`:239-258`) | yes, text + card (`:262`), status (`:316`) | **no** (`:62-68`) | webhook (`rcs_webhook.go:394`) | 11 | **yes** (8–11 Oct per context) |
+| Airtel IQ RCS | `rcs_airtel.go` (433) | HTTPS, `Authorization: Basic <token>` (`:170`) | send yes; template card refused (`rcs_template.go:186-190`) | no | send only | text only (`:256`), status (`:304`) | yes (`:78`) | webhook (`rcs_webhook.go:128`) | none in own file; covered by `rcs_send_test.go` (13), `rcs_webhook_test.go` (20), `rcs_capability_test.go` (13), `rcs_template_test.go` (8) | never live |
+| Vi RBM | `rcs_vi.go` (414) | OAuth client-credentials (`:225`), Bearer (`:169`) | send yes | no | send only | **none** — portal + paste code (`:279-288`) | yes (`:62`) | webhook (`rcs_webhook.go:243`) | shared files above | never live |
+| Jio JBM | `rcs_jio.go` (485) | per-assistant token cached (`:25-44`) | send yes | no | replies parsed (`:424-477`) | **none** (`:87-93`) | yes (`:147`) | webhook (`:438`) | 6 | never live |
+| Google RBM | `rcs_google.go` (410) | service-account JWT → OAuth (`:247-284`) | send yes | no | — | not needed | yes (`:86`) | webhook + verification (`:350`, `:385`) | 3 | test platform only |
+| RCSRouter | `rcs_router.go` (137) | picks vendor; `Sync` from `rcs_connections` (`:110`) | | | | | | | 3 | |
+| Registry | `registry.go` (81) | channel → connector | | | | | | | — | |
+
+Gaps common to all connectors: no circuit breaker per vendor beyond health; no retry of a failed
+submit (a submit error aborts the send with an error, `service.go:467-469`); no per-vendor rate
+shaping for HTTP vendors; no WhatsApp, email or voice connector at all.
+
+---
+
+## 7. Compliance engine
+
+### 7.1 Regimes (`internal/domain/compliance`)
+
+The `Regime` interface (`regime.go:68-116`) answers: label, currency, stub?, registration
+objects, CTA-URL rule, header rule, whether a regulator id is required, whether a registered
+template is required. Registry at `regime.go:118-123`.
+
+| Country | Regime | Real? | What it enforces |
+|---|---|---|---|
+| IN | `india{}` "India (DLT)" (`india.go:19-29`) | **yes** | Registration objects PE/RTM entity (legal name, PAN, entity type), telemarketer mapping, DLT header (transactional/promotional/service implicit/explicit) (`india.go:35-100`); header exactly 6 alphanumerics (`india.go:126`); shorteners `bit.ly, tinyurl.com, t.co, goo.gl, ow.ly` refused in CTAs and in send bodies (`india.go:15`, `:106-118`; `service.go:268-276`); regulator ids required (`:27`); registered template required (`:29`); promotional only 10:00–21:00 IST (`india.go:149-156`) |
+| US | `unitedStates{}` "10DLC/TCR" (`us.go:5-7`) | **forms only** | Registration objects `tcr_brand`, `tcr_campaign` with use cases (`us.go:21-60`); no header rule (`:18`); no registered template (`:14`). There is **no TCR API client** anywhere in `internal/` — approval is a manual operator action. No US SMS route exists unless an operator configures an SMPP bind for US. |
+| GB | `stub` "United Kingdom (MMA)" (`regime.go:121`) | stub | nothing (`stubs.go:18-36`) |
+| AE | `stub` "United Arab Emirates" (`regime.go:122`) | stub | nothing |
+
+Calling US "live" overstates it: the regime collects 10DLC brand/campaign fields, but nothing
+registers them with TCR and nothing sends to the US.
+
+### 7.2 DLT registry and binding
+
+- Relay is a **system of record** for DLT ids, never an issuer (`00038_dlt_ids_are_customer_supplied.sql`).
+- There is **no integration with any DLT portal** (Jio TrueConnect, Vilpower, Airtel, etc. — no
+  such client in `internal/`). Customers register on the portal themselves, then paste ids; an
+  operator approves in the approval queue (`/v1/operator/approvals`).
+- Since `4417d70` (latest commit) a send is refused `entity_not_registered` until the tenant's
+  registration for the sender's country is approved (`gate.go:178-180`).
+- Template binding: body must be an instantiation of the registered template
+  (`internal/domain/messaging/template_binding.go`, `gate.go:212-215`); DLT PE and template ids
+  travel as TLVs; the PE–TM chain hash (TRAI, 11 Dec 2024) goes in 0x1402 from
+  `DLTTelemarketerChain` config (`smpp.go:27-32`, `main.go:337`).
+
+### 7.3 DND / NCPR
+
+`NoDNDRegister` is wired in production (`cmd/control-api/main.go:345-347`). The lookup only runs
+for **SMS + `+91` + template `dlt_category = PROMOTIONAL`** (`internal/sending/dnd.go:98-101`);
+anything else is never checked. Because the register always errors, **every Indian promotional
+SMS is refused `dnd_check_unavailable`** (`dnd.go:105-111`, `gate.go:251-253`). A partial
+category block is treated as a full block (`dnd.go:20-24`). Caching is a per-process 24 h map
+(`dnd.go:45-58`). Missing: any register implementation (operator scrub API, licensed provider,
+or synced NCPR file).
+
+### 7.4 Consent and opt-out
+
+| Control | As built |
+|---|---|
+| Consent per channel | `contacts.consent` jsonb keyed by channel (`00010:10`); immutable consent declarations per list (`contact_consent_records`, `00057:24`); campaign/journey audiences require `opted_in` on the channel (`internal/store/audience.go:780`, `:834`); fallback leg needs its own consent (`legs.go:13-19`) |
+| Single API send | **no consent check** — suppression only (`service.go:315-320`) |
+| Suppression | `suppressions` by msisdn/email (`00010:40`); checked in the gate (`gate.go:243-245`); overrides consent (`campaign.go:130-131`) |
+| STOP keywords | STOP, UNSUBSCRIBE, CANCEL, END, QUIT, OPTOUT on inbound → suppression (`internal/store/support.go:506-521`); English only; works for SMS (SMPP MO) and RCS (webhook) — no WhatsApp/email inbound exists |
+| Email unsubscribe | none (no email sending) |
+
+### 7.5 Time windows and volume controls
+
+| Control | As built |
+|---|---|
+| Promotional window (IN) | gate (`gate.go:238-240`) + re-check at the bind (`service.go:543`); campaigns scheduled outside it get `held_until = NextPromotionalOpening` (`internal/api/campaigns.go:289-290`, `india.go:161`), scheduler skips until then (`campaign_scheduler.go:15`) |
+| Quiet hours (other countries, per tenant) | **not built** — the only window is India promotional |
+| Frequency caps | per tenant per channel daily/weekly/monthly + excluded numbers (`00069:16`, `internal/sending/frequency_cap.go`, Redis-backed); API-only, no UI |
+| Daily send cap | `tenants.send_cap_per_day` (`00058:16`), operator CLI `send-cap` (`cmd/operator-admin/main.go:176-184`) |
+| Send-share cap | `tenants.send_cap_percent` (`00064:15`); `chooseUnderCap` keeps longest-unsent first (`cap_cut.go:32-64`); `always_send` contacts exempt (`00064:30`); withheld logged (`00065`) |
+
+### 7.6 Compliance gaps
+
+- No DND register (blocks Indian promotional SMS entirely).
+- No DLT portal API, no scrubbing pre-check (operators scrub; Relay only checks ids are present).
+- Relay's own short links (`/l/{code}`) are not on the India shortener list, but a DLT template
+  must whitelist the CTA domain — the Relay link domain would need whitelisting per customer
+  (no support for that in the registry).
+- US 10DLC, UK, UAE are paper regimes.
+- No consent capture flows (double opt-in, keyword opt-in) and no consent check on single sends.
+
+---
+
+## 8. Billing
+
+### 8.1 Ledger and wallet
+
+- `wallet_balances` per tenant per currency; `wallet_ledger` append-only, enforced by trigger
+  `reject_ledger_mutation()` (`00009_wallet.sql:40`) and tested
+  (`internal/store/ledger_immutability_test.go`). Entry types used: `charge` (hold), release,
+  `topup`, operator credit.
+- **Hold model**: the full cost is debited as a `charge` before submit
+  (`internal/sending/service.go:415-427`); on `delivered` nothing moves; on any terminal failure
+  `release` credits it back (`service.go:642-650`, `:769`); unreported after 48 h → expired →
+  refund (`reconciler.go:17`). Campaigns hold per page and refuse recipients they cannot afford
+  one by one at cost 0 (`campaign.go:236-240` comment).
+- A UTR (bank reference) can credit only once (`00055:8`).
+
+### 8.2 Segments
+
+GSM-7 (with extension table) vs UCS-2 detection and concatenated segment counts per GSM 03.38
+(`internal/domain/billing/segments.go:1-75`), with min/max bounds for variable content
+(`segments.go:142`). The **same SMS segment count prices every channel** (`service.go:292-298`).
+
+### 8.3 Pricing resolution (`internal/store/wallet.go:558-640`)
+
+1. `rate_overrides` for the tenant: exact category, else channel-level (category ''), cheapest
+   first; never a sibling category (`wallet.go:580-605`).
+2. `pricing_rates` defaults: exact category → channel-level → **cheapest category on the
+   channel** (`wallet.go:612-631`).
+3. Nothing → `no_rate`.
+
+Single sends always ask for category `""` (`service.go:293`), so for per-category channels a
+MARKETING send is billed at the cheapest category. Campaigns pass the template's category
+(`campaign.go:101`, `legs.go:49`). Cached 2 s (`internal/store/hotcache.go:125-138`).
+
+Route cost (`routes.cost_per_segment_minor`, `00018:37`) is separate from price; operator margin
+is computed from both (`GET /v1/operator/margin`).
+
+### 8.4 Payments, top-up, postpaid, invoices
+
+| Capability | As built | Verdict |
+|---|---|---|
+| Card top-up | `PaymentGateway` interface (`internal/domain/billing/gateway.go:31-40`); only `ManualGateway` exists (`:51-62`); production leaves `Gateway` nil → `POST /v1/wallet/topup` refuses 422 (`internal/api/wallet.go:139-143`) | **absent** |
+| Payment methods | brand + last4 rows, no tokenisation (`00009:53`, `wallet.go:191-198`) | cosmetic |
+| Auto-recharge | config stored/read (`wallet.go:303-360`); **no executor** anywhere | **absent** |
+| Operator wallet credit (bank transfer) | `POST /v1/operator/tenants/{id}/wallet/credit` with reference 6–64 chars (`internal/api/postpaid.go:207-247`); also `operator-admin credit-wallet` (`cmd/operator-admin/main.go:171-175`) | real, manual |
+| Postpaid "credit on account" | crediting the wallet and raising an `account_invoices` row in one transaction (`internal/store/postpaid.go:120-131`); payments recorded/voided by operator (`postpaid.go:245-305`); allocation, overdue and balance derived on read (`internal/domain/billing/postpaid.go:1-12`); credit limit caps issued credit (`store/postpaid.go:307-316`) | real, manual; it is prepaid-on-credit, not send-now-pay-later |
+| Usage invoices | monthly worker (`internal/api/invoicing.go:23`), tax = 18 % when currency INR else 0 (`internal/store/wallet.go:686-691`); account invoices use `TaxRateFor(country)` IN 18 / US 0 / GB 20 / AE 5 (`internal/domain/billing/postpaid.go:76-79`) | real but **not GST-compliant** |
+| GST invoice | no GSTIN (seller or buyer), no HSN/SAC, no CGST/SGST/IGST split, no place of supply (grep of `db/` and `internal/` finds none; a test is named `TestAMonthsDeliveredUsageBecomesOneGSTInvoicePerCurrency`, `internal/api/invoicing_internal_test.go:12`) | **absent** |
+| Low-balance alerts | alert rules engine (`00027`, `internal/api/alert_engine.go`) | real, email via Resend |
+| Refund on failure | automatic release (§8.1) | real |
+
+### 8.5 Money flow
+
+```
+ Bank transfer ──► operator credit (console or CLI, UTR once) ──► wallet_ledger +credit
+                                     └─(on account)─► account_invoices (due date, 18 % tax)
+                                                       ◄── tenant_payments (operator records / voids)
+ Send ──► gate ──► wallet_ledger "charge" hold (−cost) ──► carrier
+            delivered ───────────────► stays spent ──► monthly usage invoice (INR 18 %)
+            undelivered/expired/rejected ──► release (+cost)
+ Card top-up ──► 422 refused (no gateway)        Auto-recharge ──► never runs
+```
+
+### 8.6 Billing gaps
+
+Payment gateway (Razorpay/Stripe/UPI), GST e-invoicing (IRN/QR above threshold), tax by place
+of supply, TDS handling, proforma invoices, credit notes, multi-currency FX, per-channel unit
+pricing (per conversation for WhatsApp, per minute for voice), submit-based billing option,
+spend limits per API key, reseller margins.
+
+---
+
+## 9. Operator console and tenant console
+
+The frontend is Next.js under `SMS-UI/src/app` with four route groups: `(dashboard)` tenant
+console, `(admin)` operator console, `(auth)` tenant sign-in, `(operator-auth)` operator
+sign-in. **79 `page.tsx` files** and **22 BFF route handlers** under `src/app/api`. Server code
+calls the backend with the session token from a cookie as `Authorization: Bearer`
+(`SMS-UI/src/lib/api/fetchers.ts:10-13`); reads go through `fetchers.ts`, writes through
+per-domain server actions in `SMS-UI/src/lib/<domain>/actions.ts`.
+
+### 9.1 Tenant console (`(dashboard)`, 51 pages)
+
+"Calls" lists the server-side fetchers and action modules the page imports
+(`SMS-UI/src/lib/api/fetchers.ts` functions, `SMS-UI/src/lib/<module>`), which map one-to-one to
+contract operations of the same name.
+
+| Route | Purpose | Calls |
+|---|---|---|
+| `/overview` | home: attention items, KPIs | `getAnalytics`, `getCampaigns`, `getConversations`, `getMe`, `getRegistrations`, `getSenderIds`, `getTemplates` |
+| `/analytics` | delivery analytics, scheduled reports | `getAnalytics`, `getCampaigns`, `getScheduledReports`; `analytics/actions` (create/update/delete report) |
+| `/audience` | contacts and lists | `getContactListPage`, `getContacts`; `contacts/actions` (update contact, consent, lists) |
+| `/audience/import` | CSV/XLSX import with column mapping | `getAllContacts`, `getContactLists`; `contacts/actions` (`importContacts`) |
+| `/audience/lists/[id]` | one list | list detail (component) |
+| `/audience/suppressions` | suppression list | `suppressions/actions` |
+| `/campaigns` | campaign list | `getCampaignPage` |
+| `/campaigns/new` | wizard: channel, sender, template, audience, fallback, schedule, estimate | `getContactLists`, `getPricing`, `getRcsAgents`, `getRegistrations`, `getSenderIds`, `getTemplates`, `getWalletBalances`; `campaigns/actions` (create, estimate), `compliance/readiness` |
+| `/campaigns/[id]`, `/campaigns/[id]/recipients` | live progress, pause/resume/cancel, recipients | `campaigns/actions` (`/v1/campaigns/${id}/${op}`, `SMS-UI/src/lib/campaigns/actions.ts:218`) |
+| `/automation`, `/automation/new`, `/automation/[id]`, `/automation/[id]/edit` | journeys (linear send/wait) | `getJourneyPage`, `getContactLists`, `getSenderIds`, `getTemplates`; `automation/actions` (`/v1/automation/journeys/${id}/${verb}`, `automation/actions.ts:142`) |
+| `/inbox`, `/inbox/[id]` | two-way conversations | `getConversations`; reply/read/close/reopen |
+| `/senders` | sender ids incl. DNS check and voice verify | `getSenderIdPage`, `getRejectedSenderIds`, `getRegistrations`, `getRcsAgents`; `senders/actions`, `senders/voice-verify-actions`, `senders/dns-check-action` |
+| `/senders/agents`, `/new`, `/[id]`, `/[id]/edit` | RCS agents, verification, carrier launch | `getRcsAgentPage`; `rcs/agent-actions` (`/v1/rcs/agents/${id}/launch`, `rcs/agent-actions.ts:240`) |
+| `/templates`, `/templates/new` | templates incl. RCS card + carrier registration, WA/email content editors | `getTemplatePage`, `getApprovedRcsTemplates`, `getRejectedTemplates`, `getSenderIds`, `getMe`; `templates/actions` |
+| `/compliance`, `/compliance/[country]` | registration readiness per regime | `getRegistrations`, `getSenderIds`, `getTemplates`, `getRcsAgents`, `getMe` |
+| `/billing` | wallet, ledger, payment methods, auto-recharge | `getWalletBalances`, `getLedger`, `getPaymentMethods`, `getAutoRecharge`, `getMe`; `billing/actions` |
+| `/billing/usage`, `/billing/invoices[/id]`, `/billing/account-invoices`, `/billing/estimator` | usage, invoices, postpaid invoices + CSV, estimator | `getUsage`, `getInvoices`, `getAccountInvoices`; `billing/actions` |
+| `/developer` | hub | `getMe` |
+| `/developer/api-keys` | keys, scopes, IP allowlist | `developer/api-keys`, `developer/ip-allowlist` |
+| `/developer/webhooks[/id]` | endpoints, delivery log, test, resend | `developer/webhooks` (`webhooks.ts:87`, `:178`) — **no CRM-format (integration) control** |
+| `/developer/logs[/id]` | message log | `getMessages`, `getCampaign`, `getJourney` |
+| `/developer/verify`, `/new`, `/[id]`, `/[id]/analytics` | Verify/OTP services, try-it, attempts, fraud analytics | `getVerifyServices`, `getSenderIds`, attempts (`fetchers.ts:605`); `verify/actions` |
+| `/settings`, `/profile`, `/security`, `/team`, `/alerts`, `/data` | profile, password, MFA, sessions, SSO form, team roles, alert rules, retention + residency | `getMe`, `getSessions`, `getSsoConfig`, `getTeamMembers`, `getAlertRules`, `getDataRetention`; respective actions |
+| `/support`, `/support/new`, `/support/[id]` | tickets | `getSupportTickets`; `support/actions` |
+| `/restricted` | role-gate landing for viewers | — |
+
+### 9.2 Operator console (`(admin)`, 19 pages) and sign-in
+
+| Route | Purpose | Calls (`SMS-UI/src/lib/operator/*`) |
+|---|---|---|
+| `/admin/tenants`, `/admin/tenants/[id]` | tenant list/detail: suspend, reinstate, flag, throttle, wallet credit, credit limit, payments, invoices, senders | `operator/fetchers`, `operator/actions` |
+| `/admin/tenants/[id]/campaigns[/campaignId[/messages/messageId]]` | per-tenant campaign drill-down | operator campaigns/messages ops |
+| `/admin/live`, `/admin/live/[campaignId]` | live campaigns across tenants | `listOperatorCampaigns`, `getOperatorCampaign`, SSE `/api/operator/events` |
+| `/admin/messages`, `/admin/messages/[messageId]` | cross-tenant message log, CSV export, timeline | `listOperatorMessages`, `exportOperatorMessages`, `getOperatorMessage` |
+| `/admin/approvals` | sender/template/registration/RCS-agent approvals | approve/reject ops (`operator/actions.ts:843`, `:861`) |
+| `/admin/abuse` | abuse queue, dismiss, throttle | `getAbuseQueue`, `dismissFlag`, `throttleTenant` |
+| `/admin/connections` | **SMPP** connections: create, edit, test bind, enable/disable (`operator/actions.ts:1110`) | connections ops — no RCS connections |
+| `/admin/routes` | corridors, priority per carrier, enable/disable, cost | routes ops |
+| `/admin/rates` | default rate card, per-tenant overrides | rates ops |
+| `/admin/usage` | usage and margin | `getOperatorUsage`, `getOperatorMargin` |
+| `/admin/audit` | operator audit log + user activity, CSV | `getAuditLog`, `getUserActivity`, exports |
+| `/admin/security` | operator MFA | operator MFA ops |
+| `/admin/support[/id]` | tickets across tenants | operator support ops |
+| `/operator/login`, `/operator/login/mfa` | operator sign-in | `operatorLogin`, `operatorVerifyMfa` |
+
+Tenant auth pages: `/login`, `/login/mfa`, `/signup`, `/verify-email`, `/forgot`,
+`/reset-password` (`SMS-UI/src/lib/auth/actions`). No SSO sign-in page.
+
+BFF handlers (`SMS-UI/src/app/api`): `me`, `events`, `operator/events`, `wallet/balances` and 18
+`dev/*` test hooks (seed-campaigns, seed-templates, seed-senders, seed-tenants, seed-routes,
+seed-journeys, advance-*, drain-wallet, set-my-role, emit-event, verify-reset, rate-limit,
+receive-inbound-message).
+
+### 9.3 Contract coverage by the UI
+
+Diffing every `/v1/...` literal in non-test, non-mock `SMS-UI/src` against the 170 contract
+paths: every contract path has a caller except **`GET /v1/registrations/{id}`** (no
+`registrations/${` in `src/lib` or `src/app`), and possibly
+`GET /v1/operator/tenants/{id}/invoices/export` (only found as a typed path in
+`SMS-UI/src/lib/api-types.ts:2751`; UNVERIFIED whether built dynamically). Action endpoints
+(pause/resume/cancel, journey verbs, connection enable/disable) are built dynamically
+(`campaigns/actions.ts:218`, `automation/actions.ts:142`, `operator/actions.ts:1110`).
+
+### 9.4 Backend capability with no UI
+
+All of these exist and are mounted (§3.3) and have **zero** references outside tests/mocks in
+`SMS-UI/src`:
+
+| Feature | Backend | UI |
+|---|---|---|
+| Keyword chatbots | `internal/api/chatbots.go:25-29`, `00075` | none |
+| Short links + click analytics | `internal/api/links.go:27-32`, `00070` | none |
+| Frequency caps | `internal/api/frequency_caps.go:23-24` | none |
+| Campaign drip | `internal/api/campaign_drip.go:90-91` | none |
+| Test send to own handsets | `internal/api/test_send.go:24` | none |
+| S3 report export | `internal/api/report_s3.go:22-25` | none (never exercised on a real bucket per shared context) |
+| White-label branding + custom domain | `internal/api/branding.go:24-28` | none |
+| WebEngage / MoEngage / CleverTap webhook formats | `internal/api/webhook_integrations.go:25-26` | none |
+| Error-code and latency analytics | `internal/api/analytics_detail.go:17-18` | none |
+| Operator journeys list, message summary | `internal/api/operator_sends.go:35`, `:37` | none |
+| RCS vendor connections, carrier launch admission, send cap, send share, always-send | `cmd/operator-admin` only | none (CLI) |
+
+### 9.5 What the UI presents that the backend does not deliver
+
+- All five channels selectable everywhere with delivery receipts claimed
+  (`SMS-UI/src/lib/registries/channels.ts:74-162`), while three are sandbox (§5).
+- Card top-up and payment-method screens on `/billing` while the backend refuses every top-up
+  (`internal/api/wallet.go:139-143`); auto-recharge settings that nothing executes.
+- SSO form on `/settings/security` with no SSO login behind it (§2.2).
+- Voice caller-ID "verification" that displays the code it was supposed to deliver by phone
+  (`internal/api/senders.go:254`).
+
+### 9.6 Frontend tests
+
+| Suite | Count | Runs against |
+|---|---|---|
+| Vitest test files | 402 (`find SMS-UI/src -name '*.test.ts*'`) | jsdom/unit; last full run 15 Oct: 5986/5988 passing, 2 mock-only failures (shared context; not re-run here) |
+| Playwright specs | 86 (`SMS-UI/e2e/*.spec.ts`) | **mock API only**: `webServer` runs `pnpm dev:e2e` on port 3100 with `.env.e2e` mock mode (`SMS-UI/playwright.config.ts:37-52`, `SMS-UI/package.json:12`) |
+| Live-backend e2e | none | — |
+
+---
+
+## 10. Security
+
+### 10.1 Controls
+
+| Control | As built | Evidence |
+|---|---|---|
+| Password hashing | argon2id, 64 MiB, 3 iterations, 4 threads | `internal/domain/auth/credentials.go:15-24` |
+| Sessions | opaque token, stored hashed (`sessions.token_hash`), 24 h lifetime, revocable, revoked on password reset | `internal/api/auth.go:21`, `00003_identity.sql:43`, `00007` |
+| Session resolution under RLS | SECURITY DEFINER functions | `00004_session_resolution.sql:17-59` |
+| Signup gate | optional invite code, constant-time compare | `internal/api/auth.go:111-114` |
+| MFA (tenant) | TOTP SHA1/30 s/6 digits, skew 1, hashed recovery codes | `internal/domain/auth/totp.go:50-94`, `00005` |
+| MFA (operator) | same, separate tables | `00036`, `internal/api/operator_mfa.go` |
+| Login backoff | 3 account failures / 10–20 IP failures per 15 min, escalating lock; fails open without Redis | `internal/api/login_limit.go:11-33`, `:95-126` |
+| Abuse guard | per-IP (default 1200/min) with escalating bans, per-credential limit, ignore list | `internal/api/abuse_guard.go:1-30`, `internal/platform/config/config.go:246` |
+| Send rate limit | 200/s live, 20/s test per tenant, fixed window, fails open | `internal/api/send_ratelimit.go:22-49` |
+| API keys | hashed (`key_hash`), prefix shown, scopes, environment, rotation, revoke; per-environment IP allowlist | `00012_developer.sql:11-27`, `:66`, `:100`; `internal/api/key_scopes.go` |
+| Roles (tenant) | owner/admin/member/viewer; viewers blocked from writes by middleware | `00071`, `internal/api/viewer_guard.go:30`; e.g. top-up requires `canManageSettings` (`wallet.go:109-112`) |
+| Roles (operator) | `operator` / `admin` in schema; **admin never enforced** | `internal/api/operator.go:64-85` has no callers |
+| Operator network restriction | `OPERATOR_IP_ALLOWLIST`; empty means open (template leaves it empty) | `cmd/control-api/main.go:203-207`, `internal/api/operator_allowlist.go:103`, `deploy/env.production.example:58` |
+| RLS | 55 tables, `current_tenant_id()`; separate operator pool; API never holds the migration role | §2.1; `main.go:106-127` |
+| Audit | operator audit log immutable (trigger), tenant user activity | `00018_operator.sql:72-85`, `00028` |
+| Secrets at rest | AES-GCM `secrets.Box` keyed by `CONNECTION_ENCRYPTION_KEY`; seals SMPP passwords, RCS vendor secrets, webhook signing secrets, CRM headers, S3 secret keys; boot fails on a bad key | `internal/platform/secrets/secrets.go:47-62`; `main.go:300-310`; `00052`, `00053`, `00073`, `00077` |
+| Webhook signing (outbound) | HMAC-SHA256 over `ts.body`, `v1=` scheme | `internal/webhook/webhook.go:45-71` |
+| Carrier webhooks (inbound) | shared token in URL path + optional IP allowlist; vendors do not sign | `internal/api/carrier_webhooks.go:1-14`, `:39` |
+| Body limits, unknown-field and bad-enum rejection | middleware | `internal/api/server.go:281-316`, `internal/api/body_limit.go` |
+| Media | signed URLs; uploads disabled unless signing key set | `cmd/control-api/main.go:216-228` |
+| Retention | per-tenant 30–365 days on message logs | `internal/api/retention.go`, `db/clickhouse/004` |
+| Seeded operator password | warned at every boot | `cmd/control-api/main.go:370` |
+
+### 10.2 Weaknesses (each proven in code)
+
+1. **Operator role not enforced** — any operator can credit wallets, record payments, set credit
+   limits, change prices (`internal/api/postpaid.go:210`, `:624`, `:779`;
+   `internal/api/operator.go:1203`, `:1297`; `requireOperatorAdmin` unused).
+2. **Voice verification code returned to the requester** (`internal/api/senders.go:254`) —
+   caller-ID ownership is not verified at all.
+3. **Webhook SSRF via DNS**: only literal private IPs are refused (`internal/webhook/webhook.go:129-152`);
+   no dial-time check of resolved addresses.
+4. **`/metrics` is public** (`internal/api/server.go:370-373`) — leaks traffic shape and incidents.
+5. **Trustsignal API key sent as a query parameter** (`internal/connector/rcs_trustsignal.go:131`)
+   — ends up in any proxy/access log on the path.
+6. **Carrier webhook secret in the URL path** (`carrier_webhooks.go:1-14` acknowledges it lands
+   in access logs).
+7. **Limits fail open without Redis** (`send_ratelimit.go:41-49`, `login_limit.go:11-13`) — an
+   attacker who can degrade Redis removes brute-force protection.
+8. **Operator console reachable from anywhere** unless `OPERATOR_IP_ALLOWLIST` is set (live
+   value UNVERIFIED).
+9. **No consent check on single sends** (§4.3).
+10. **SMPP binds in clear text** (`internal/connector/smpp.go:303-306`) — bind passwords cross the
+    network unencrypted unless the operator link is a VPN (UNVERIFIED).
+11. **SSO is a form**, not a login method — enterprise buyers will discover this at RFP stage.
+12. `rate_overrides` has no RLS (tenant isolation by predicate only, `internal/store/wallet.go:580-596`).
+
+---
+
+## 11. Quality
+
+### 11.1 Backend tests (`func Test…` per package, computed from source)
+
+| Package | Test files | Tests | Needing live datastores (lower bound) |
+|---|---|---|---|
+| `internal/api` | 124 | 531 | 284 |
+| `internal/connector` | 15 | 108 | 0 |
+| `internal/sending` | 21 | 95 | 77 |
+| `internal/store` | 13 | 36 | 6 |
+| `internal/domain/messaging` | 5 | 26 | 0 |
+| `internal/domain/billing` | 3 | 19 | 0 |
+| `internal/domain/audience` | 3 | 14 | 0 |
+| `internal/domain/compliance` | 3 | 14 | 0 |
+| `internal/platform/config` | 1 | 13 | 0 |
+| `internal/domain/auth` | 1 | 8 | 0 |
+| `internal/domain/verify` | 1 | 8 | 0 |
+| `internal/webhook` | 1 | 6 | 0 |
+| `internal/platform/resilience` | 1 | 5 | 0 |
+| `internal/platform/secrets` | 1 | 5 | 0 |
+| `internal/demoseed` | 2 | 4 | 2 |
+| `internal/platform/s3put` | 1 | 4 | 0 |
+| `internal/domain/rcs` | 1 | 3 | 0 |
+| `internal/mailer` | 1 | 3 | 0 |
+| `internal/domain/media` | 1 | 2 | 0 |
+| `cmd/operator-admin` | 1 | 1 | 0 |
+| **Total** | **200** | **905** | **≥369** |
+
+Test code is 37,778 lines against 91,894 lines of non-test Go (`wc -l`). Datastore tests call
+`t.Skip` when `TEST_DATABASE_URL` / `TEST_CLICKHOUSE_URL` / `REDIS_URL` are absent (e.g.
+`internal/api/testsupport_test.go:178-182`, `internal/sending/service_test.go:95-101`), so a run
+without them is green while covering nothing — the Makefile warns about exactly this
+(`Makefile:3-9`). The full suite runs on the AWS box via `make test` (`scripts/remote-test.sh`);
+the deploy gate on GitHub runners has no datastores (`.github/workflows/deploy.yml:44-52`).
+Shared context: `make test` all 20 packages green on 15 Oct (not re-run here — running it executes
+on the production host).
+
+Untested connectors: `rcs_airtel.go` and `rcs_vi.go` have no test file of their own (exercised
+indirectly through `rcs_send_test.go`, `rcs_webhook_test.go`, `rcs_capability_test.go`).
+
+### 11.2 TODOs, flakes, drift
+
+- **Zero** `TODO`/`FIXME`/`HACK` markers in hand-written Go (the 4 hits are inside test data and
+  generated code). Debt is recorded as long prose comments and `ponytail:` notes instead (e.g.
+  `internal/sending/dnd.go:47-48`, `internal/api/send_ratelimit.go:33-34`).
+- Known flakiness is documented only for the old browser suite (`docs/gaps.md:32-35`, 15 of 79
+  failures flipping run to run, Aug 2026) and two flaky Playwright specs
+  (`docs/HANDOFF_TO_UI_2026-09-02.md:98`). No current flake list exists.
+- Stale numbers in code comments (151/177 operations, §3.1); generated code behind the contract
+  by 7 ops.
+- Stale docs: `STATUS.md`, `docs/gaps.md` (Aug 2026).
+- Frontend: 402 vitest files, 86 Playwright specs, **all against mocks** (§9.6).
+
+---
+
+## 12. Honest scorecard
+
+Maturity: 0 absent · 1 schema/stub only · 2 works in sandbox/demo · 3 works for real with gaps ·
+4 production-grade for a pilot · 5 market-grade.
+
+| Area | Maturity | Evidence |
+|---|---|---|
+| SMS sending (India, SMPP, DLT TLVs, DLR, MO) | **3** | `internal/connector/smpp.go`; VIDEOCON live per docs; no TLS, priority-only routing |
+| India compliance (DLT registry, template match, shortener, promo window) | **3** | `internal/domain/compliance/india.go`, `gate.go:178-240`; no portal API |
+| DND / NCPR | **0** | `NoDNDRegister` blocks all Indian promotional SMS (`dnd.go:38-43`) |
+| RCS (Trustsignal) | **3** | live-proven per context; card + suggestions; no capability, no carousel |
+| RCS (Jio, Airtel, Vi, Google) | **2** | coded and unit-tested, never live |
+| WhatsApp | **1** | schema + template editor; sandbox send that charges (`smpp.go:802`) |
+| Email | **1** | schema only; sandbox; no DNS verification |
+| Voice | **1** | schema only; code returned in HTTP response |
+| Campaigns (schedule, pause/resume/cancel, retry, fallback legs, caps) | **4** | `internal/sending/campaign.go`, `legs.go`, `cap_cut.go` |
+| Journeys | **2** | linear send/wait only (`internal/api/journey_engine.go:106-114`); no branching or event triggers |
+| Two-way inbox + STOP handling | **3** | SMS/RCS only; English keywords |
+| Chatbots | **2** | keyword → canned reply, no UI |
+| Verify / OTP | **3** | services, attempts, fraud flag; SMS-only in reality |
+| Wallet / ledger / holds / refunds | **4** | append-only ledger, pay-on-delivery, reconciler |
+| Pricing (rate card, overrides) | **3** | `internal/store/wallet.go:558-640`; single sends ignore category |
+| Payments / top-up / auto-recharge | **1** | manual bank credit only; card top-up 422; auto-recharge never runs |
+| Invoicing / tax | **2** | monthly invoices at flat 18 %; not GST-compliant |
+| Postpaid credit | **3** | manual, derived settlement (`internal/domain/billing/postpaid.go`) |
+| Developer API (keys, scopes, webhooks, retries, CRM formats) | **3** | 211 ops; no SDKs, no public API reference screen; 39 routes outside the contract |
+| Analytics (ClickHouse rollups) | **3** | `message_rollup_hourly`; error/latency endpoints without UI |
+| Tenant console | **3** | 51 pages; misrepresents 3 channels and card payments |
+| Operator console | **3** | 19 pages; RCS connections CLI-only; roles unenforced |
+| Multi-tenancy / RLS | **4** | 55 tables, operator pool separation |
+| Auth (passwords, sessions, MFA, keys) | **4** | argon2id, hashed tokens, TOTP |
+| Authorization (operator roles) | **1** | `requireOperatorAdmin` dead code |
+| SSO | **0** | settings form only |
+| White-label / reseller | **1** | branding API without UI; no sub-accounts |
+| Infrastructure / HA | **2** | single 2-vCPU box, single process, daily backups |
+| Throughput | **2** | ~190/s per tenant measured on the old host; no AWS measurement |
+| Observability | **2** | logs + in-process `/metrics` (public); no tracing |
+| Test coverage (backend) | **3** | 905 tests; ≥369 skip in CI |
+| Test coverage (frontend e2e) | **2** | 86 specs, all mocked |
