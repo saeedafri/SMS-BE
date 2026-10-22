@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -117,8 +118,7 @@ type legChoice struct {
 func chooseLeg(primary legSpec, fallback *legSpec, contact store.Contact,
 	handsetReachable bool) legChoice {
 
-	primaryMissing, primaryConsented := legCarries(primary.channel, primary.template,
-		primary.mapping, contact)
+	primaryMissing, primaryConsented := legCarries(primary, contact)
 
 	// Not in the primary's audience. The page query already excludes them, so
 	// this only fires when consent or a suppression changed after the page was
@@ -141,8 +141,7 @@ func chooseLeg(primary legSpec, fallback *legSpec, contact store.Contact,
 	}
 
 	if fallback != nil {
-		fallbackMissing, fallbackConsented := legCarries(fallback.channel,
-			fallback.template, fallback.mapping, contact)
+		fallbackMissing, fallbackConsented := legCarries(*fallback, contact)
 		if fallbackConsented && len(fallbackMissing) == 0 {
 			return legChoice{onFallback: true, reason: reason}
 		}
@@ -168,10 +167,23 @@ type legSpec struct {
 	channel  string
 	template store.Template
 	mapping  map[string]string
+	// link is what {{link}} counts as: a finished link's stand-in when the
+	// campaign has a link, empty when it has none and {{link}} cannot fill.
+	link string
 }
 
-func (c batchContext) spec() legSpec {
-	return legSpec{channel: c.sender.Channel, template: c.template, mapping: c.variableMapping}
+func (c batchContext) spec(linkBase string) legSpec {
+	return legSpec{channel: c.sender.Channel, template: c.template, mapping: c.variableMapping,
+		link: c.linkFill(linkBase)}
+}
+
+// linkFill is what {{link}} is filled with while a message is decided on and
+// gated: the stand-in when this campaign makes links, nothing when it does not.
+func (c batchContext) linkFill(linkBase string) string {
+	if c.link == nil {
+		return ""
+	}
+	return linkStandIn(linkBase)
 }
 
 // assignLegs splits one page of the audience between the legs.
@@ -180,13 +192,13 @@ func (s *Service) assignLegs(ctx context.Context, primary batchContext,
 
 	var fallbackSpec *legSpec
 	if fallback != nil {
-		spec := fallback.spec()
+		spec := fallback.spec(s.LinkBaseURL)
 		fallbackSpec = &spec
 	}
 	reachable := s.handsetsReachable(ctx, primary, fallback != nil, contacts)
 
 	for _, contact := range contacts {
-		choice := chooseLeg(primary.spec(), fallbackSpec, contact, reachable(contact))
+		choice := chooseLeg(primary.spec(s.LinkBaseURL), fallbackSpec, contact, reachable(contact))
 		switch {
 		case choice.excluded:
 		case choice.skipped:
@@ -257,13 +269,12 @@ func (s *Service) handsetsReachable(ctx context.Context, primary batchContext,
 // estimate can ask it before a campaign exists. One rule for both: a count
 // that disagreed with the send would be worse than no count, because it would
 // be believed.
-func legCarries(channel string, template store.Template, mapping map[string]string,
-	contact store.Contact) ([]string, bool) {
-
-	if !reachableOn(contact, channel) {
+func legCarries(leg legSpec, contact store.Contact) ([]string, bool) {
+	if !reachableOn(contact, leg.channel) {
 		return nil, false
 	}
-	return renderMessage(template, templateText(template), contact.Fields, mapping).missing, true
+	return renderMessage(leg.template, templateText(leg.template),
+		audience.WithLink(contact.Fields, leg.link), leg.mapping).missing, true
 }
 
 // reachableOn is the audience rule, in Go.

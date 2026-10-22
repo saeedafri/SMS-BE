@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -32,7 +35,14 @@ type testSendBody struct {
 	Body       string            `json:"body"`
 	Variables  map[string]string `json:"variables"`
 	Recipients []string          `json:"recipients"`
+	// Link is where a {{link}} in this message goes, raw so the same rules and
+	// words as campaign create apply to it.
+	Link json.RawMessage `json:"link"`
 }
+
+// testLinkLife is how long a test send's real link works: long enough to tap
+// it on the handset and show a colleague, short enough not to linger.
+const testLinkLife = 7 * 24 * time.Hour
 
 type testSendResult struct {
 	Recipient   string     `json:"recipient"`
@@ -88,6 +98,22 @@ func (s *Server) testSend(w http.ResponseWriter, r *http.Request) {
 			numbers = append(numbers, number)
 		}
 	}
+	// The link, judged exactly as campaign create judges it: required when the
+	// message uses {{link}}, refused when it does not.
+	messageParts := []store.Template{{Body: &body.Body}}
+	if body.TemplateID != nil {
+		template, err := store.GetTemplate(r.Context(), s.DB, identity, *body.TemplateID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, "internal", "an unexpected error occurred")
+			return
+		}
+		messageParts = append(messageParts, template)
+	}
+	link, problem := s.linkFor(identity, r.Host, body.Link, messageParts...)
+	if problem != "" {
+		writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
+		return
+	}
 	service := s.sendingService(r.Context())
 	if service == nil {
 		writeError(w, http.StatusUnprocessableEntity, codeValidation,
@@ -101,10 +127,25 @@ func (s *Server) testSend(w http.ResponseWriter, r *http.Request) {
 				FailureCode: "rate_limited"})
 			continue
 		}
+		variables, made, err := s.testLink(r, identity, link, number, body.Variables)
+		if err != nil {
+			s.Logger.Error("test send link", "error", err.Error())
+			writeError(w, http.StatusInternalServerError, "internal", "an unexpected error occurred")
+			return
+		}
 		result, err := service.Send(r.Context(), identity, sending.SendRequest{
 			SenderID: body.SenderID, TemplateID: body.TemplateID, Msisdn: number,
-			Body: body.Body, Variables: body.Variables,
+			Body: body.Body, Variables: variables,
 		})
+		// Refused, or never sent: the link was for a message that does not
+		// exist, so it goes too. A carrier rejection is not this — that message
+		// left, and its link is the one it carried.
+		if err != nil && made != "" {
+			if deleteErr := store.DeleteShortLink(context.WithoutCancel(r.Context()), s.DB,
+				identity, made); deleteErr != nil {
+				s.Logger.Warn("test send link left behind", "code", made, "error", deleteErr.Error())
+			}
+		}
 		if err != nil && !messaging.IsRefusal(err) {
 			s.Logger.Error("test send", "error", err.Error())
 			writeError(w, http.StatusInternalServerError, "internal", "an unexpected error occurred")
@@ -118,4 +159,33 @@ func (s *Server) testSend(w http.ResponseWriter, r *http.Request) {
 		results = append(results, entry)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"results": results})
+}
+
+// testLink makes the real link a test send's {{link}} is filled with — for this
+// number, no campaign, labelled a test, a week to live — and returns the
+// variables carrying it with the link's code. No link, nothing made.
+//
+// The customer's own variables never supply it: the builder sends no sample for
+// {{link}}, and one that arrived anyway would put an untracked URL on the
+// handset of the person checking that tracking works.
+func (s *Server) testLink(r *http.Request, identity store.Identity, link *store.LinkSpec,
+	number string, variables map[string]string) (map[string]string, string, error) {
+
+	if link == nil {
+		return variables, "", nil
+	}
+	label := "test send"
+	expires := time.Now().Add(testLinkLife)
+	made, err := store.CreateShortLinks(r.Context(), s.DB, identity, []store.ShortLink{{
+		Destination: link.Destination, Recipient: &number, Label: &label,
+		AppendClickID: link.AppendClickID, ExpiresAt: &expires}})
+	if err != nil {
+		return nil, "", err
+	}
+	filled := make(map[string]string, len(variables)+1)
+	for name, value := range variables {
+		filled[name] = value
+	}
+	filled[audience.LinkSlot] = s.linkBaseFor(r) + "/l/" + made[0].Code
+	return filled, made[0].Code, nil
 }

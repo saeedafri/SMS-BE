@@ -40,11 +40,39 @@ func ResolveField(fields, mapping map[string]string, slot string) (string, bool)
 	if mapped, named := mapping[slot]; named {
 		key = mapped
 	}
+	if slot == LinkSlot {
+		key = LinkField
+	}
 	value := strings.TrimSpace(fields[key])
 	if value == "" {
 		return "", false
 	}
 	return value, true
+}
+
+// LinkSlot is the reserved {{link}}: the recipient's own tracked short link,
+// made by the platform as the message is sent. It is never a contact column and
+// never mapped, so a spreadsheet with a "link" column cannot shadow it — the
+// recipient would get an untracked URL and the campaign would report every
+// message as carrying its tracked link.
+const LinkSlot = "link"
+
+// LinkField is the key the platform's link travels under in a fields map. It
+// starts with NUL, which no column name can: Postgres refuses \u0000 in jsonb,
+// and contacts' fields and list mappings are both stored there.
+const LinkField = "\x00link"
+
+// WithLink is fields plus the platform's link, as a copy. An empty link leaves
+// {{link}} unresolved.
+func WithLink(fields map[string]string, link string) map[string]string {
+	out := make(map[string]string, len(fields)+1)
+	for key, value := range fields {
+		out[key] = value
+	}
+	if link != "" {
+		out[LinkField] = link
+	}
+	return out
 }
 
 // Personalised is one recipient's message, and what stopped it being complete.

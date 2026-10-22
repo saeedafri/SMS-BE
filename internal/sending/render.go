@@ -178,3 +178,10 @@ func templateText(template store.Template) string {
 	}
 	return *template.Body
 }
+
+// requestFields are a single send's own variables as a fill reads them. The
+// caller names every value itself, so a variable it calls link fills {{link}}
+// exactly as it did before {{link}} was reserved for a campaign's tracked link.
+func requestFields(variables map[string]string) map[string]string {
+	return audience.WithLink(variables, variables[audience.LinkSlot])
+}

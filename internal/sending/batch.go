@@ -41,6 +41,11 @@ type sendPlan struct {
 	// in the log and sends the handset "Hi ", because the carrier holds the
 	// template and fills the slots from what we pass, not from the body.
 	message renderedMessage
+	// fields and person are kept for the link pass: the message is gated with a
+	// stand-in for {{link}}, and filled again with the real one only once the
+	// gate has let it through.
+	fields map[string]string
+	person string
 	// refusal is set when the gate refused this recipient. Refused messages
 	// are still recorded — a tenant asking "why didn't this arrive" deserves an
 	// answer — but no money is held for them.
@@ -93,6 +98,12 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	entityRegistered := store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, context.sender.Country)
 	plans := make([]sendPlan, 0, len(contacts))
 	var holdTotal int64
+	// A campaign's {{link}} is decided on, priced and gated with a stand-in of
+	// the finished link's exact length. The links themselves are made after the
+	// gate, for the messages it let through: a number the gate refuses gets no
+	// link, because nothing is sent to it.
+	makesLinks := context.link != nil && UsesLink(context.template)
+	linkFill := context.linkFill(s.LinkBaseURL)
 
 	for i, contact := range contacts {
 		msisdn := normalised[i]
@@ -121,7 +132,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		// leaves body null on purpose and keeps its words in a card, so reading
 		// the body alone found no slots and skipped nobody on exactly the
 		// channel where the carrier renders from what we pass.
-		message := renderMessage(context.template, context.body, contact.Fields,
+		fields := audience.WithLink(contact.Fields, linkFill)
+		message := renderMessage(context.template, context.body, fields,
 			context.variableMapping)
 		if len(message.missing) > 0 {
 			context.skipped.add(message.missing)
@@ -135,6 +147,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		plan := sendPlan{
 			messageID: uuid.New(), msisdn: msisdn, email: email, body: body,
 			cost: cost, segments: segments, message: message,
+			fields: fields, person: linkKey(msisdn, contact),
 		}
 
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
@@ -193,6 +206,36 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		}
 		holdTotal += cost
 		plans = append(plans, plan)
+	}
+
+	if makesLinks {
+		people := make([]string, 0, len(plans))
+		for _, plan := range plans {
+			if plan.refusal == "" {
+				people = append(people, plan.person)
+			}
+		}
+		links, err := s.sendLinks(ctx, identity, context.sender.Country,
+			context.campaignID, context.link, people)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		for i := range plans {
+			plan := &plans[i]
+			if plan.refusal != "" {
+				continue
+			}
+			link, made := links[plan.person]
+			if !made {
+				// Never sent without the link it was meant to carry.
+				plan.refusal = unresolvedLink
+				holdTotal -= plan.cost
+				continue
+			}
+			plan.message = renderMessage(context.template, context.body,
+				audience.WithLink(plan.fields, link), context.variableMapping)
+			plan.body = plan.message.body
+		}
 	}
 
 	// ONE wallet movement for the page. The per-message path took a row lock
@@ -399,6 +442,10 @@ type batchContext struct {
 	// is precisely why the skip has to live here: only the code that walks the
 	// list can decide who it cannot personalise.
 	variableMapping map[string]string
+	// link is the campaign's tracked-link spec, nil when it makes no links. Set
+	// on every leg of a campaign that has one, so the fallback leg makes or
+	// finds the same person's link as the primary.
+	link *store.LinkSpec
 	// skipped accumulates who could not be personalised, across every page of
 	// the fan-out. A pointer because batchContext is copied per page and the
 	// campaign wants one total; nil on the single-send path, which has no list

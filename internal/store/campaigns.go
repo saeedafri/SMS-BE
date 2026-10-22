@@ -60,6 +60,10 @@ type Campaign struct {
 	// campaign. Both are set or neither is.
 	DripBatchSize       *int
 	DripIntervalMinutes *int
+
+	// Link is where this campaign's per-recipient tracked links go, nil when its
+	// message has no {{link}}.
+	Link *LinkSpec
 }
 
 // Dripping says whether the campaign is sent in instalments.
@@ -72,7 +76,7 @@ const campaignColumns = `
 	c.segments_per_message_min, c.segments_per_message_max, c.cost_minor_min, c.cost_minor_max, c.currency,
 	c.retry_of, (SELECT r.id FROM campaigns r WHERE r.retry_of = c.id LIMIT 1),
 	c.created_at, c.paused_at, c.cancelled_at, coalesce(c.dispatch_cursor, ''),
-	c.drip_batch_size, c.drip_interval_minutes`
+	c.drip_batch_size, c.drip_interval_minutes, c.link`
 
 func scanCampaign(row pgx.Row) (Campaign, error) {
 	var campaign Campaign
@@ -85,7 +89,7 @@ func scanCampaign(row pgx.Row) (Campaign, error) {
 		&campaign.CostMinorMax, &campaign.Currency, &campaign.RetryOf,
 		&campaign.RetriedByCampaignID, &campaign.CreatedAt,
 		&campaign.PausedAt, &campaign.CancelledAt, &campaign.DispatchCursor,
-		&campaign.DripBatchSize, &campaign.DripIntervalMinutes)
+		&campaign.DripBatchSize, &campaign.DripIntervalMinutes, &campaign.Link)
 	return campaign, err
 }
 
@@ -186,9 +190,9 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			    segments_per_message_min, segments_per_message_max,
 			    cost_minor_min, cost_minor_max, currency, retry_of, held_until, description,
 			    created_by_user_id, created_by_name, created_by_email,
-			    drip_batch_size, drip_interval_minutes)
+			    drip_batch_size, drip_interval_minutes, link)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,nullif($21,''),
-			    $22, nullif($23,''), nullif($24,''), $25, $26)
+			    $22, nullif($23,''), nullif($24,''), $25, $26, $27)
 			RETURNING id`,
 			id.TenantID, campaign.Name, campaign.Channel, campaign.Country,
 			campaign.ListID, campaign.SenderID, campaign.TemplateID,
@@ -198,7 +202,7 @@ func CreateCampaign(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			campaign.CostMinorMin, campaign.CostMinorMax,
 			campaign.Currency, campaign.RetryOf, campaign.HeldUntil, campaign.Description,
 			userOrNil(id.UserID), id.Name, id.Email,
-			campaign.DripBatchSize, campaign.DripIntervalMinutes,
+			campaign.DripBatchSize, campaign.DripIntervalMinutes, campaign.Link,
 		).Scan(&newID); err != nil {
 			return err
 		}

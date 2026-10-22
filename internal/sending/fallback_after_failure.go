@@ -107,6 +107,7 @@ func (s *Service) sendFallback(ctx context.Context, identity store.Identity,
 		return release(err)
 	}
 	leg.campaignChannel = campaign.Channel
+	leg.link = campaign.Link
 	balances, err := store.ListWalletBalances(ctx, s.DB, identity)
 	if err != nil {
 		return release(err)

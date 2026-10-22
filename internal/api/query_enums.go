@@ -114,6 +114,9 @@ func badEnum(r *http.Request) (name string, allowed []string, found bool) {
 		for param, values := range route.params {
 			for _, raw := range query[param] {
 				for _, value := range strings.Split(raw, ",") {
+					// Trimmed, as the comma-list handlers trim: "sent, queued" is
+					// two good statuses, not a bad one called " queued".
+					value = strings.TrimSpace(value)
 					if value != "" && !slices.Contains(values, value) {
 						return param, values, true
 					}

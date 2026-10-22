@@ -206,6 +206,11 @@ type Server struct {
 
 	// AppBaseURL is the frontend origin used to build links in those emails.
 	AppBaseURL string
+
+	// LinkBaseURL is the public origin every short link is built on,
+	// LINK_BASE_URL. Unset, the API builds links on the request's own origin as
+	// it always has, and a campaign's {{link}} cannot be made.
+	LinkBaseURL string
 }
 
 // clickhouse dials on demand, so a restarted ClickHouse is picked up without
@@ -372,6 +377,40 @@ func NewRouter(s *Server) http.Handler {
 	// when login is what has broken.
 	r.Get("/metrics", s.metrics)
 
+	// The generated routes go in FIRST, and every route mounted directly below
+	// is registered after them. chi keeps the last handler registered for a
+	// pattern, so where the contract now declares a route we serve by hand
+	// (links, chatbots, drip, test send and the rest) the hand-written handler
+	// wins over the generated 501 stub. Registered last, the stubs would
+	// silently replace thirty-six working routes the day the contract caught up.
+	handler := gen.NewStrictHandlerWithOptions(s, []gen.StrictMiddlewareFunc{withRequestHost}, gen.StrictHTTPServerOptions{
+		// A request the generated binder rejects — bad JSON, a malformed
+		// parameter, a field failing its format — is reported as 422
+		// validation_failed rather than 400. The contract declares 400 on
+		// exactly one of its 151 operations but 422 on 57, so 422 is the code
+		// the frontend's error states are actually written against.
+		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
+			if isBodyTooLarge(err) {
+				writeTooLarge(w, bodyLimitFor(r))
+				return
+			}
+			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
+		},
+		ResponseErrorHandlerFunc: writeOperationError,
+	})
+	// ErrorHandlerFunc covers a different failure than the strict handler's
+	// RequestErrorHandlerFunc above: parameter binding happens in the router
+	// layer, BEFORE the strict handler runs. Without this, a missing or
+	// malformed query parameter returned 400 text/plain — not the contract's
+	// Error envelope — on all 151 operations, and the frontend's error states
+	// read error.code, so they would see an unparseable body.
+	gen.HandlerWithOptions(handler, gen.ChiServerOptions{
+		BaseRouter: r,
+		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
+		},
+	})
+
 	// Registered only when explicitly enabled. Mounting these unconditionally
 	// and checking a flag inside each handler would leave the routes present in
 	// production, where an endpoint that changes the caller's role or zeroes a
@@ -435,33 +474,6 @@ func NewRouter(s *Server) http.Handler {
 		s.mountCarrierWebhookRoutes(r)
 	}
 
-	handler := gen.NewStrictHandlerWithOptions(s, nil, gen.StrictHTTPServerOptions{
-		// A request the generated binder rejects — bad JSON, a malformed
-		// parameter, a field failing its format — is reported as 422
-		// validation_failed rather than 400. The contract declares 400 on
-		// exactly one of its 151 operations but 422 on 57, so 422 is the code
-		// the frontend's error states are actually written against.
-		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
-			if isBodyTooLarge(err) {
-				writeTooLarge(w, bodyLimitFor(r))
-				return
-			}
-			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
-		},
-		ResponseErrorHandlerFunc: writeOperationError,
-	})
-	// ErrorHandlerFunc covers a different failure than the strict handler's
-	// RequestErrorHandlerFunc above: parameter binding happens in the router
-	// layer, BEFORE the strict handler runs. Without this, a missing or
-	// malformed query parameter returned 400 text/plain — not the contract's
-	// Error envelope — on all 151 operations, and the frontend's error states
-	// read error.code, so they would see an unparseable body.
-	gen.HandlerWithOptions(handler, gen.ChiServerOptions{
-		BaseRouter: r,
-		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeError(w, http.StatusUnprocessableEntity, codeValidation, err.Error())
-		},
-	})
 	return r
 }
 

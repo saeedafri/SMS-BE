@@ -55,6 +55,107 @@ func NewLinkCode() string {
 	return string(raw)
 }
 
+// linkCode draws a code. A variable only so a test can force a collision.
+var linkCode = NewLinkCode
+
+// LinkSpec is what a campaign needs to make one tracked link per recipient:
+// ShortLinkCreate without the campaign and the recipient, which the sender
+// supplies. Stored on the campaign as jsonb in exactly this shape.
+type LinkSpec struct {
+	Destination   string     `json:"destination"`
+	AppendClickID bool       `json:"appendClickId"`
+	ExpiresAt     *time.Time `json:"expiresAt"`
+	Label         *string    `json:"label"`
+}
+
+// CampaignLinks is each recipient's link for one campaign, making the missing
+// ones from mint. A nil mint makes nothing and returns what already exists.
+//
+// A recipient's link is the OLDEST one made for this campaign and this person,
+// whoever made it. So a link the customer pre-made through bulk wins, with its
+// own destination, and once the sender has made one, every later ask — a
+// retry, a drip resume, a restart, the fallback leg — gets that one back.
+//
+// Made in one multi-row insert per call, with ON CONFLICT DO NOTHING for both
+// things that can collide: a code already taken (rare at 55^8, not rare across
+// a million) and a concurrent sender that made the same person's link first.
+// Either way the read that follows is what decides, and anyone still missing
+// is drawn a fresh code. The per-row savepoint CreateShortLinks uses is right
+// for a thousand links and is what would make a million-recipient send crawl.
+func CampaignLinks(ctx context.Context, pool *pgxpool.Pool, id Identity, campaignID uuid.UUID,
+	recipients []string, mint *LinkSpec) (map[string]ShortLink, error) {
+
+	out := make(map[string]ShortLink, len(recipients))
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		for attempt := 0; ; attempt++ {
+			rows, err := tx.Query(ctx, `
+				SELECT DISTINCT ON (recipient) recipient, code, destination, label,
+				       append_click_id, expires_at, created_at
+				FROM short_links WHERE campaign_id = $1 AND recipient = ANY($2)
+				ORDER BY recipient, created_at, code`, campaignID, recipients)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var recipient string
+				link := ShortLink{CampaignID: &campaignID}
+				if err := rows.Scan(&recipient, &link.Code, &link.Destination, &link.Label,
+					&link.AppendClickID, &link.ExpiresAt, &link.CreatedAt); err != nil {
+					rows.Close()
+					return err
+				}
+				link.Recipient = &recipient
+				out[recipient] = link
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if mint == nil {
+				return nil
+			}
+			missing := []string{}
+			seen := map[string]bool{}
+			for _, recipient := range recipients {
+				if _, have := out[recipient]; !have && !seen[recipient] {
+					seen[recipient] = true
+					missing = append(missing, recipient)
+				}
+			}
+			if len(missing) == 0 {
+				return nil
+			}
+			if attempt == 5 {
+				return fmt.Errorf("store: no free link code for %d recipients after 5 draws", len(missing))
+			}
+			codes := make([]string, len(missing))
+			for i := range codes {
+				codes[i] = linkCode()
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO short_links (code, tenant_id, destination, campaign_id, recipient,
+				    label, append_click_id, expires_at, origin)
+				SELECT m.code, $1, $2, $3, m.recipient, $4, $5, $6, 'campaign'
+				FROM unnest($7::text[], $8::text[]) AS m(code, recipient)
+				ON CONFLICT DO NOTHING`,
+				id.TenantID, mint.Destination, campaignID, mint.Label, mint.AppendClickID,
+				mint.ExpiresAt, codes, missing); err != nil {
+				return err
+			}
+		}
+	})
+	return out, err
+}
+
+// DeleteShortLink removes one link, for a test send the gate refused: nothing
+// was sent, so the link it was made for must not exist either.
+func DeleteShortLink(ctx context.Context, pool *pgxpool.Pool, id Identity, code string) error {
+	return WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `DELETE FROM short_links WHERE code = $1`, code)
+		return err
+	})
+}
+
 // CreateShortLinks inserts links for a tenant, retrying a code collision.
 func CreateShortLinks(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	links []ShortLink) ([]ShortLink, error) {
@@ -63,7 +164,7 @@ func CreateShortLinks(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		for i, link := range links {
 			for attempt := 0; ; attempt++ {
-				link.Code = NewLinkCode()
+				link.Code = linkCode()
 				if _, err := tx.Exec(ctx, `SAVEPOINT link_code`); err != nil {
 					return err
 				}

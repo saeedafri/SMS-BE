@@ -95,6 +95,10 @@ type Config struct {
 	// carrier can fetch, and that failure lands days later at the gateway.
 	MediaBaseURL string
 
+	// LinkBaseURL is the public origin short links are built on, LINK_BASE_URL,
+	// no trailing slash. Empty keeps links on the request's own origin.
+	LinkBaseURL string
+
 	RCSAirtelBaseURL   string
 	RCSAirtelAuthToken string
 	// The account the agent hangs off. Capability discovery does not want
@@ -206,6 +210,7 @@ func Load() (Config, error) {
 	cfg.MediaRoot = strings.TrimSpace(os.Getenv("MEDIA_ROOT"))
 	cfg.MediaSigningKey = strings.TrimSpace(os.Getenv("MEDIA_SIGNING_KEY"))
 	cfg.MediaBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("MEDIA_BASE_URL")), "/")
+	cfg.LinkBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("LINK_BASE_URL")), "/")
 	cfg.RCSAirtelBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("RCS_AIRTEL_BASE_URL")), "/")
 	cfg.RCSAirtelAuthToken = strings.TrimSpace(os.Getenv("RCS_AIRTEL_AUTH_TOKEN"))
 	cfg.RCSAirtelCustomerID = strings.TrimSpace(os.Getenv("RCS_AIRTEL_CUSTOMER_ID"))

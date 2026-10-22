@@ -620,7 +620,7 @@ func TestTheEstimateCountsTheFallbackAsDeliveryNotLoss(t *testing.T) {
 		t.Fatalf("load sms: %v", err)
 	}
 	estimate, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "RCS",
-		rcsTemplate, &sending.FallbackEstimate{Channel: "SMS", Template: smsTemplate}, time.Now())
+		rcsTemplate, &sending.FallbackEstimate{Channel: "SMS", Template: smsTemplate}, nil, time.Now())
 	if err != nil {
 		t.Fatalf("estimate: %v", err)
 	}

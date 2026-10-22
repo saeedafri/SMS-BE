@@ -130,3 +130,30 @@ func TestSplittingABodyKeepsWhatIsNotASlot(t *testing.T) {
 		}
 	}
 }
+
+// {{link}} is the platform's, never the spreadsheet's. A contact column called
+// "link", or a mapping that points the slot at a column, must not fill it: the
+// recipient would get a URL nobody tracks, and the campaign would report that
+// every message carried its tracked link.
+func TestTheLinkSlotIsNeverFilledFromAContactColumn(t *testing.T) {
+	column := map[string]string{"link": "https://evil.example/x", "site": "https://shop.example"}
+	if got := audience.Fill("Tap {{link}}", column, nil); len(got.Missing) != 1 || got.Missing[0] != audience.LinkSlot {
+		t.Errorf("a column called link filled the slot: %+v", got)
+	}
+	if got := audience.Fill("Tap {{link}}", column, map[string]string{"link": "site"}); len(got.Missing) != 1 {
+		t.Errorf("a mapping filled the reserved slot: %+v", got)
+	}
+	filled := audience.Fill("Tap {{link}} {{ link }}", audience.WithLink(column, "https://relay.test/l/abcdefgh"), nil)
+	if filled.Text != "Tap https://relay.test/l/abcdefgh https://relay.test/l/abcdefgh" || len(filled.Missing) != 0 {
+		t.Errorf("the platform's link = %+v", filled)
+	}
+	// The column itself is still the customer's to use under another name.
+	if got := audience.Fill("{{website}}", audience.WithLink(column, "https://relay.test/l/abcdefgh"),
+		map[string]string{"website": "link"}); got.Text != "https://evil.example/x" {
+		t.Errorf("a column named link stopped feeding other slots: %+v", got)
+	}
+	// WithLink copies: the contact's own map is not written to.
+	if _, written := column[audience.LinkField]; written {
+		t.Error("WithLink wrote into the caller's map")
+	}
+}

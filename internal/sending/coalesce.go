@@ -450,7 +450,7 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 		// One walk over the whole message, the same one the fan-out and the
 		// single send use. A caller here names its own variables, so there is
 		// no column mapping to join them through.
-		plan.message = renderMessage(plan.template, request.Body, request.Variables, nil)
+		plan.message = renderMessage(plan.template, request.Body, requestFields(request.Variables), nil)
 
 		plan.rcsCarrier, plan.agentID = s.rcsPath(ctx, identity, sender)
 		// Keyed by operator too: two RCS senders in one corridor can go out

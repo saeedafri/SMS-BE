@@ -163,7 +163,7 @@ func TestTheQuoteIsAlreadyClippedToTheCeiling(t *testing.T) {
 		t.Fatalf("load template: %v", err)
 	}
 
-	uncapped, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS", template, nil, time.Now())
+	uncapped, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS", template, nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("estimate: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestTheQuoteIsAlreadyClippedToTheCeiling(t *testing.T) {
 	}
 
 	setSendCap(t, f, ceiling)
-	capped, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS", template, nil, time.Now())
+	capped, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS", template, nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("estimate: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestAScheduledCampaignIsQuotedAgainstTheDayItWillSend(t *testing.T) {
 	}
 
 	today, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS",
-		template, nil, time.Now())
+		template, nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("estimate today: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestAScheduledCampaignIsQuotedAgainstTheDayItWillSend(t *testing.T) {
 	}
 
 	nextWeek, err := f.service.EstimateCampaign(ctx, f.identity, &listID, "IN", "SMS",
-		template, nil, time.Now().AddDate(0, 0, 7))
+		template, nil, nil, time.Now().AddDate(0, 0, 7))
 	if err != nil {
 		t.Fatalf("estimate next week: %v", err)
 	}

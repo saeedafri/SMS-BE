@@ -44,6 +44,7 @@ func (s *Server) toCampaign(campaign store.Campaign,
 		ScheduledAt:           campaign.ScheduledAt,
 		HeldUntil:             campaign.HeldUntil,
 		SendStartedAt:         campaign.SendStartedAt,
+		Link:                  campaignLinkOut(campaign.Link),
 	}
 	if campaign.ListID != nil {
 		out.ListId = campaign.ListID.String()
@@ -274,6 +275,17 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		}
 	}
 
+	// The tracked link, after drip and once both legs are known: a {{link}} in
+	// either leg's template needs one, and a link needs a {{link}} somewhere.
+	link, linkProblem, err := s.campaignLink(ctx, identity, body.Link, campaign)
+	if err != nil {
+		return nil, err
+	}
+	if linkProblem != "" {
+		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, linkProblem)), nil
+	}
+	campaign.Link = link
+
 	// The promotional window, decided before anything is created or held.
 	// A scheduled promotional campaign records when it will really launch; a
 	// send-now outside the window is refused whole, because launching it would
@@ -312,7 +324,7 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		estimate, err := service.EstimateCampaign(ctx, identity, campaign.ListID,
 			campaign.Country, campaign.Channel, template,
 			s.fallbackEstimate(ctx, identity, campaign.FallbackChannel, campaign.FallbackTemplateID),
-			sendingAt)
+			campaign.Link, sendingAt)
 		if err == nil {
 			campaign.Recipients = estimate.Recipients
 			campaign.SegmentsPerMessageMin = estimate.SegmentsPerMessageMin
@@ -436,7 +448,7 @@ func (s *Server) EstimateCampaign(ctx context.Context, request gen.EstimateCampa
 	}
 
 	estimate, err := service.EstimateCampaign(ctx, identity, listID,
-		string(body.Country), string(body.Channel), template, fallback, s.now())
+		string(body.Country), string(body.Channel), template, fallback, estimateLink(body.Link), s.now())
 	if errors.Is(err, sending.ErrNoFallbackRate) {
 		return gen.EstimateCampaign422JSONResponse(errorBody(codeValidation,
 			"We do not have a rate for the fallback channel in that country yet, so this campaign cannot be priced. Choose another fallback, or remove it.")), nil
@@ -578,7 +590,7 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
-		Notifier: s, Redis: s.Redis, Async: s.runAsync}
+		Notifier: s, Redis: s.Redis, Async: s.runAsync, LinkBaseURL: s.LinkBaseURL}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called

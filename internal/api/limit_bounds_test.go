@@ -87,7 +87,10 @@ func TestEveryPagedRouteRefusesALimitOutsideItsDeclaredBounds(t *testing.T) {
 			// cannot be told apart from the page rule these routes also carry.
 			res := h.do(http.MethodGet,
 				fmt.Sprintf("%s%slimit=%d", url, separator(url), max+1), token, nil)
-			if !strings.Contains(string(res.Body), "Limit must be between") {
+			// The tenant suggester keeps its own sentence, which the frontend's
+			// mock repeats word for word; it names the parameter all the same.
+			if !strings.Contains(string(res.Body), "Limit must be between") &&
+				!strings.Contains(string(res.Body), "limit must be a whole number from") {
 				t.Errorf("refused for the wrong reason: %s", res.Body)
 			}
 		})

@@ -347,7 +347,7 @@ func run() error {
 		DND: sending.CacheDNDLookups(sending.NoDNDRegister{}, time.Now),
 		Abuse: api.AbuseLimits{PerIPMinute: cfg.AbuseIPPerMinute,
 			PerTokenMinute: cfg.AbuseTokenPerMinute, Ignore: cfg.AbuseIgnore},
-		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL,
+		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL, LinkBaseURL: cfg.LinkBaseURL,
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,
 		CarrierWebhookToken:      cfg.CarrierWebhookToken,

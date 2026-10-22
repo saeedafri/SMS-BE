@@ -92,7 +92,14 @@ type FallbackEstimate struct {
 // allowance would clip it to nothing for a day it is not going to run on.
 func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	listID *uuid.UUID, country, channel string, template store.Template,
-	fallback *FallbackEstimate, sendingAt time.Time) (CampaignEstimate, error) {
+	fallback *FallbackEstimate, link *store.LinkSpec, sendingAt time.Time) (CampaignEstimate, error) {
+
+	// {{link}} counted as a finished link, which has a fixed length, when the
+	// campaign makes links; left unresolved, and so skipped by name, when not.
+	linkFill := ""
+	if link != nil {
+		linkFill = linkStandIn(s.LinkBaseURL)
+	}
 
 	category := ""
 	if template.Category != nil {
@@ -137,7 +144,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	// Who each leg actually carries, by the same rule the fan-out assigns by,
 	// walking the same list. A count that disagreed with the send would be
 	// worse than none, because it would be believed.
-	split, err := s.splitAudience(ctx, identity, listID, channel, template, fallback, total)
+	split, err := s.splitAudience(ctx, identity, listID, channel, template, fallback, linkFill, total)
 	if err != nil {
 		return CampaignEstimate{}, err
 	}
@@ -179,7 +186,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 	// wrong twice over: the written count charges for braces no handset ever
 	// sees, and a body forty septets under the boundary with three long
 	// variables tips by two segments rather than one.
-	minSegments, maxSegments := billing.SegmentBounds(templateText(template))
+	minSegments, maxSegments := billing.SegmentBounds(withLinkFilled(templateText(template), linkFill))
 	costMin := int64(split.primary) * int64(minSegments) * rate.PerSegmentMinor
 	costMax := int64(split.primary) * int64(maxSegments) * rate.PerSegmentMinor
 
@@ -188,7 +195,7 @@ func (s *Service) EstimateCampaign(ctx context.Context, identity store.Identity,
 		// "maybe cheaper on the primary" — the primary cannot carry them, so
 		// the primary's price is not reachable for them at either end of the
 		// range.
-		fallbackMin, fallbackMax := billing.SegmentBounds(templateText(fallback.Template))
+		fallbackMin, fallbackMax := billing.SegmentBounds(withLinkFilled(templateText(fallback.Template), linkFill))
 		costMin += int64(split.fallbackForced) * int64(fallbackMin) * fallbackRate.PerSegmentMinor
 		costMax += int64(split.fallbackForced) * int64(fallbackMax) * fallbackRate.PerSegmentMinor
 		// The quoted per-message range has to span both legs, or the screen
@@ -279,6 +286,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 	if err != nil {
 		return 0, 0, err
 	}
+	batch.link = campaign.Link
 
 	// The second leg, for the recipients the primary cannot serve. Nil for a
 	// campaign that has none, which is the common case and costs nothing.
@@ -292,6 +300,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		// Filed under the campaign's own channel; what carried it is recorded
 		// separately as delivered_channel.
 		leg.campaignChannel = batch.sender.Channel
+		leg.link = campaign.Link
 		fallback = &leg
 	}
 
@@ -606,7 +615,7 @@ type audienceSplit struct {
 // anywhere carries everyone, and answering that must not cost a walk.
 func (s *Service) splitAudience(ctx context.Context, identity store.Identity,
 	listID *uuid.UUID, channel string, template store.Template,
-	fallback *FallbackEstimate, total int) (audienceSplit, error) {
+	fallback *FallbackEstimate, linkFill string, total int) (audienceSplit, error) {
 
 	if listID == nil ||
 		(fallback == nil && len(templateSlots(template, templateText(template))) == 0) {
@@ -617,11 +626,11 @@ func (s *Service) splitAudience(ctx context.Context, identity store.Identity,
 		return audienceSplit{}, err
 	}
 
-	primary := legSpec{channel: channel, template: template, mapping: mapping}
+	primary := legSpec{channel: channel, template: template, mapping: mapping, link: linkFill}
 	var fallbackSpec *legSpec
 	if fallback != nil {
 		fallbackSpec = &legSpec{channel: fallback.Channel, template: fallback.Template,
-			mapping: mapping}
+			mapping: mapping, link: linkFill}
 	}
 
 	tally := &skipTally{}

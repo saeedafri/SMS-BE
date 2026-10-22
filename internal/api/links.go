@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/domain/audience"
-	"github.com/saeedafri/sms-be/internal/domain/compliance"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -29,6 +29,7 @@ func (s *Server) mountLinkRoutes(r chi.Router) {
 	r.Get("/v1/links", s.listLinks)
 	r.Get("/v1/links/clicks", s.listLinkClicks)
 	r.Get("/v1/links/stats", s.linkStats)
+	r.Get("/v1/links/config", s.linkConfig)
 	r.Get("/l/{code}", s.followLink)
 	r.Head("/l/{code}", s.followLink)
 }
@@ -73,8 +74,8 @@ func linkBase(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-func toLinkOut(r *http.Request, l store.ShortLink) linkOut {
-	return linkOut{Code: l.Code, ShortURL: linkBase(r) + "/l/" + l.Code,
+func toLinkOut(base string, l store.ShortLink) linkOut {
+	return linkOut{Code: l.Code, ShortURL: base + "/l/" + l.Code,
 		Destination: l.Destination, CampaignID: l.CampaignID, Recipient: l.Recipient,
 		Label: l.Label, AppendClickID: l.AppendClickID, ExpiresAt: l.ExpiresAt,
 		CreatedAt: l.CreatedAt, Clicks: l.Clicks, HumanClicks: l.HumanClicks}
@@ -102,27 +103,11 @@ func decodeStrict(w http.ResponseWriter, r *http.Request, into any) bool {
 	return true
 }
 
-// checkDestination refuses what a link must never point at.
-func checkDestination(r *http.Request, identity store.Identity, raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || len(raw) > maxDestinationLn {
-		return "destination must be a URL of up to 2048 characters."
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
-		parsed.Hostname() == "" || parsed.User != nil {
-		return "destination must be an absolute http or https URL without credentials."
-	}
-	// A link to ourselves is a redirect loop a recipient cannot leave.
-	if strings.EqualFold(parsed.Host, r.Host) {
-		return "destination cannot point at Relay itself."
-	}
-	if regime, known := compliance.For(identity.Country); known {
-		if result := regime.ValidateCtaURL(raw); !result.OK {
-			return result.Reason
-		}
-	}
-	return ""
+// checkDestination refuses what a link must never point at. The rule itself is
+// sending.CheckLinkDestination, shared with a campaign's link and the sender's
+// re-check, so one rule has one sentence everywhere.
+func checkDestination(selfHosts []string, identity store.Identity, raw string) string {
+	return sending.CheckLinkDestination(raw, identity.Country, selfHosts...)
 }
 
 func cleanLabel(label *string) (*string, string) {
@@ -148,7 +133,7 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &body) {
 		return
 	}
-	link, problem := buildLink(r, identity, body)
+	link, problem := buildLink(s.selfHosts(r.Host), identity, body)
 	if problem != "" {
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
 		return
@@ -159,11 +144,11 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "an unexpected error occurred")
 		return
 	}
-	writeJSON(w, http.StatusCreated, toLinkOut(r, made[0]))
+	writeJSON(w, http.StatusCreated, toLinkOut(s.linkBaseFor(r), made[0]))
 }
 
-func buildLink(r *http.Request, identity store.Identity, body linkBody) (store.ShortLink, string) {
-	if problem := checkDestination(r, identity, body.Destination); problem != "" {
+func buildLink(selfHosts []string, identity store.Identity, body linkBody) (store.ShortLink, string) {
+	if problem := checkDestination(selfHosts, identity, body.Destination); problem != "" {
 		return store.ShortLink{}, problem
 	}
 	label, problem := cleanLabel(body.Label)
@@ -210,7 +195,7 @@ func (s *Server) createLinksBulk(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range body.Recipients {
 		each := body.linkBody
 		each.Recipient = &raw
-		link, problem := buildLink(r, identity, each)
+		link, problem := buildLink(s.selfHosts(r.Host), identity, each)
 		if problem != "" {
 			writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
 			return
@@ -229,7 +214,7 @@ func (s *Server) createLinksBulk(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]linkOut, len(made))
 	for i, l := range made {
-		out[i] = toLinkOut(r, l)
+		out[i] = toLinkOut(s.linkBaseFor(r), l)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"links": out})
 }
@@ -276,7 +261,7 @@ func (s *Server) listLinks(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]linkOut, len(links))
 	for i, l := range links {
-		out[i] = toLinkOut(r, l)
+		out[i] = toLinkOut(s.linkBaseFor(r), l)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": out, "total": total})
 }

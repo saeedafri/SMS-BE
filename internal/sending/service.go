@@ -73,6 +73,11 @@ type Service struct {
 	// Async runs the fallback-after-failure off the delivery report's own path.
 	// Nil runs it inline, which is what tests and the background workers want.
 	Async func(func(context.Context))
+
+	// LinkBaseURL is the public origin a campaign's {{link}} is built on,
+	// LINK_BASE_URL. Empty means no link can be made, and a message that needs
+	// one is refused rather than sent without it.
+	LinkBaseURL string
 }
 
 // rcsPath is the operator an RCS message goes out through, upper-cased into
@@ -349,7 +354,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// already speaks slot names here — there is no list and so no column
 	// mapping — but it is the same walk over the same strings the fan-out uses,
 	// so a single send and a campaign of one cannot fill differently.
-	rendered := renderMessage(template, request.Body, request.Variables, nil)
+	rendered := renderMessage(template, request.Body, requestFields(request.Variables), nil)
 	// The string the carrier is handed, recorded as it goes.
 	sentText := rendered.text(sender.Channel)
 
