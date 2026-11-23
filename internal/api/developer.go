@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -403,13 +404,20 @@ func (s *Server) DeleteWebhookEndpoint(ctx context.Context, request gen.DeleteWe
 }
 
 func toWebhookEvent(event store.WebhookDelivery) gen.WebhookEvent {
-	return gen.WebhookEvent{
+	out := gen.WebhookEvent{
 		Id: event.ID, EndpointId: event.EndpointID,
 		EventType: gen.WebhookEventType(event.EventType),
 		Timestamp: event.OccurredAt, Attempt: event.Attempt,
 		Outcome:    gen.WebhookEventOutcome(event.Outcome),
 		HttpStatus: event.HTTPStatus, ResponseSnippet: event.ResponseSnippet,
 	}
+	// The body the endpoint was sent, so a developer sees exactly what their
+	// handler received. Rows from before payloads were kept hold {}: absent.
+	var payload map[string]any
+	if json.Unmarshal(event.Payload, &payload) == nil && len(payload) > 0 {
+		out.Payload = &payload
+	}
+	return out
 }
 
 func (s *Server) ListWebhookEvents(ctx context.Context, request gen.ListWebhookEventsRequestObject) (gen.ListWebhookEventsResponseObject, error) {

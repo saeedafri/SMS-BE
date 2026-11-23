@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/failures"
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
@@ -505,8 +506,22 @@ func (s *Server) goLiveEvidence(ctx context.Context, channel gen.ChannelId, step
 			return "No delivery receipt arrived in the last 7 days", nil
 		}
 	case "failure_classified":
-		if evidence.Unclassified > 0 {
-			return fmt.Sprintf("%d failed message(s) in the last 7 days carry no reason", evidence.Unclassified), nil
+		codes, err := store.FailedCodes(ctx, conn, nil)
+		if err != nil {
+			return "", err
+		}
+		rules, since, unexplained := s.failureRules(ctx), s.now().Add(-goLiveWindow), 0
+		for _, code := range codes {
+			question, failed := failures.ContextFor(code.Channel, code.Status, code.ErrorCode,
+				code.RouteID, code.Carrier)
+			if failed && code.Channel == string(channel) && code.LastSeen.After(since) &&
+				failures.Resolve(rules, question).Unmapped() {
+				unexplained += int(code.Count)
+			}
+		}
+		if unexplained+int(evidence.Unclassified) > 0 {
+			return fmt.Sprintf("%d failed message(s) in the last 7 days have no explanation. "+
+				"Add rules from the unmapped queue", unexplained+int(evidence.Unclassified)), nil
 		}
 	}
 	return "", nil

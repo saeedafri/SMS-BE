@@ -3,10 +3,12 @@ package api
 import (
 	"net/http"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/saeedafri/sms-be/internal/domain/failures"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -82,21 +84,76 @@ func (s *Server) errorStats(w http.ResponseWriter, r *http.Request) {
 		Class   string  `json:"class"`
 		Count   int     `json:"count"`
 		Share   float64 `json:"shareOfFailures"`
+		Layer   *string `json:"layer"`
+		Title   string  `json:"title"`
 	}
-	out := make([]row, len(rows))
-	for i, e := range rows {
-		share := 0.0
-		if totals.Failed > 0 {
-			share = float64(e.Count) / float64(totals.Failed)
+	type layerRow struct {
+		Layer *string `json:"layer"`
+		Count int     `json:"count"`
+		Share float64 `json:"shareOfFailures"`
+	}
+	share := func(count int) float64 {
+		if totals.Failed == 0 {
+			return 0
 		}
-		out[i] = row{e.Channel, e.Code, e.Class, e.Count, share}
+		return float64(count) / float64(totals.Failed)
 	}
+	// Each group is asked of the failure dictionary with its whole question
+	// (how it failed, on which route and carrier), then the groups are folded
+	// back to one row per channel and code, the most frequent answer naming it.
+	rules := s.failureRules(r.Context())
+	type key struct{ channel, code, class string }
+	merged := map[key]*row{}
+	var order []key
+	layers := map[string]int{}
+	for _, e := range rows {
+		code := e.Code
+		if code == "UNKNOWN" {
+			code = ""
+		}
+		question, _ := failures.ContextFor(e.Channel, e.Status, code, e.RouteID, e.Carrier)
+		answer := failures.Resolve(rules, question)
+		layers[answer.Layer] += e.Count
+		k := key{e.Channel, e.Code, e.Class}
+		if existing, seen := merged[k]; seen {
+			existing.Count += e.Count
+			continue
+		}
+		entry := &row{Channel: e.Channel, Code: e.Code, Class: e.Class, Count: e.Count,
+			Title: answer.Title}
+		if !answer.Unmapped() {
+			layer := answer.Layer
+			entry.Layer = &layer
+		}
+		merged[k] = entry
+		order = append(order, k)
+	}
+	out := make([]row, 0, len(order))
+	for _, k := range order {
+		entry := *merged[k]
+		entry.Share = share(entry.Count)
+		out = append(out, entry)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	if len(out) > 100 {
+		out = out[:100]
+	}
+	byLayer := make([]layerRow, 0, len(layers))
+	for layer, count := range layers {
+		group := layerRow{Count: count, Share: share(count)}
+		if layer != "" {
+			name := layer
+			group.Layer = &name
+		}
+		byLayer = append(byLayer, group)
+	}
+	sort.Slice(byLayer, func(i, j int) bool { return byLayer[i].Count > byLayer[j].Count })
 	failureRate := 0.0
 	if totals.Messages > 0 {
 		failureRate = float64(totals.Failed) / float64(totals.Messages)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"messages": totals.Messages,
-		"failed": totals.Failed, "failureRate": failureRate, "errors": out})
+		"failed": totals.Failed, "failureRate": failureRate, "errors": out, "byLayer": byLayer})
 }
 
 func (s *Server) latencyStats(w http.ResponseWriter, r *http.Request) {

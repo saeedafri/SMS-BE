@@ -58,6 +58,10 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if request.Params.JourneyId != nil {
 		filter.JourneyID = request.Params.JourneyId
 	}
+	if request.Params.Layer != nil && !request.Params.Layer.Valid() {
+		return nil, fmt.Errorf("%w: %q is not a valid failure layer",
+			errInvalidFilter, string(*request.Params.Layer))
+	}
 	page, ok := pageNumber(request.Params.Page)
 	if !ok {
 		return gen.ListMessages422JSONResponse(
@@ -81,6 +85,16 @@ func (s *Server) ListMessages(ctx context.Context, request gen.ListMessagesReque
 	if _, err := s.clickhouse(ctx); err != nil {
 		return nil, err
 	}
+	// The layer filter is answered by the dictionary, which lives outside the
+	// warehouse: it becomes the list of this tenant's failures whose answer
+	// lies in that layer.
+	if request.Params.Layer != nil {
+		questions, err := s.failureQuestions(ctx, identity, *request.Params.Layer)
+		if err != nil {
+			return nil, s.clickhouseFailed(err)
+		}
+		filter.Failures = &questions
+	}
 
 	result, err := s.messagePage(ctx, identity, filter)
 	if err != nil {
@@ -103,9 +117,10 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 		return gen.MessageLogPage{}, s.clickhouseFailed(err)
 	}
 
+	rules := s.failureRules(ctx)
 	entries := make([]gen.MessageLogEntry, 0, len(records))
 	for _, record := range records {
-		entries = append(entries, messageLogEntry(record))
+		entries = append(entries, withFailure(messageLogEntry(record), rules, record))
 	}
 
 	result := gen.MessageLogPage{Messages: entries, Total: int(total)}
@@ -474,7 +489,7 @@ func (s *Server) GetMessage(ctx context.Context, request gen.GetMessageRequestOb
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetMessage200JSONResponse(messageLogEntry(record)), nil
+	return gen.GetMessage200JSONResponse(withFailure(messageLogEntry(record), s.failureRules(ctx), record)), nil
 }
 
 // pageSize reads the optional limit every list takes. Absent means the route's

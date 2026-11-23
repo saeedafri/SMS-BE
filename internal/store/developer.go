@@ -420,7 +420,7 @@ func ListWebhookEvents(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		}
 		rows, err := tx.Query(ctx, `
 			SELECT id, endpoint_id, event_type, attempt, outcome, http_status,
-			       response_snippet, occurred_at
+			       response_snippet, occurred_at, payload
 			FROM webhook_events WHERE endpoint_id = $1
 			ORDER BY occurred_at DESC, id DESC LIMIT $2 OFFSET $3`, hookID, limit, offset)
 		if err != nil {
@@ -431,7 +431,7 @@ func ListWebhookEvents(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			var event WebhookDelivery
 			if err := rows.Scan(&event.ID, &event.EndpointID, &event.EventType,
 				&event.Attempt, &event.Outcome, &event.HTTPStatus,
-				&event.ResponseSnippet, &event.OccurredAt); err != nil {
+				&event.ResponseSnippet, &event.OccurredAt, &event.Payload); err != nil {
 				return err
 			}
 			out = append(out, event)

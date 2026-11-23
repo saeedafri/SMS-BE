@@ -38,12 +38,15 @@ func (f DetailFilter) where(tenantID uuid.UUID) (string, []any) {
 	return clause, args
 }
 
-// ErrorRow is one failure reason on one channel.
+// ErrorRow is one failure reason on one channel. Status, RouteID and Carrier
+// are the rest of the question the failure dictionary is asked about it.
 type ErrorRow struct {
 	Channel string
 	Code    string
 	Class   string
 	Count   int
+
+	Status, RouteID, Carrier string
 }
 
 // ErrorTotals is the denominator the shares are read against.
@@ -66,10 +69,12 @@ func QueryErrorBreakdown(ctx context.Context, conn driver.Conn, tenantID uuid.UU
 	totals = ErrorTotals{Messages: int(all), Failed: int(failed)}
 
 	rows, err := conn.Query(ctx, `
-		SELECT channel, ifNull(error_code, 'UNKNOWN'), ifNull(error_class, ''), count() AS n
+		SELECT channel, ifNull(error_code, 'UNKNOWN'), ifNull(error_class, ''), count() AS n,
+		       status, ifNull(route_id, ''), carrier
 		FROM messages FINAL WHERE `+where+` AND status IN (`+failedStatuses+`)
-		GROUP BY channel, ifNull(error_code, 'UNKNOWN'), ifNull(error_class, '')
-		ORDER BY n DESC, channel, 2 LIMIT 100`, args...)
+		GROUP BY channel, ifNull(error_code, 'UNKNOWN'), ifNull(error_class, ''), status,
+		         ifNull(route_id, ''), carrier
+		ORDER BY n DESC, channel, 2 LIMIT 1000`, args...)
 	if err != nil {
 		return totals, nil, fmt.Errorf("store: error breakdown: %w", err)
 	}
@@ -78,7 +83,8 @@ func QueryErrorBreakdown(ctx context.Context, conn driver.Conn, tenantID uuid.UU
 	for rows.Next() {
 		var row ErrorRow
 		var n uint64
-		if err := rows.Scan(&row.Channel, &row.Code, &row.Class, &n); err != nil {
+		if err := rows.Scan(&row.Channel, &row.Code, &row.Class, &n, &row.Status,
+			&row.RouteID, &row.Carrier); err != nil {
 			return totals, nil, err
 		}
 		row.Count = int(n)

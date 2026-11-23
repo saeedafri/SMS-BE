@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/saeedafri/sms-be/internal/store"
 	"github.com/saeedafri/sms-be/internal/webhook"
 )
@@ -31,7 +33,10 @@ func (s *Server) emitWebhookEvent(ctx context.Context, identity store.Identity,
 			"event", eventType, "error", err)
 		return
 	}
-	payload, err := json.Marshal(map[string]any{"event": eventType, "data": data})
+	// { id, type, createdAt, data } is the documented shape; "event" stays
+	// beside "type" for endpoints written against the older body.
+	payload, err := json.Marshal(map[string]any{"id": uuid.New(), "type": eventType,
+		"createdAt": s.now().UTC(), "event": eventType, "data": data})
 	if err != nil {
 		s.Logger.Error("webhook payload could not be encoded",
 			"event", eventType, "error", err)
@@ -201,6 +206,11 @@ func (s *Server) MessageSettled(_ context.Context, identity store.Identity, reco
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// The same object the message log returns for this message, so a
+		// handler can branch on layer and retryable without a second call.
+		if event == "message.failed" {
+			data["failure"] = messageFailure(s.failureRules(ctx), record)
+		}
 		s.emitWebhookEvent(ctx, identity, event, data)
 	}()
 }

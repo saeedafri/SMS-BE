@@ -456,6 +456,9 @@ func NewRouter(s *Server) http.Handler {
 	// Switching a channel on or off for a tenant. See channels.go.
 	s.mountChannelRoutes(r)
 
+	// Adding and editing failure-dictionary rules. See failures.go.
+	s.mountFailureReasonRoutes(r)
+
 	// Keyword chatbots. See chatbots.go.
 	s.mountChatbotRoutes(r)
 

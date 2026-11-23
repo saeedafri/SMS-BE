@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -170,8 +171,11 @@ type MessageFilter struct {
 	ErrorClass string
 	CampaignID *uuid.UUID
 	JourneyID  *uuid.UUID
-	Page       int
-	Limit      int
+	// Failures narrows the page to messages asking one of these dictionary
+	// questions. Nil means no such filter; empty means none match.
+	Failures *[]FailedCode
+	Page     int
+	Limit    int
 }
 
 // QueryMessages reads the logs explorer page.
@@ -217,6 +221,18 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		where += " AND journey_id = ?"
 		args = append(args, *filter.JourneyID)
 	}
+	if filter.Failures != nil {
+		if len(*filter.Failures) == 0 {
+			return nil, 0, nil
+		}
+		var asked []string
+		for _, code := range *filter.Failures {
+			asked = append(asked, "(coalesce(delivered_channel, channel) = ? AND status = ? AND "+
+				"error_code = ? AND ifNull(route_id, '') = ? AND carrier = ?)")
+			args = append(args, code.Channel, code.Status, code.ErrorCode, code.RouteID, code.Carrier)
+		}
+		where += " AND (" + strings.Join(asked, " OR ") + ")"
+	}
 
 	var total uint64
 	if err := conn.QueryRow(ctx,
@@ -236,7 +252,8 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		       msisdn, email, status,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
 		       `+deliveredChannelColumn+`,
-		       created_at, sent_at, delivered_at, updated_at, simulated
+		       created_at, sent_at, delivered_at, updated_at, simulated,
+		       route_id, carrier, carrier_ref, read_at, dlr_received_at, otp, rendered_text
 		FROM messages FINAL
 		WHERE `+where+`
 		ORDER BY created_at DESC, id DESC
@@ -255,7 +272,9 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 			&record.ErrorCode, &record.ErrorClass, &record.FraudFlag, &record.Segments,
 			&record.CostMinor, &record.Currency, &record.DeliveredChannel,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
-			&record.UpdatedAt, &record.Simulated); err != nil {
+			&record.UpdatedAt, &record.Simulated, &record.RouteID, &record.Carrier,
+			&record.CarrierRef, &record.ReadAt, &record.DLRReceivedAt, &record.OTP,
+			&record.RenderedText); err != nil {
 			return nil, 0, fmt.Errorf("store: scan message: %w", err)
 		}
 		out = append(out, record)
@@ -346,7 +365,8 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		       msisdn, email, status, error_code, error_class, fraud_flag,
 		       segments, cost_minor, currency, carrier, carrier_ref,
 		       `+deliveredChannelColumn+`,
-		       created_at, sent_at, delivered_at, updated_at, simulated
+		       created_at, sent_at, delivered_at, updated_at, simulated,
+		       route_id, read_at, dlr_received_at, otp, rendered_text
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.CampaignID, &record.CampaignName,
@@ -355,7 +375,8 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		&record.Status, &record.ErrorCode, &record.ErrorClass, &record.FraudFlag,
 		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,
 		&record.CarrierRef, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
-		&record.DeliveredAt, &record.UpdatedAt, &record.Simulated)
+		&record.DeliveredAt, &record.UpdatedAt, &record.Simulated, &record.RouteID,
+		&record.ReadAt, &record.DLRReceivedAt, &record.OTP, &record.RenderedText)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
