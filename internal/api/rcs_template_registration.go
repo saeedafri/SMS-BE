@@ -71,9 +71,10 @@ func rcsTemplateContent(t store.Template) (connector.RCSTemplateSpec, bool) {
 		Kind string `json:"kind"`
 		Text string `json:"text"`
 		Card *struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			MediaURL    string `json:"mediaUrl"`
+			Title       string            `json:"title"`
+			Description string            `json:"description"`
+			MediaURL    string            `json:"mediaUrl"`
+			Suggestions []json.RawMessage `json:"suggestions"`
 		} `json:"card"`
 		Suggestions []struct {
 			Type        string `json:"type"`
@@ -96,7 +97,17 @@ func rcsTemplateContent(t store.Template) (connector.RCSTemplateSpec, bool) {
 	default:
 		return connector.RCSTemplateSpec{}, false
 	}
+	// Only reply, open_url and dial map onto a carrier's template API, and only
+	// on the message itself. A card's own buttons or a newer kind would be
+	// dropped in transit and approved as something Relay does not hold, so
+	// such a template goes through the carrier's portal instead.
+	if content.Card != nil && len(content.Card.Suggestions) > 0 {
+		return connector.RCSTemplateSpec{}, false
+	}
 	for _, s := range content.Suggestions {
+		if s.Type != "reply" && s.Type != "open_url" && s.Type != "dial" {
+			return connector.RCSTemplateSpec{}, false
+		}
 		spec.Suggestions = append(spec.Suggestions, connector.RCSSuggestion{Type: s.Type,
 			Text: s.Text, URL: s.URL, PhoneNumber: s.PhoneNumber})
 	}

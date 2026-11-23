@@ -102,8 +102,22 @@ func messageTimeline(record store.MessageRecord) []gen.MessageTimelineStep {
 	switch record.Status {
 	case "rejected":
 		add(gen.MessageTimelineStepStagePlatform, "refused", &created, true)
+	case "undelivered":
+		if record.ErrorCode != nil && *record.ErrorCode == "rich_content_unsupported" {
+			// Never dispatched: the handset could not render it and nothing
+			// else could carry it.
+			add(gen.MessageTimelineStepStagePlatform, "accepted", &created, false)
+			add(gen.MessageTimelineStepStageHandset, "rich_content_unsupported", &created, true)
+			break
+		}
+		fallthrough
 	default:
 		add(gen.MessageTimelineStepStagePlatform, "accepted", &created, false)
+		if record.FallbackReason == "rich_content_unsupported" {
+			add(gen.MessageTimelineStepStageHandset, "rich_content_unsupported", &created, false)
+			add(gen.MessageTimelineStepStagePlatform,
+				"fell_back_to_"+strings.ToLower(carriedChannel(record)), &created, false)
+		}
 		add(gen.MessageTimelineStepStageRoute, "submitted", record.SentAt, false)
 		if record.CarrierRef != nil {
 			add(gen.MessageTimelineStepStageCarrier, "accepted", record.SentAt, false)

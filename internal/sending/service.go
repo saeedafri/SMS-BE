@@ -721,6 +721,7 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		SentByKind: current.SentByKind, SentByID: current.SentByID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 		RenderedText: current.RenderedText, OTP: current.OTP, Simulated: current.Simulated,
+		FallbackReason: current.FallbackReason,
 	}
 	applyReceipt(&record, report)
 	if report.Delivered {

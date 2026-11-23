@@ -31,6 +31,11 @@ func walkStrings(value any, visit func(string) string) any {
 		return visit(typed)
 	case map[string]any:
 		for key, child := range typed {
+			// The one field named here: postbackData is opaque text handed
+			// back on a tap, never shown, so it is neither a slot nor filled.
+			if key == "postbackData" {
+				continue
+			}
 			typed[key] = walkStrings(child, visit)
 		}
 	case []any:

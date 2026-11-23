@@ -46,6 +46,9 @@ type sendPlan struct {
 	// gate has let it through.
 	fields map[string]string
 	person string
+	// fallbackReason is why this recipient is on the fallback leg, when the
+	// timeline names it; empty otherwise.
+	fallbackReason string
 	// refusal is set when the gate refused this recipient. Refused messages
 	// are still recorded — a tenant asking "why didn't this arrive" deserves an
 	// answer — but no money is held for them.
@@ -148,6 +151,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			messageID: uuid.New(), msisdn: msisdn, email: email, body: body,
 			cost: cost, segments: segments, message: message,
 			fields: fields, person: linkKey(msisdn, contact),
+		}
+		if context.richFallback[contact.ID] {
+			plan.fallbackReason = string(reasonRichUnsupported)
 		}
 
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
@@ -310,6 +316,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Carrier: context.carrier, RouteID: context.routeID,
 			DeliveredChannel: carriedBy(context.sender.Channel, plan.refusal != ""),
 			CreatedAt:        now, UpdatedAt: now, Version: 1,
+			FallbackReason: plan.fallbackReason,
 		}
 		// A refused recipient was sent nothing, so there is no text to show.
 		if plan.refusal == "" {
@@ -388,7 +395,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			Carrier: context.carrier, RouteID: context.routeID,
 			DeliveredChannel: carriedBy(context.sender.Channel, false),
 			CreatedAt:        now, SentAt: &settled, UpdatedAt: settled, Version: 2,
-			RenderedText: storedText(plan.message.text(context.sender.Channel), false),
+			RenderedText:   storedText(plan.message.text(context.sender.Channel), false),
+			FallbackReason: plan.fallbackReason,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: identity.TenantID, MessageID: plan.messageID,
@@ -437,6 +445,9 @@ func (s *Service) writeBatch(ctx context.Context, records []store.MessageRecord,
 // resolved once instead of per message.
 type batchContext struct {
 	sender store.SenderID
+	// richFallback are the contacts on this (fallback) leg because their
+	// handset could not render the primary's rich RCS content.
+	richFallback map[uuid.UUID]bool
 	// channelRefused says the leg's channel is not live for this tenant.
 	channelRefused bool
 	templateID     uuid.UUID
@@ -589,4 +600,45 @@ func (t *skipTally) add(missing []string) {
 	for _, slot := range missing {
 		t.ByName[slot]++
 	}
+}
+
+// recordUnrenderable records the recipients whose handset cannot render the
+// primary's rich RCS content and whom no fallback carries: failed with
+// rich_content_unsupported, never dispatched, never charged.
+func (s *Service) recordUnrenderable(ctx context.Context, identity store.Identity,
+	context batchContext, contacts []store.Contact) (int, error) {
+
+	if len(contacts) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	code, class := string(reasonRichUnsupported), string(messaging.ErrorUnreachable)
+	state := string(messaging.StateUndelivered)
+	records := make([]store.MessageRecord, 0, len(contacts))
+	events := make([]store.MessageEvent, 0, len(contacts))
+	rollups := make([]store.RollupRow, 0, len(contacts))
+	for _, contact := range contacts {
+		msisdn, valid := audience.NormaliseMsisdn(contact.Msisdn, context.sender.Country)
+		if !valid {
+			msisdn, _ = audience.NormaliseE164(contact.Msisdn)
+		}
+		id := uuid.New()
+		records = append(records, store.MessageRecord{
+			TenantID: identity.TenantID, ID: id, Channel: context.recordedChannel(),
+			Country: context.sender.Country, SenderHeader: context.sender.Header,
+			TemplateID: &context.templateID, Msisdn: msisdn, Status: state,
+			ErrorCode: &code, ErrorClass: &class, FraudFlag: "none",
+			Currency: context.rate.Currency, CampaignID: context.campaignID,
+			JourneyID: context.journeyID, JourneyName: context.journeyName,
+			Carrier: context.carrier, RouteID: context.routeID,
+			CreatedAt: now, UpdatedAt: now, Version: 1,
+		})
+		events = append(events, store.MessageEvent{TenantID: identity.TenantID, MessageID: id,
+			ToState: state, ErrorCode: &code, OccurredAt: now})
+		rollups = append(rollups, store.RollupRow{TenantID: identity.TenantID,
+			Hour: now.Truncate(time.Hour), Channel: context.sender.Channel,
+			Country: context.sender.Country, Status: state, MessageCount: 1,
+			Currency: context.rate.Currency})
+	}
+	return len(contacts), s.writeBatch(ctx, records, events, rollups)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
+	"github.com/saeedafri/sms-be/internal/domain/rcs"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -290,6 +291,9 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 	// decoded, so what comes out is the contract's canonical form.
 	rcsContent, waContent, emailContent, contentErr := templateContent(
 		sender.Channel, request.Body)
+	if contentErr == "" && len(rcsContent) > 0 {
+		contentErr = rcs.Validate(rcsContent, ctaRule(regime))
+	}
 	if contentErr != "" {
 		return gen.CreateTemplate422JSONResponse(
 			errorBody(codeValidation, contentErr)), nil
@@ -300,7 +304,7 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 	// only `body` meant an RCS template reported no variables at all, so the
 	// send-time substitution had nothing to fill in.
 	if len(variables) == 0 {
-		for _, raw := range [][]byte{rcsContent, waContent, emailContent} {
+		for _, raw := range [][]byte{rcs.WithoutPostbackData(rcsContent), waContent, emailContent} {
 			if len(raw) > 0 {
 				variables = compliance.ParseVariables(string(raw))
 				break
@@ -512,6 +516,9 @@ func applyTemplateSubstance(ctx context.Context, edited *store.Template,
 		if err != nil {
 			return "That RCS content could not be read."
 		}
+		if problem := rcs.Validate(raw, ctaRule(regime)); problem != "" {
+			return problem
+		}
 		// The country's link rule reaches inside the card. A card's every
 		// string is walked, because a shortener in a suggestion's URL is the
 		// same violation as one in the body and DLT drops the message either
@@ -587,7 +594,8 @@ func templateVariables(template store.Template) []string {
 	if template.Body != nil && *template.Body != "" {
 		return compliance.ParseVariables(*template.Body)
 	}
-	for _, raw := range [][]byte{template.RCSContent, template.WAContent, template.EmailContent} {
+	for _, raw := range [][]byte{rcs.WithoutPostbackData(template.RCSContent), template.WAContent,
+		template.EmailContent} {
 		if len(raw) > 0 {
 			return compliance.ParseVariables(string(raw))
 		}
@@ -704,4 +712,14 @@ func describeTemplateUse(refs store.TemplateReferences) string {
 		parts = append(parts, fmt.Sprintf("%d %s", kind.count, noun))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// ctaRule is the destination's link rule as the RCS validator asks it.
+func ctaRule(regime compliance.Regime) func(string) string {
+	return func(url string) string {
+		if result := regime.ValidateCtaURL(url); !result.OK {
+			return result.Reason
+		}
+		return ""
+	}
 }

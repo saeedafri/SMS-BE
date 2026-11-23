@@ -668,3 +668,28 @@ func (s *Server) recordAgentReview(ctx context.Context, actor string,
 			"agent", agentID, "error", err)
 	}
 }
+
+// GetOperatorRcsLaunches says how many agents stand in each launch state with
+// each carrier, across every tenant and naming none.
+func (s *Server) GetOperatorRcsLaunches(ctx context.Context, _ gen.GetOperatorRcsLaunchesRequestObject) (
+	gen.GetOperatorRcsLaunchesResponseObject, error) {
+
+	if _, err := s.requireOperator(ctx); err != nil {
+		return gen.GetOperatorRcsLaunches401JSONResponse(errorBody(codeUnauthenticated,
+			"Sign in to the operator console.")), nil
+	}
+	counts, err := store.RCSLaunchCounts(ctx, s.operatorPool())
+	if err != nil {
+		return nil, err
+	}
+	reachable := s.reachableCarriers()
+	out := make([]gen.OperatorRcsCarrier, 0, len(counts))
+	for _, c := range counts {
+		row := gen.OperatorRcsCarrier{Carrier: gen.CarrierId(c.Carrier), NotSubmitted: c.NotSubmitted,
+			Pending: c.Pending, Approved: c.Approved, Rejected: c.Rejected}
+		carrierReachable := reachable[c.Carrier]
+		row.Reachable = &carrierReachable
+		out = append(out, row)
+	}
+	return gen.GetOperatorRcsLaunches200JSONResponse{Carriers: out}, nil
+}

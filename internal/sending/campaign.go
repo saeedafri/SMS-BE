@@ -453,7 +453,13 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 			}
 		}
 
-		forPrimary, forFallback := s.assignLegs(ctx, batch, fallback, contacts)
+		legs := s.assignLegs(ctx, batch, fallback, contacts)
+		forPrimary, forFallback := legs.primary, legs.fallback
+		unrenderable, err := s.recordUnrenderable(ctx, identity, batch, legs.unrenderable)
+		failed += unrenderable
+		if err != nil {
+			return sent, failed, err
+		}
 		// Each leg reads the SHARED balance and spends it down by what it
 		// actually took, so a wallet that runs dry refuses the rest of the
 		// campaign recipient by recipient instead of overdrawing.
@@ -468,6 +474,7 @@ func (s *Service) LaunchCampaign(ctx context.Context, identity store.Identity,
 		}
 		if fallback != nil && len(forFallback) > 0 {
 			fallback.balance = wallet[fallback.rate.Currency]
+			fallback.richFallback = legs.richFallback
 			legSent, legFailed, legSpent, legErr := s.SendBatch(ctx, identity, *fallback, forFallback)
 			fallbackSent = legSent
 			sent += legSent

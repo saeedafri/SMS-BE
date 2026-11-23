@@ -3,6 +3,7 @@ package audience
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -129,5 +130,18 @@ func TestADocumentThatIsNotJSONNamesNothing(t *testing.T) {
 	filled, missing := FillDocument([]byte("not json"), nil, nil)
 	if string(filled) != "not json" || missing != nil {
 		t.Fatalf("filled = %q, missing = %v; the bytes should come back untouched", filled, missing)
+	}
+}
+
+// postbackData is opaque text handed back on a tap: never a slot, never filled.
+func TestPostbackDataIsNeitherASlotNorFilled(t *testing.T) {
+	document := []byte(`{"kind":"text","text":"Hi {{first_name}}","suggestions":[` +
+		`{"type":"reply","text":"Yes","postbackData":"{{secret}}"}]}`)
+	if got := SlotsInDocument(document); len(got) != 1 || got[0] != "first_name" {
+		t.Errorf("slots = %v, want only first_name", got)
+	}
+	filled, _ := FillDocument(document, map[string]string{"first_name": "Asha", "secret": "x"}, nil)
+	if !strings.Contains(string(filled), `"postbackData":"{{secret}}"`) {
+		t.Errorf("postbackData was filled: %s", filled)
 	}
 }

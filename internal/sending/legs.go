@@ -8,6 +8,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/audience"
+	"github.com/saeedafri/sms-be/internal/domain/rcs"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -99,6 +100,9 @@ const (
 	// reasonUnfillable: the primary's content needs a value this contact has
 	// no column for.
 	reasonUnfillable legReason = "unfillable"
+	// reasonRichUnsupported: the handset takes RCS but cannot render this
+	// content — a carousel, or a location or calendar button it lacks.
+	reasonRichUnsupported legReason = "rich_content_unsupported"
 )
 
 // legChoice is where one recipient goes, and why.
@@ -194,9 +198,20 @@ func (c batchContext) linkFill(linkBase string) string {
 	return linkStandIn(linkBase)
 }
 
+// legAssignment is one page of the audience split between the legs.
+type legAssignment struct {
+	primary, fallback []store.Contact
+	// unrenderable are contacts whose handset cannot render the primary's rich
+	// content and whom no fallback can carry: each is recorded failed,
+	// rich_content_unsupported, and charged nothing.
+	unrenderable []store.Contact
+	// richFallback are the fallback's contacts that are there for that reason.
+	richFallback map[uuid.UUID]bool
+}
+
 // assignLegs splits one page of the audience between the legs.
 func (s *Service) assignLegs(ctx context.Context, primary batchContext,
-	fallback *batchContext, contacts []store.Contact) (forPrimary, forFallback []store.Contact) {
+	fallback *batchContext, contacts []store.Contact) legAssignment {
 
 	var fallbackSpec *legSpec
 	if fallback != nil {
@@ -204,7 +219,9 @@ func (s *Service) assignLegs(ctx context.Context, primary batchContext,
 		fallbackSpec = &spec
 	}
 	reachable := s.handsetsReachable(ctx, primary, fallback != nil, contacts)
+	renders := s.handsetsRender(ctx, primary, contacts)
 
+	out := legAssignment{richFallback: map[uuid.UUID]bool{}}
 	for _, contact := range contacts {
 		choice := chooseLeg(primary.spec(s.LinkBaseURL), fallbackSpec, contact, reachable(contact))
 		switch {
@@ -212,12 +229,61 @@ func (s *Service) assignLegs(ctx context.Context, primary batchContext,
 		case choice.skipped:
 			primary.skipped.add(choice.missing)
 		case choice.onFallback:
-			forFallback = append(forFallback, contact)
+			out.fallback = append(out.fallback, contact)
+		case !renders(contact):
+			// Bound for the primary, on a handset that cannot show it.
+			if fallbackSpec != nil {
+				if missing, consented := legCarries(*fallbackSpec, contact); consented && len(missing) == 0 {
+					out.fallback = append(out.fallback, contact)
+					out.richFallback[contact.ID] = true
+					continue
+				}
+			}
+			out.unrenderable = append(out.unrenderable, contact)
 		default:
-			forPrimary = append(forPrimary, contact)
+			out.primary = append(out.primary, contact)
 		}
 	}
-	return forPrimary, forFallback
+	return out
+}
+
+// handsetsRender asks, per handset, whether it can render the primary's rich
+// RCS content. Only content that needs a feature beyond a plain card asks at
+// all, and every failure to answer means "it can": an unknown is not a no.
+//
+// ponytail: one capability call per contact, because the bulk endpoints say
+// nothing about features. Bounded by the page and only for rich content; a
+// cached per-number answer is the upgrade if a large carousel campaign makes
+// this the slow part.
+func (s *Service) handsetsRender(ctx context.Context, primary batchContext,
+	contacts []store.Contact) func(store.Contact) bool {
+
+	everyone := func(store.Contact) bool { return true }
+	features := rcs.RichFeatures(primary.template.RCSContent)
+	if len(features) == 0 || primary.sender.Channel != "RCS" || primary.agentID == "" {
+		return everyone
+	}
+	gateway, dedicated := s.gatewayFor("RCS", primary.rcsCarrier)
+	checker, ok := gateway.(connector.RCSCapabilityChecker)
+	if !dedicated || !ok {
+		return everyone
+	}
+	cannot := map[string]bool{}
+	for _, contact := range contacts {
+		if contact.Msisdn == "" {
+			continue
+		}
+		capability, err := checker.Capability(ctx, primary.agentID, contact.Msisdn)
+		if err != nil {
+			continue
+		}
+		for _, feature := range features {
+			if !capability.Supports(feature) {
+				cannot[contact.Msisdn] = true
+			}
+		}
+	}
+	return func(contact store.Contact) bool { return !cannot[contact.Msisdn] }
 }
 
 // handsetsReachable asks the RCS carrier, once for the whole page, which of

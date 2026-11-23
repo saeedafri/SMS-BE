@@ -73,6 +73,9 @@ type MessageRecord struct {
 	// Simulated is a message accepted on a sandbox channel: recorded, never
 	// handed to a carrier, never billed. Its CostMinor is always 0.
 	Simulated bool
+	// FallbackReason is why the fallback leg carried this message, when the
+	// timeline names it: "rich_content_unsupported". Empty otherwise.
+	FallbackReason string
 
 	// The carrier's receipt that settled the message. All nil until one has.
 	DLRStat        *string
@@ -101,7 +104,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 		segments, cost_minor, currency, route_id, carrier_ref, carrier,
 		created_at, sent_at, delivered_at, updated_at, version,
 		sent_by_kind, sent_by_id, read_at, rendered_text, otp, dlr_stat, dlr_err,
-		dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated)`)
+		dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated, fallback_reason)`)
 	if err != nil {
 		return fmt.Errorf("store: prepare message batch: %w", err)
 	}
@@ -119,7 +122,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.SentByKind, record.SentByID, record.ReadAt,
 			record.RenderedText, record.OTP, record.DLRStat, record.DLRErr,
 			record.DLRSubmittedAt, record.DLRDoneAt, record.DLRReceivedAt, record.DLRRaw,
-			record.Simulated,
+			record.Simulated, record.FallbackReason,
 		); err != nil {
 			return fmt.Errorf("store: append message: %w", err)
 		}
@@ -253,7 +256,8 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
 		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at, simulated,
-		       route_id, carrier, carrier_ref, read_at, dlr_received_at, otp, rendered_text
+		       route_id, carrier, carrier_ref, read_at, dlr_received_at, otp, rendered_text,
+		       fallback_reason
 		FROM messages FINAL
 		WHERE `+where+`
 		ORDER BY created_at DESC, id DESC
@@ -274,7 +278,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
 			&record.UpdatedAt, &record.Simulated, &record.RouteID, &record.Carrier,
 			&record.CarrierRef, &record.ReadAt, &record.DLRReceivedAt, &record.OTP,
-			&record.RenderedText); err != nil {
+			&record.RenderedText, &record.FallbackReason); err != nil {
 			return nil, 0, fmt.Errorf("store: scan message: %w", err)
 		}
 		out = append(out, record)
@@ -315,7 +319,7 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
 		       created_at, sent_at, delivered_at, read_at, sent_by_kind, sent_by_id,
 		       error_code, error_class, version, rendered_text, otp, dlr_stat, dlr_err,
-		       dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated
+		       dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated, fallback_reason
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
@@ -327,7 +331,8 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		&record.DeliveredAt, &record.ReadAt, &record.SentByKind, &record.SentByID,
 		&record.ErrorCode, &record.ErrorClass, &record.Version, &record.RenderedText,
 		&record.OTP, &record.DLRStat, &record.DLRErr, &record.DLRSubmittedAt,
-		&record.DLRDoneAt, &record.DLRReceivedAt, &record.DLRRaw, &record.Simulated)
+		&record.DLRDoneAt, &record.DLRReceivedAt, &record.DLRRaw, &record.Simulated,
+		&record.FallbackReason)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
@@ -366,7 +371,7 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		       segments, cost_minor, currency, carrier, carrier_ref,
 		       `+deliveredChannelColumn+`,
 		       created_at, sent_at, delivered_at, updated_at, simulated,
-		       route_id, read_at, dlr_received_at, otp, rendered_text
+		       route_id, read_at, dlr_received_at, otp, rendered_text, fallback_reason
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.CampaignID, &record.CampaignName,
@@ -376,7 +381,8 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,
 		&record.CarrierRef, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
 		&record.DeliveredAt, &record.UpdatedAt, &record.Simulated, &record.RouteID,
-		&record.ReadAt, &record.DLRReceivedAt, &record.OTP, &record.RenderedText)
+		&record.ReadAt, &record.DLRReceivedAt, &record.OTP, &record.RenderedText,
+		&record.FallbackReason)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}

@@ -808,3 +808,34 @@ func GetRcsAgentAsOperator(ctx context.Context, pool *pgxpool.Pool,
 	}
 	return agent, rows.Err()
 }
+
+// LaunchCounts is how many agents stand in each launch state with one carrier.
+type LaunchCounts struct {
+	Carrier                                  string
+	NotSubmitted, Pending, Approved, Rejected int
+}
+
+// RCSLaunchCounts counts every tenant's launches per carrier, naming no
+// tenant. Read through the operator pool.
+func RCSLaunchCounts(ctx context.Context, operator *pgxpool.Pool) ([]LaunchCounts, error) {
+	rows, err := operator.Query(ctx, `
+		SELECT carrier,
+		       count(*) FILTER (WHERE status = 'not_submitted'),
+		       count(*) FILTER (WHERE status = 'pending'),
+		       count(*) FILTER (WHERE status = 'approved'),
+		       count(*) FILTER (WHERE status = 'rejected')
+		FROM rcs_agent_carrier_launches GROUP BY carrier ORDER BY carrier`)
+	if err != nil {
+		return nil, fmt.Errorf("store: rcs launch counts: %w", err)
+	}
+	defer rows.Close()
+	var out []LaunchCounts
+	for rows.Next() {
+		var c LaunchCounts
+		if err := rows.Scan(&c.Carrier, &c.NotSubmitted, &c.Pending, &c.Approved, &c.Rejected); err != nil {
+			return nil, fmt.Errorf("store: rcs launch counts: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
