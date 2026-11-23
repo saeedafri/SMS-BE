@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +46,7 @@ func (s *Server) toCampaign(campaign store.Campaign,
 		CreatedAt:             campaign.CreatedAt,
 		ScheduledAt:           campaign.ScheduledAt,
 		HeldUntil:             campaign.HeldUntil,
+		QuietHours:            quietHoursOut(campaign.QuietHours),
 		SendStartedAt:         campaign.SendStartedAt,
 		Link:                  campaignLinkOut(campaign.Link),
 	}
@@ -242,6 +246,11 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, dripProblem)), nil
 	}
 	campaign.DripBatchSize, campaign.DripIntervalMinutes = dripBatch, dripInterval
+	quiet, problem := quietHoursFrom(ctx, body.QuietHours)
+	if problem != "" {
+		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+	campaign.QuietHours = quiet
 	if body.ListId != nil && *body.ListId != "" {
 		listID, err := uuid.Parse(*body.ListId)
 		if err != nil {
@@ -291,6 +300,37 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		}
 	}
 
+	// A link the operator would scrub is refused here, whole, before anything is
+	// created: every message would otherwise be refused at the gate one by one.
+	if service := s.sendingService(ctx); service != nil {
+		type leg struct {
+			channel  string
+			template uuid.UUID
+		}
+		legs := []leg{{campaign.Channel, campaign.TemplateID}}
+		if campaign.FallbackChannel != nil && campaign.FallbackTemplateID != nil {
+			legs = append(legs, leg{*campaign.FallbackChannel, *campaign.FallbackTemplateID})
+		}
+		for _, leg := range legs {
+			template, err := store.GetTemplate(ctx, s.DB, identity, leg.template)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			reason, err := service.UnapprovedTemplateLink(ctx, identity, leg.channel,
+				campaign.Country, template)
+			if err != nil {
+				return nil, err
+			}
+			if reason != "" {
+				return gen.CreateCampaign422JSONResponse(errorBody("url_not_whitelisted",
+					reason+" Nothing was created.")), nil
+			}
+		}
+	}
+
 	// The tracked link, after drip and once both legs are known: a {{link}} in
 	// either leg's template needs one, and a link needs a {{link}} somewhere.
 	link, linkProblem, err := s.campaignLink(ctx, identity, body.Link, campaign)
@@ -316,6 +356,27 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		case !compliance.PromotionalAllowedAt(campaign.Country, *campaign.ScheduledAt):
 			held := compliance.NextPromotionalOpening(campaign.Country, *campaign.ScheduledAt)
 			campaign.HeldUntil = &held
+		}
+	}
+
+	// A launch inside the campaign's quiet hours is held until they end, moved
+	// by the promotional hours too until neither moves it. An immediate launch
+	// becomes a scheduled one, launching at the opening: nothing is dispatched,
+	// held or charged before then.
+	if campaign.QuietHours != nil {
+		start := s.now()
+		if campaign.ScheduledAt != nil {
+			start = *campaign.ScheduledAt
+		}
+		promotional := false
+		if template, err := store.GetTemplate(ctx, s.DB, identity, templateID); err == nil {
+			promotional = isPromotional(template)
+		}
+		if launch := compliance.LaunchAt(campaign.Country, promotional, campaign.QuietHours, start); launch.After(start) {
+			if campaign.ScheduledAt == nil {
+				campaign.ScheduledAt, campaign.Status = &start, "scheduled"
+			}
+			campaign.HeldUntil = &launch
 		}
 	}
 
@@ -607,7 +668,7 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
 		Notifier: s, Redis: s.Redis, Async: s.runAsync, LinkBaseURL: s.LinkBaseURL,
-		Channels: s.channelDisposition}
+		Channels: s.channelDisposition, ApprovedLinkCountries: s.ApprovedLinkCountries}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called
@@ -798,4 +859,40 @@ func (s *Server) runAsync(work func(context.Context)) {
 		defer cancel()
 		work(ctx)
 	}()
+}
+
+// quietHoursFrom reads a campaign's quiet hours: absent or null is none, and a
+// present value must be exactly {from, to, zone} with a real window.
+func quietHoursFrom(ctx context.Context, typed *gen.QuietHours) (*compliance.QuietHours, string) {
+	if raw, present := bodyValue(ctx, "quietHours"); present && !isNull(raw) {
+		var keys map[string]json.RawMessage
+		if json.Unmarshal(raw, &keys) != nil {
+			return nil, "quietHours must be { from, to, zone }."
+		}
+		var unknown []string
+		for key := range keys {
+			if key != "from" && key != "to" && key != "zone" {
+				unknown = append(unknown, key)
+			}
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return nil, "Unknown field(s) in quietHours: " + strings.Join(unknown, ", ") + "."
+		}
+	}
+	if typed == nil {
+		return nil, ""
+	}
+	quiet := compliance.QuietHours{From: typed.From, To: typed.To, Zone: typed.Zone}
+	if problem := quiet.Problem(); problem != "" {
+		return nil, problem
+	}
+	return &quiet, ""
+}
+
+func quietHoursOut(quiet *compliance.QuietHours) *gen.QuietHours {
+	if quiet == nil {
+		return nil
+	}
+	return &gen.QuietHours{From: quiet.From, To: quiet.To, Zone: quiet.Zone}
 }

@@ -68,7 +68,7 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 					r = r.WithContext(context.WithValue(ctx, bodyValuesContextKey{}, body))
 					var unknown []string
 					for key := range body {
-						if !set[key] {
+						if !set[key] && !set[recordOnly] {
 							unknown = append(unknown, key)
 						}
 					}
@@ -86,6 +86,10 @@ func rejectUnknownFields(allowed map[string][]string) func(http.Handler) http.Ha
 		})
 	}
 }
+
+// recordOnly registers a route whose body keys are recorded for its handler
+// and never refused here.
+const recordOnly = "*"
 
 // routeKey identifies a request by method and path shape, with the trailing id
 // collapsed so /v1/operator/connections/{id} matches whatever uuid arrives.

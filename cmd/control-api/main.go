@@ -333,19 +333,20 @@ func run() error {
 		Commit:             commit,
 		DevCodeTenant:      uuid.MustParse(demoseed.TenantID),
 		SignupInviteCode:   cfg.SignupInviteCode, AdminDB: adminPool,
-		Secrets:           connectionSecrets,
-		SMPP:              smpp,
-		DLTChain:          cfg.DLTTelemarketerChain,
-		SMPPEnvironment:   cfg.SMPPEnvironment,
-		RCS:               rcsRouter,
-		Media:             mediaStore,
-		AllowGreyRoutes:   cfg.AllowGreyRoutes,
-		OperatorAllowlist: operatorAllowlist,
-		TrustedProxies:    cfg.TrustedProxies,
-		BFFClientIPToken:  cfg.BFFClientIPToken,
-		// "none" is the only value this build has a client for, so every
-		// promotional SMS to India is refused until a register is chosen.
-		DND: sending.CacheDNDLookups(sending.NoDNDRegister{}, time.Now),
+		Secrets:               connectionSecrets,
+		SMPP:                  smpp,
+		DLTChain:              cfg.DLTTelemarketerChain,
+		SMPPEnvironment:       cfg.SMPPEnvironment,
+		RCS:                   rcsRouter,
+		Media:                 mediaStore,
+		AllowGreyRoutes:       cfg.AllowGreyRoutes,
+		OperatorAllowlist:     operatorAllowlist,
+		TrustedProxies:        cfg.TrustedProxies,
+		BFFClientIPToken:      cfg.BFFClientIPToken,
+		DND:                   dndRegister(cfg.DNDMode),
+		DNDMode:               cfg.DNDMode,
+		ApprovedLinkCountries: cfg.ApprovedLinkCountries,
+		LinkDomainTarget:      cfg.LinkDomainTarget,
 		Abuse: api.AbuseLimits{PerIPMinute: cfg.AbuseIPPerMinute,
 			PerTokenMinute: cfg.AbuseTokenPerMinute, Ignore: cfg.AbuseIgnore},
 		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL, LinkBaseURL: cfg.LinkBaseURL,
@@ -470,4 +471,14 @@ func presentKeys(names []string) map[string]bool {
 		present[name] = strings.TrimSpace(os.Getenv(name)) != ""
 	}
 	return present
+}
+
+// dndRegister is the register DND_MODE names. Only operator trusts anything:
+// deny has none, and ncpr has no client yet, so both refuse Indian
+// promotional SMS rather than send it unchecked.
+func dndRegister(mode string) sending.DNDRegister {
+	if mode == "operator" {
+		return sending.OperatorScrubs{}
+	}
+	return sending.CacheDNDLookups(sending.NoDNDRegister{}, time.Now)
 }

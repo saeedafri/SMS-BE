@@ -46,7 +46,7 @@ func channelNames() []string {
 // channelConfigKeys are the configuration keys each channel needs, by NAME.
 // Their values are never read here and never returned anywhere.
 var channelConfigKeys = map[gen.ChannelId][]string{
-	gen.ChannelIdSMS: {"CONNECTION_ENCRYPTION_KEY", "DLT_TM_CHAIN"},
+	gen.ChannelIdSMS: {"CONNECTION_ENCRYPTION_KEY", "DLT_TM_CHAIN", "DND_MODE"},
 	gen.ChannelIdRCS: {"RCS_WEBHOOK_TOKEN"},
 	gen.ChannelIdWHATSAPP: {"META_APP_ID", "META_APP_SECRET", "META_WEBHOOK_VERIFY_TOKEN",
 		"META_EMBEDDED_SIGNUP_CONFIG_ID", "META_GRAPH_API_VERSION", "WHATSAPP_ONBOARDING_CAP"},
@@ -153,6 +153,7 @@ func (s *Server) channelCapability(channel gen.ChannelId, enabled bool) gen.Chan
 	if reason != "" {
 		capability.Reason = &reason
 	}
+	capability.Setup = s.channelSetup(channel)
 	features := channelFeatureSet[channel]
 	capability.Features = &struct {
 		DeliveryReceipts *bool `json:"deliveryReceipts,omitempty"`
@@ -161,6 +162,27 @@ func (s *Server) channelCapability(channel gen.ChannelId, enabled bool) gen.Chan
 	}{DeliveryReceipts: &features.deliveryReceipts, ReadReceipts: &features.readReceipts,
 		TwoWay: &features.twoWay}
 	return capability
+}
+
+// channelSetup is a channel's own setup steps as this deployment stands. SMS
+// states its DND register: a fact about configuration, never a switch.
+func (s *Server) channelSetup(channel gen.ChannelId) *[]gen.SetupStep {
+	if channel != gen.ChannelIdSMS {
+		return nil
+	}
+	step := gen.SetupStep{Step: "dnd_register", Status: gen.SetupStepStatusBlocked}
+	var detail string
+	switch s.DNDMode {
+	case "operator":
+		step.Status = gen.SetupStepStatusDone
+		detail = "The operator scrubs promotional messages against India's DND register"
+	case "ncpr":
+		detail = "No NCPR register is connected, so promotional messages to India are refused"
+	default:
+		detail = "No DND register is connected, so promotional messages to India are refused"
+	}
+	step.Detail = &detail
+	return &[]gen.SetupStep{step}
 }
 
 // tenantCapabilities is every channel for one tenant.
@@ -198,7 +220,7 @@ func (s *Server) platformFacilities() *struct {
 	LinkDomains *bool `json:"linkDomains,omitempty"`
 	Lookup      *bool `json:"lookup,omitempty"`
 } {
-	lookup, linkDomains := false, false
+	lookup, linkDomains := s.Lookup != nil, s.LinkDomainTarget != ""
 	return &struct {
 		LinkDomains *bool `json:"linkDomains,omitempty"`
 		Lookup      *bool `json:"lookup,omitempty"`
@@ -240,7 +262,7 @@ func (s *Server) GetOperatorChannels(ctx context.Context, _ gen.GetOperatorChann
 	out := make([]gen.OperatorChannel, 0, len(channelOrder))
 	for _, channel := range channelOrder {
 		row := gen.OperatorChannel{Channel: channel, Mode: s.channelMode(string(channel)),
-			Provider: s.channelProvider(channel)}
+			Provider: s.channelProvider(channel), Setup: s.channelSetup(channel)}
 		row.ConfigKeys = []struct {
 			Name    string `json:"name"`
 			Present bool   `json:"present"`

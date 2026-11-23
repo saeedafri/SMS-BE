@@ -349,6 +349,9 @@ func (s *Server) ListContacts(ctx context.Context, request gen.ListContactsReque
 	for _, contact := range contacts {
 		out = append(out, contactResponse(contact))
 	}
+	if err := s.withLookups(ctx, identity, out); err != nil {
+		return nil, err
+	}
 	// Every distinct column across the WHOLE filtered set, not this page. The
 	// table renders one column per name, so deriving them from the rows in hand
 	// drops a column whose only values sit on page 84 — it would disappear for
@@ -807,7 +810,11 @@ func (s *Server) UpdateContact(ctx context.Context, request gen.UpdateContactReq
 	case err != nil:
 		return nil, err
 	}
-	return gen.UpdateContact200JSONResponse(contactResponse(updated)), nil
+	contacts := []gen.Contact{contactResponse(updated)}
+	if err := s.withLookups(ctx, identity, contacts); err != nil {
+		return nil, err
+	}
+	return gen.UpdateContact200JSONResponse(contacts[0]), nil
 }
 
 // RecordContactConsent records that a list's contacts agreed to a channel.
@@ -868,4 +875,27 @@ func (s *Server) RecordContactConsent(ctx context.Context, request gen.RecordCon
 	return gen.RecordContactConsent200JSONResponse(gen.ContactConsentResult{
 		Updated: record.Updated, RecordedAt: record.RecordedAt, RecordedBy: record.RecordedBy,
 	}), nil
+}
+
+// withLookups adds each contact's last line-type lookup, when it has one.
+func (s *Server) withLookups(ctx context.Context, identity store.Identity, contacts []gen.Contact) error {
+	msisdns := make([]string, 0, len(contacts))
+	for _, contact := range contacts {
+		msisdns = append(msisdns, contact.Msisdn)
+	}
+	found, err := store.LookupsFor(ctx, s.DB, identity, msisdns)
+	if err != nil {
+		return err
+	}
+	for i := range contacts {
+		raw, looked := found[contacts[i].Msisdn]
+		if !looked {
+			continue
+		}
+		var result gen.LookupResult
+		if json.Unmarshal(raw, &result) == nil {
+			contacts[i].Lookup = &result
+		}
+	}
+	return nil
 }

@@ -755,7 +755,7 @@ func CreateRegistration(ctx context.Context, pool *pgxpool.Pool, id Identity, re
 		created, err = scanRegistration(tx.QueryRow(ctx, `
 			INSERT INTO registrations (tenant_id, country, object_key, fields, external_id)
 			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (tenant_id, country, object_key) DO UPDATE
+			ON CONFLICT (tenant_id, country, object_key) WHERE object_key <> 'cta_whitelist' DO UPDATE
 			   SET fields           = EXCLUDED.fields,
 			       -- A resubmission carries whatever id the NEW submission
 			       -- supplied, including none. Never the previously approved
@@ -797,7 +797,8 @@ func RegistrationStatus(ctx context.Context, pool *pgxpool.Pool, id Identity,
 	var status string
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT status FROM registrations WHERE country = $1 AND object_key = $2`,
+			`SELECT status FROM registrations WHERE country = $1 AND object_key = $2
+			 ORDER BY (status = 'approved') DESC LIMIT 1`,
 			country, objectKey).Scan(&status)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1101,4 +1102,44 @@ func CachedEntityRegistered(ctx context.Context, pool *pgxpool.Pool, cache *HotC
 	}
 	cache.Put(key, registered)
 	return registered
+}
+
+// ApprovedLinkHosts are the website hosts on a tenant's approved-links list
+// for a country: approved entries of kind url only.
+func ApprovedLinkHosts(ctx context.Context, pool *pgxpool.Pool, cache *HotCache, id Identity,
+	country string) ([]string, error) {
+
+	key := ApprovedLinksKey(id.TenantID, country)
+	if value, found := cache.Get(key); found {
+		return value.([]string), nil
+	}
+	hosts := []string{}
+	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT fields ->> 'value' FROM registrations
+			WHERE country = $1 AND object_key = 'cta_whitelist' AND status = 'approved'
+			  AND fields ->> 'type' = 'url'`, country)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var host string
+			if err := rows.Scan(&host); err != nil {
+				return err
+			}
+			hosts = append(hosts, host)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: approved links: %w", err)
+	}
+	cache.Put(key, hosts)
+	return hosts, nil
+}
+
+// ApprovedLinksKey is exported so a registration decision can drop the entry.
+func ApprovedLinksKey(tenantID uuid.UUID, country string) string {
+	return "approved-links:" + tenantID.String() + ":" + country
 }

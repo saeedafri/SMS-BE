@@ -77,6 +77,10 @@ var (
 	ErrDNDCheckUnavailable = errors.New(
 		"messaging: this number could not be checked against the do-not-disturb register")
 
+	// ErrURLNotWhitelisted is an SMS whose link host is not on the tenant's
+	// approved links, in a country whose regulator scrubs such links.
+	ErrURLNotWhitelisted = errors.New("messaging: a link in this message is not approved")
+
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
 
@@ -155,6 +159,11 @@ type GateInput struct {
 	// or the lookup failed, which refuses too rather than risking a breach.
 	DNDBlocked          bool
 	DNDCheckUnavailable bool
+
+	// UnapprovedLink says why a link in the message is not on the approved
+	// list, naming its host; empty when every link is approved or the rule
+	// does not apply.
+	UnapprovedLink string
 
 	// OutsidePromotionalWindow is a promotional message sent when its
 	// destination forbids promotional traffic.
@@ -261,6 +270,9 @@ func Check(input GateInput) error {
 	if input.DNDCheckUnavailable {
 		return ErrDNDCheckUnavailable
 	}
+	if input.UnapprovedLink != "" {
+		return fmt.Errorf("%w: %s", ErrURLNotWhitelisted, input.UnapprovedLink)
+	}
 	if input.BalanceMinor < input.CostMinor {
 		return ErrInsufficientFunds
 	}
@@ -297,7 +309,7 @@ var refusals = []error{
 	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 	ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
 	ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
-	ErrVariableUnresolved,
+	ErrVariableUnresolved, ErrURLNotWhitelisted,
 }
 
 // awaitingContract are refusals whose code is not yet in the contract's
@@ -337,6 +349,8 @@ func GateFailureCode(err error) string {
 		return "variable_unresolved"
 	case errors.Is(err, ErrOutsidePromotionalWindow):
 		return "outside_promotional_window"
+	case errors.Is(err, ErrURLNotWhitelisted):
+		return "url_not_whitelisted"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
 	case errors.Is(err, ErrDNDBlocked):

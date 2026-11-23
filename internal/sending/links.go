@@ -142,3 +142,19 @@ func (s *Service) sendLinks(ctx context.Context, identity store.Identity, countr
 
 // unresolvedLink is the refusal for a message whose link could not be made.
 var unresolvedLink = messaging.GateFailureCode(messaging.ErrVariableUnresolved)
+
+// UnapprovedTemplateLink says why a template's links would be refused for not
+// being approved, before a campaign is created on it: its body, its call to
+// action and, when it holds {{link}}, the platform's short-link host.
+func (s *Service) UnapprovedTemplateLink(ctx context.Context, identity store.Identity,
+	channel, country string, template store.Template) (string, error) {
+
+	text := templateText(template)
+	if template.CtaURL != nil {
+		text += " " + *template.CtaURL
+	}
+	if UsesLink(template) {
+		text += " " + linkStandIn(s.LinkBaseURL)
+	}
+	return s.unapprovedLink(ctx, identity, channel, country, text)
+}

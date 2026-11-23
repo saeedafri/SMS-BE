@@ -650,7 +650,8 @@ func (h *harness) registerEntity(tenantID uuid.UUID, country string) {
 		if _, err := h.admin.Exec(context.Background(), `
 			INSERT INTO registrations (tenant_id, country, object_key, status)
 			VALUES ($1, $2, $3, 'approved')
-			ON CONFLICT (tenant_id, country, object_key) DO UPDATE SET status = 'approved'`,
+			ON CONFLICT (tenant_id, country, object_key) WHERE object_key <> 'cta_whitelist'
+			DO UPDATE SET status = 'approved'`,
 			tenantID, country, object.Key); err != nil {
 			h.t.Fatalf("register entity %s/%s: %v", country, object.Key, err)
 		}

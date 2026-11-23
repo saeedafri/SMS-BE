@@ -25,6 +25,10 @@ type ShortLink struct {
 	CreatedAt     time.Time
 	Clicks        int
 	HumanClicks   int
+	// DomainID is the tenant's own link domain the link was made on, nil on the
+	// platform's; DomainHost is that domain's host, for building its URL.
+	DomainID   *uuid.UUID
+	DomainHost *string
 }
 
 // LinkClick is one hit on a link.
@@ -170,10 +174,10 @@ func CreateShortLinks(ctx context.Context, pool *pgxpool.Pool, id Identity,
 				}
 				err := tx.QueryRow(ctx, `
 					INSERT INTO short_links (code, tenant_id, destination, campaign_id,
-					    recipient, label, append_click_id, expires_at)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`,
+					    recipient, label, append_click_id, expires_at, domain_id)
+					VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING created_at`,
 					link.Code, id.TenantID, link.Destination, link.CampaignID,
-					link.Recipient, link.Label, link.AppendClickID, link.ExpiresAt).
+					link.Recipient, link.Label, link.AppendClickID, link.ExpiresAt, link.DomainID).
 					Scan(&link.CreatedAt)
 				var pgErr *pgconn.PgError
 				if errors.As(err, &pgErr) && pgErr.Code == "23505" && attempt < 5 {
@@ -217,9 +221,11 @@ func ListShortLinks(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		rows, err := tx.Query(ctx, `
 			SELECT l.code, l.destination, l.campaign_id, l.recipient, l.label,
 			       l.append_click_id, l.expires_at, l.created_at,
-			       count(c.id)::int, count(c.id) FILTER (WHERE NOT c.is_bot)::int
-			FROM short_links l LEFT JOIN link_clicks c ON c.code = l.code `+where+`
-			GROUP BY l.code ORDER BY l.created_at DESC, l.code
+			       count(c.id)::int, count(c.id) FILTER (WHERE NOT c.is_bot)::int,
+			       l.domain_id, d.domain
+			FROM short_links l LEFT JOIN link_clicks c ON c.code = l.code
+			     LEFT JOIN link_domains d ON d.id = l.domain_id `+where+`
+			GROUP BY l.code, d.domain ORDER BY l.created_at DESC, l.code
 			LIMIT $2 OFFSET $3`, filter.CampaignID, limit, (page-1)*limit)
 		if err != nil {
 			return err
@@ -229,7 +235,7 @@ func ListShortLinks(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			var l ShortLink
 			if err := rows.Scan(&l.Code, &l.Destination, &l.CampaignID, &l.Recipient,
 				&l.Label, &l.AppendClickID, &l.ExpiresAt, &l.CreatedAt,
-				&l.Clicks, &l.HumanClicks); err != nil {
+				&l.Clicks, &l.HumanClicks, &l.DomainID, &l.DomainHost); err != nil {
 				return err
 			}
 			links = append(links, l)

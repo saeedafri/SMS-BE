@@ -98,6 +98,9 @@ func (s *Server) CreateRegistration(ctx context.Context, request gen.CreateRegis
 		return gen.CreateRegistration422JSONResponse(errorBody(codeValidation,
 			"Missing required: "+strings.Join(missing, ", "))), nil
 	}
+	if problem := compliance.InvalidField(object, fields); problem != "" {
+		return gen.CreateRegistration422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
 
 	// Filing order is data on the object, not a branch here: the US campaign
 	// cannot be filed until its brand is approved, and the next country that

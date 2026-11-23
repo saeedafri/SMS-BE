@@ -149,10 +149,24 @@ type Config struct {
 	AbuseTokenPerMinute int
 	AbuseIgnore         []*net.IPNet
 
-	// DNDRegister names the do-not-disturb register a promotional SMS to India
-	// is checked against. DND_REGISTER; "none" (the default) has no register,
-	// so that traffic is refused dnd_check_unavailable rather than risked.
-	DNDRegister string
+	// DNDMode is how a promotional SMS to India meets the do-not-disturb
+	// register. DND_MODE:
+	//   deny     (default) no register: every such message is refused
+	//            dnd_check_unavailable rather than risked;
+	//   operator trust the operator's own DLT scrubbing and never refuse; its
+	//            DND rejection comes back as a receipt, explained dnd_blocked;
+	//   ncpr     a register lookup. No client is built yet, so it refuses
+	//            exactly as deny does until one is.
+	DNDMode string
+
+	// ApprovedLinkCountries are the countries whose SMS may link only to hosts
+	// on the tenant's approved list. APPROVED_LINK_COUNTRIES, comma separated,
+	// default IN; "none" switches the rule off everywhere.
+	ApprovedLinkCountries map[string]bool
+
+	// LinkDomainTarget is the host a tenant's own link domain must CNAME to.
+	// LINK_DOMAIN_TARGET; empty means this deployment offers no link domains.
+	LinkDomainTarget string
 
 	// BFFClientIPToken lets the dashboard server name its user's address.
 	// BFF_CLIENT_IP_TOKEN; empty disables it. At least 32 bytes when set.
@@ -267,10 +281,17 @@ func Load() (Config, error) {
 		}
 		cfg.AbuseIgnore = ignore.Networks()
 	}
-	cfg.DNDRegister = strings.ToLower(strings.TrimSpace(envOr("DND_REGISTER", "none")))
-	if cfg.DNDRegister != "none" {
-		return Config{}, fmt.Errorf("config: DND_REGISTER=%q is not a register this build has a client for; only \"none\" today", cfg.DNDRegister)
+	cfg.DNDMode = strings.ToLower(strings.TrimSpace(envOr("DND_MODE", "deny")))
+	if cfg.DNDMode != "deny" && cfg.DNDMode != "operator" && cfg.DNDMode != "ncpr" {
+		return Config{}, fmt.Errorf("config: DND_MODE=%q must be deny, operator or ncpr", cfg.DNDMode)
 	}
+	cfg.ApprovedLinkCountries = map[string]bool{}
+	for _, country := range strings.Split(envOr("APPROVED_LINK_COUNTRIES", "IN"), ",") {
+		if country = strings.ToUpper(strings.TrimSpace(country)); country != "" && country != "NONE" {
+			cfg.ApprovedLinkCountries[country] = true
+		}
+	}
+	cfg.LinkDomainTarget = strings.ToLower(strings.TrimSpace(os.Getenv("LINK_DOMAIN_TARGET")))
 	cfg.BFFClientIPToken = strings.TrimSpace(os.Getenv("BFF_CLIENT_IP_TOKEN"))
 	if cfg.BFFClientIPToken != "" && len(cfg.BFFClientIPToken) < 32 {
 		return Config{}, fmt.Errorf("config: BFF_CLIENT_IP_TOKEN must be at least 32 bytes")

@@ -217,18 +217,33 @@ func TestAbuseLimitsDefaultOnAndRefuseNonsense(t *testing.T) {
 	}
 }
 
-// The DND register defaults to none, which refuses Indian promotional SMS, and
-// a name this build has no client for stops the server rather than silently
-// checking nothing.
-func TestDNDRegisterDefaultsToNoneAndRefusesAnUnknownName(t *testing.T) {
+// DND_MODE defaults to deny, which refuses Indian promotional SMS, and a mode
+// this build does not know stops the server rather than silently checking
+// nothing.
+func TestDNDModeDefaultsToDenyAndRefusesAnUnknownMode(t *testing.T) {
 	setValidEnv(t)
 	cfg, err := Load()
-	if err != nil || cfg.DNDRegister != "none" {
-		t.Fatalf("default = %q (%v), want none", cfg.DNDRegister, err)
+	if err != nil || cfg.DNDMode != "deny" {
+		t.Fatalf("default = %q (%v), want deny", cfg.DNDMode, err)
 	}
-	t.Setenv("DND_REGISTER", "some-provider")
+	t.Setenv("DND_MODE", "operator")
+	if cfg, err := Load(); err != nil || cfg.DNDMode != "operator" {
+		t.Fatalf("operator = %q (%v)", cfg.DNDMode, err)
+	}
+	t.Setenv("DND_MODE", "some-provider")
 	if _, err := Load(); err == nil {
-		t.Fatal("Load accepted DND_REGISTER=some-provider")
+		t.Fatal("Load accepted DND_MODE=some-provider")
+	}
+}
+
+func TestApprovedLinksAreOnForIndiaUnlessSwitchedOff(t *testing.T) {
+	setValidEnv(t)
+	if cfg, _ := Load(); !cfg.ApprovedLinkCountries["IN"] || len(cfg.ApprovedLinkCountries) != 1 {
+		t.Fatalf("default = %v, want India only", cfg.ApprovedLinkCountries)
+	}
+	t.Setenv("APPROVED_LINK_COUNTRIES", "none")
+	if cfg, _ := Load(); len(cfg.ApprovedLinkCountries) != 0 {
+		t.Fatalf("none = %v, want the rule off", cfg.ApprovedLinkCountries)
 	}
 }
 

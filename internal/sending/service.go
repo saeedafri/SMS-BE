@@ -45,6 +45,11 @@ type Service struct {
 	// tenant. Nil treats every channel as live.
 	Channels ChannelCheck
 
+	// ApprovedLinkCountries are the countries whose SMS may link only to hosts
+	// on the tenant's approved-links list. A setting rather than a constant so
+	// the rule can be switched off for a country by configuration.
+	ApprovedLinkCountries map[string]bool
+
 	// Hot is the configuration cache the send path reads through. Nil means
 	// every lookup goes to Postgres, which is the behaviour before this existed
 	// and what the tests that assert on freshness rely on.
@@ -379,6 +384,10 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	rendered := renderMessage(template, request.Body, requestFields(request.Variables), nil)
 	// The string the carrier is handed, recorded as it goes.
 	sentText := rendered.text(sender.Channel)
+	unapproved, err := s.unapprovedLink(ctx, identity, sender.Channel, sender.Country, sentText)
+	if err != nil {
+		return SendResult{}, err
+	}
 
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
@@ -394,6 +403,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		OutsidePromotionalWindow:   s.outsidePromotionalWindow(sender.Country, template),
 		DNDBlocked:                 dndBlocked,
 		DNDCheckUnavailable:        dndUnavailable,
+		UnapprovedLink:             unapproved,
 		TemplateBody:               templateBody(template),
 		Body:                       request.Body,
 		// Nothing leaves with a hole in it. A single send names its own
@@ -1035,4 +1045,20 @@ func templateBody(template store.Template) string {
 		}
 	}
 	return ""
+}
+
+// unapprovedLink says why a link in an SMS is not on the tenant's approved
+// links, in a country that keeps such a list; "" when it may go.
+func (s *Service) unapprovedLink(ctx context.Context, identity store.Identity,
+	channel, country, text string) (string, error) {
+
+	if channel != "SMS" || !s.ApprovedLinkCountries[country] {
+		return "", nil
+	}
+	hosts, err := store.ApprovedLinkHosts(ctx, s.DB, s.Hot, identity, country)
+	if err != nil {
+		return "", err
+	}
+	_, reason := compliance.UnapprovedLink(text, hosts)
+	return reason, nil
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 )
 
-func TestIndiaHasItsFourRegistrationObjects(t *testing.T) {
+func TestIndiaHasItsFiveRegistrationObjects(t *testing.T) {
 	regime, ok := compliance.For("IN")
 	if !ok {
 		t.Fatal("no regime registered for IN")
@@ -19,7 +19,7 @@ func TestIndiaHasItsFourRegistrationObjects(t *testing.T) {
 	for _, object := range regime.RegistrationObjects() {
 		keys = append(keys, object.Key)
 	}
-	want := []string{"pe_rtm_entity", "tm_mapping", "dlt_header", "dlt_template"}
+	want := []string{"pe_rtm_entity", "tm_mapping", "dlt_header", "dlt_template", "cta_whitelist"}
 	if len(keys) != len(want) {
 		t.Fatalf("keys = %v, want %v", keys, want)
 	}

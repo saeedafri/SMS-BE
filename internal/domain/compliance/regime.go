@@ -18,6 +18,9 @@ const (
 	TierEntity   Tier = "entity"
 	TierSender   Tier = "sender"
 	TierTemplate Tier = "template"
+	// TierWhitelist is a list the regulator keeps of what a message may link
+	// to. Many entries per tenant, and none of them makes an entity ready.
+	TierWhitelist Tier = "whitelist"
 )
 
 type FieldType string
@@ -149,6 +152,32 @@ func MissingRequired(object RegistrationObject, fields map[string]any) []string 
 		}
 	}
 	return missing
+}
+
+// InvalidField returns why a submitted field is not acceptable, or "" when
+// every field is. A select must hold one of its options.
+func InvalidField(object RegistrationObject, fields map[string]any) string {
+	for _, field := range object.Fields {
+		value, present := fields[field.Key]
+		if !present || field.Type != FieldSelect {
+			continue
+		}
+		text := fmt.Sprintf("%v", value)
+		allowed := false
+		for _, option := range field.Options {
+			allowed = allowed || option.Value == text
+		}
+		if !allowed {
+			return fmt.Sprintf("%s must be one of the listed options.", field.Label)
+		}
+	}
+	if object.Key == CTAWhitelistObject {
+		value := strings.TrimSpace(fmt.Sprintf("%v", fields["value"]))
+		if value == "" || strings.ContainsAny(value, " \t\n") || len(value) > 253 {
+			return "Enter one host or link with no spaces, up to 253 characters."
+		}
+	}
+	return ""
 }
 
 // requireAbsoluteURL is the floor every regime shares: a CTA has to be a real

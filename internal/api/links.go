@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -47,6 +48,8 @@ type linkBody struct {
 	Label         *string    `json:"label"`
 	AppendClickID bool       `json:"appendClickId"`
 	ExpiresAt     *time.Time `json:"expiresAt"`
+	// DomainID makes the link on one of the tenant's own active link domains.
+	DomainID *uuid.UUID `json:"domainId"`
 }
 
 type linkOut struct {
@@ -75,6 +78,9 @@ func linkBase(r *http.Request) string {
 }
 
 func toLinkOut(base string, l store.ShortLink) linkOut {
+	if l.DomainHost != nil {
+		base = "https://" + *l.DomainHost
+	}
 	return linkOut{Code: l.Code, ShortURL: base + "/l/" + l.Code,
 		Destination: l.Destination, CampaignID: l.CampaignID, Recipient: l.Recipient,
 		Label: l.Label, AppendClickID: l.AppendClickID, ExpiresAt: l.ExpiresAt,
@@ -134,6 +140,9 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	link, problem := buildLink(s.selfHosts(r.Host), identity, body)
+	if problem == "" {
+		problem = s.onLinkDomain(r.Context(), identity, body.DomainID, &link)
+	}
 	if problem != "" {
 		writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
 		return
@@ -190,12 +199,18 @@ func (s *Server) createLinksBulk(w http.ResponseWriter, r *http.Request) {
 			"recipients must hold between 1 and 1000 numbers.")
 		return
 	}
+	var onDomain store.ShortLink
+	if problem := s.onLinkDomain(r.Context(), identity, body.DomainID, &onDomain); problem != "" {
+		writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
+		return
+	}
 	links := make([]store.ShortLink, 0, len(body.Recipients))
 	seen := map[string]bool{}
 	for _, raw := range body.Recipients {
 		each := body.linkBody
 		each.Recipient = &raw
 		link, problem := buildLink(s.selfHosts(r.Host), identity, each)
+		link.DomainID, link.DomainHost = onDomain.DomainID, onDomain.DomainHost
 		if problem != "" {
 			writeError(w, http.StatusUnprocessableEntity, codeValidation, problem)
 			return
@@ -415,4 +430,21 @@ func classifyAgent(agent string) (device, osName string, isBot bool) {
 		osName = "unknown"
 	}
 	return device, osName, isBot
+}
+
+// onLinkDomain puts a link on one of the tenant's own domains when one is
+// named. Only an active domain can carry links: one still being set up would
+// hand out URLs that do not resolve, or resolve without a certificate.
+func (s *Server) onLinkDomain(ctx context.Context, identity store.Identity, domainID *uuid.UUID,
+	link *store.ShortLink) string {
+
+	if domainID == nil {
+		return ""
+	}
+	domain, err := store.GetLinkDomain(ctx, s.DB, identity, *domainID)
+	if err != nil || domain.Status != "active" {
+		return "domainId must name one of your active link domains."
+	}
+	link.DomainID, link.DomainHost = &domain.ID, &domain.Domain
+	return ""
 }

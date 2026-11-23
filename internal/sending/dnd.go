@@ -113,3 +113,13 @@ func (s *Service) dndStatus(ctx context.Context, channel, msisdn string,
 	}
 	return preference.Blocked(), false
 }
+
+// OperatorScrubs is the register of a deployment that trusts the operator's
+// own DLT scrubbing (DND_MODE=operator). It never refuses: the operator drops
+// a message to a DND number itself, and its rejection receipt is explained as
+// dnd_blocked by the failure dictionary.
+type OperatorScrubs struct{}
+
+func (OperatorScrubs) Lookup(context.Context, string) (DNDPreference, error) {
+	return DNDPreference{}, nil
+}

@@ -249,6 +249,9 @@ type mixedPlan struct {
 	// like it was created at the instant its carrier answered.
 	createdAt time.Time
 
+	// unapprovedLink is why a link in the message is not approved, or "".
+	unapprovedLink string
+
 	// refusal is the gate's verdict. Set means recorded as rejected, no money
 	// held, and the caller gets the reason.
 	refusal    string
@@ -310,6 +313,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 			OutsidePromotionalWindow:   s.outsidePromotionalWindow(plan.sender.Country, plan.template),
 			DNDBlocked:                 plan.dndBlocked,
 			DNDCheckUnavailable:        plan.dndUnavailable,
+			UnapprovedLink:             plan.unapprovedLink,
 			TemplateBody:               templateBody(plan.template),
 			Body:                       plan.pending.request.Body,
 			// The dispatch invariant, applied identically to the batched path
@@ -469,6 +473,12 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 		// single send use. A caller here names its own variables, so there is
 		// no column mapping to join them through.
 		plan.message = renderMessage(plan.template, request.Body, requestFields(request.Variables), nil)
+		plan.unapprovedLink, err = s.unapprovedLink(ctx, identity, sender.Channel, sender.Country,
+			plan.message.text(sender.Channel))
+		if err != nil {
+			pending.answer(SendResult{}, err)
+			continue
+		}
 
 		plan.rcsCarrier, plan.agentID = s.rcsPath(ctx, identity, sender)
 		// Keyed by operator too: two RCS senders in one corridor can go out

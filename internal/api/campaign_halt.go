@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -123,6 +124,11 @@ func (s *Server) ResumeCampaign(ctx context.Context, request gen.ResumeCampaignR
 				if refusal := outsidePromotionalWindow(campaign.Country, s.now()); refusal != nil {
 					return gen.ResumeCampaign422JSONResponse(*refusal), nil
 				}
+			}
+			if quiet := campaign.QuietHours; quiet != nil && quiet.Contains(s.now()) {
+				return gen.ResumeCampaign422JSONResponse(errorBody("quiet_hours", fmt.Sprintf(
+					"This campaign's quiet hours are on until %s. The campaign stays paused "+
+						"and nothing is dispatched.", quiet.NextOpening(s.now()).UTC().Format(time.RFC3339)))), nil
 			}
 		}
 	}

@@ -154,6 +154,27 @@ type Server struct {
 	// live. Production leaves it nil.
 	ChannelModes func(channel string) gen.CapabilityMode
 
+	// Lookup answers what kind of line a number is. Nil means this deployment
+	// has no lookup provider: platform.lookup is false and both lookup routes
+	// answer 409 lookup_unavailable.
+	Lookup connector.LineLookup
+
+	// Domains reads a tenant link domain's DNS and certificate. Nil uses the
+	// system resolver and a real TLS handshake.
+	Domains connector.DomainChecker
+
+	// DNDMode is DND_MODE: deny, operator or ncpr. See dnd_register in
+	// channels.go for what each tells a tenant.
+	DNDMode string
+
+	// LinkDomainTarget is the host a tenant's own link domain must CNAME to;
+	// empty means this deployment offers no link domains.
+	LinkDomainTarget string
+
+	// ApprovedLinkCountries are the countries whose SMS may link only to hosts
+	// on the tenant's approved-links list (APPROVED_LINK_COUNTRIES).
+	ApprovedLinkCountries map[string]bool
+
 	// ConfigKeys says which configuration keys are present, by name. Values
 	// are never held here, so none can be returned.
 	ConfigKeys map[string]bool
@@ -368,6 +389,12 @@ func NewRouter(s *Server) http.Handler {
 		// something we are not doing — an agent id, most likely, which this
 		// route derives from the template's sender and never takes.
 		"POST /v1/templates/{id}/carrier-registration": {"vendor", "carrierTemplateId"},
+		"POST /v1/links/domains":                       {"domain"},
+		"POST /v1/lookups":                             {"msisdn", "fields"},
+		"POST /v1/lookups/batch":                       {"msisdns"},
+		// Recorded, not refused: the create body allows unknown keys, but its
+		// quietHours object does not, and the handler needs the raw value to say so.
+		"POST /v1/campaigns": {recordOnly},
 	}))
 
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {

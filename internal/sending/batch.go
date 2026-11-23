@@ -151,6 +151,11 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		}
 
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
+		unapproved, err := s.unapprovedLink(ctx, identity, context.sender.Channel,
+			context.sender.Country, body)
+		if err != nil {
+			return 0, 0, 0, err
+		}
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, ChannelUnavailable: context.channelRefused,
 			SenderStatus:        context.sender.Status,
@@ -172,6 +177,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			OutsidePromotionalWindow:   s.outsidePromotionalWindow(context.sender.Country, context.template),
 			DNDBlocked:                 dndBlocked,
 			DNDCheckUnavailable:        dndUnavailable,
+			UnapprovedLink:             unapproved,
 			TemplateBody:               templateBody(context.template),
 			Body:                       body,
 			// The dispatch invariant, and the last thing standing between an

@@ -10,9 +10,8 @@ import (
 // DLT's real control is the CTA whitelist held by the operator. This catches
 // the common cases early so a tenant learns at template-creation time rather
 // than at rejection time, days later.
-//
-// Extend before production: rb.gy, shorturl.at, cutt.ly and friends.
-var shortenerHosts = []string{"bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly"}
+var shortenerHosts = []string{"bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "rb.gy",
+	"shorturl.at", "cutt.ly"}
 
 type india struct{}
 
@@ -95,6 +94,26 @@ func (india) RegistrationObjects() []RegistrationObject {
 			Fields: []FieldSpec{
 				{Key: "templateName", Label: "Template name", Type: FieldText, Required: true},
 				{Key: "dltTemplateId", Label: "DLT template id", Type: FieldText, Required: true},
+			},
+		},
+		// The hosts a message may link to. DLT scrubs an SMS whose link host
+		// is not on the entity's URL whitelist, so a list kept here, mirrored
+		// from the DLT portal, lets us refuse it first and say why.
+		{
+			Key:       CTAWhitelistObject,
+			Label:     "Approved links (CTA whitelist)",
+			Tier:      TierWhitelist,
+			DependsOn: "pe_rtm_entity",
+			Remediation: "Add the exact host to your DLT account first, then add it here. " +
+				"A link whose host is not listed is refused before it is sent.",
+			Fields: []FieldSpec{
+				{Key: "type", Label: "Kind of link", Type: FieldSelect, Required: true, Options: []Option{
+					{Value: "url", Label: "Website link"},
+					{Value: "apk", Label: "App download"},
+					{Value: "ott", Label: "Messaging app link"},
+					{Value: "callback", Label: "Call-back number"},
+				}},
+				{Key: "value", Label: "Host or link", Type: FieldText, Required: true},
 			},
 		},
 	}
