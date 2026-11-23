@@ -40,17 +40,10 @@ func senderResponse(s store.SenderID) gen.SenderId {
 	// empty list would render as "you have records to publish, none of them
 	// verified" on a screen that should not show the section at all.
 	if len(s.DNSRecords) > 0 {
-		records := make([]gen.EmailDnsRecord, 0, len(s.DNSRecords))
-		for _, record := range s.DNSRecords {
-			records = append(records, gen.EmailDnsRecord{
-				Type:   gen.EmailDnsRecordType(record.Type),
-				Host:   record.Host,
-				Value:  record.Value,
-				Status: gen.EmailDnsRecordStatus(record.Status),
-			})
-		}
+		records := emailRecordsOut(s.DNSRecords)
 		sender.DnsRecords = &records
 	}
+	sender.EmailIdentity = emailIdentityOut(s)
 
 	// WhatsApp health, when Meta has assigned it. Left absent rather than sent
 	// as a zero value: "no rating yet" and "rated red" are different facts, and
@@ -176,7 +169,21 @@ func (s *Server) CreateSenderId(ctx context.Context, request gen.CreateSenderIdR
 		return gen.CreateSenderId422JSONResponse(errorBody(codeValidation, problem)), nil
 	}
 
+	// An email sender's domain is registered with the provider now, and the
+	// records it must publish come back from that registration.
+	var emailRecords []store.SenderDNSRecord
+	var mailFrom *string
+	if request.Body.Channel == gen.ChannelIdEMAIL && request.Body.EmailDomain != nil &&
+		*request.Body.EmailDomain != "" {
+		records, domain, err := s.emailIdentityFor(ctx, *request.Body.EmailDomain)
+		if err != nil {
+			return nil, err
+		}
+		emailRecords, mailFrom = records, &domain
+	}
+
 	created, err := store.CreateSenderID(ctx, s.DB, identity, store.SenderID{
+		DNSRecords: emailRecords, MailFromDomain: mailFrom,
 		// Stored exactly as typed. This is the customer's DLT header id, issued
 		// to them on their operator portal — Relay is the system of record for
 		// it, never its issuer, so there is no derive-or-default branch here.

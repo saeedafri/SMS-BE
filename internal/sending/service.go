@@ -45,6 +45,16 @@ type Service struct {
 	// tenant. Nil treats every channel as live.
 	Channels ChannelCheck
 
+	// AppBaseURL is the dashboard's public address and APIBaseURL this API's,
+	// for the unsubscribe page a marketing email links to and the one-click
+	// endpoint its List-Unsubscribe header names.
+	AppBaseURL, APIBaseURL string
+
+	// EmailEvents emits an email webhook (message.bounced, message.complained)
+	// for a message. Nil emits nothing.
+	EmailEvents func(ctx context.Context, identity store.Identity, event string,
+		record store.MessageRecord, extra map[string]any)
+
 	// ApprovedLinkCountries are the countries whose SMS may link only to hosts
 	// on the tenant's approved-links list. A setting rather than a constant so
 	// the rule can be switched off for a country by configuration.
@@ -389,11 +399,16 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		return SendResult{}, err
 	}
 
+	paused, err := s.emailPaused(ctx, identity, sender.Channel)
+	if err != nil {
+		return SendResult{}, err
+	}
+
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
 		TenantStatus: tenantStatus, ChannelUnavailable: disposition == SendRefused,
-		SenderStatus:        sender.Status,
+		SenderStatus: emailSenderStatus(sender), SendingPaused: paused,
 		EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
 		SenderID:            sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,

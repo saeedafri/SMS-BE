@@ -351,6 +351,7 @@ func run() error {
 			PerTokenMinute: cfg.AbuseTokenPerMinute, Ignore: cfg.AbuseIgnore},
 		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL, LinkBaseURL: cfg.LinkBaseURL,
 		ConfigKeys:               presentKeys(api.ChannelConfigKeyNames()),
+		EmailRegion:              strings.TrimSpace(os.Getenv("SES_REGION")),
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,
 		CarrierWebhookToken:      cfg.CarrierWebhookToken,

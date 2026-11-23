@@ -48,6 +48,11 @@ type SenderID struct {
 	QualityRating *string
 	MessagingTier *int32
 
+	// MailFromDomain is an email sender's custom MAIL FROM domain, and
+	// EmailCheckedAt when its identity was last read from the provider.
+	MailFromDomain *string
+	EmailCheckedAt *time.Time
+
 	// DNSRecords is populated for email senders only. The contract declares it
 	// on SenderId, and the onboarding screen shows one row per record with its
 	// own state, so it is loaded alongside rather than behind a second call the
@@ -61,6 +66,12 @@ type SenderDNSRecord struct {
 	Host   string
 	Value  string
 	Status string
+	// DNSType is the record as DNS knows it: CNAME, TXT or MX. Nil on rows
+	// written before it was recorded.
+	DNSType       *string
+	Priority      *int
+	Required      bool
+	LastCheckedAt *time.Time
 }
 
 // LoadSenderDNSRecords attaches DNS records to the senders that have them.
@@ -79,9 +90,10 @@ func LoadSenderDNSRecords(ctx context.Context, tx pgx.Tx, senders []SenderID) er
 		return nil
 	}
 	rows, err := tx.Query(ctx, `
-		SELECT sender_id, record_type, host, value, status
+		SELECT sender_id, record_type, host, value, status, dns_type, priority, required,
+		       last_checked_at
 		FROM sender_dns_records WHERE sender_id = ANY($1)
-		ORDER BY sender_id, record_type`, ids)
+		ORDER BY sender_id, position, record_type, host`, ids)
 	if err != nil {
 		return err
 	}
@@ -91,7 +103,8 @@ func LoadSenderDNSRecords(ctx context.Context, tx pgx.Tx, senders []SenderID) er
 		var senderID uuid.UUID
 		var record SenderDNSRecord
 		if err := rows.Scan(&senderID, &record.Type, &record.Host,
-			&record.Value, &record.Status); err != nil {
+			&record.Value, &record.Status, &record.DNSType, &record.Priority, &record.Required,
+			&record.LastCheckedAt); err != nil {
 			return err
 		}
 		bySender[senderID] = append(bySender[senderID], record)
@@ -110,7 +123,7 @@ func LoadSenderDNSRecords(ctx context.Context, tx pgx.Tx, senders []SenderID) er
 const senderColumns = `id, header, channel, country, status, rejection_reason,
 	external_id, waba_id, display_name, phone_number, email_domain, from_address,
 	from_name, caller_id_number, voice_code, voice_verified, created_at,
-	quality_rating, messaging_tier, rcs_agent_id`
+	quality_rating, messaging_tier, rcs_agent_id, mail_from_domain, email_checked_at`
 
 func scanSender(row pgx.Row) (SenderID, error) {
 	var s SenderID
@@ -118,7 +131,7 @@ func scanSender(row pgx.Row) (SenderID, error) {
 		&s.RejectionReason, &s.ExternalID, &s.WabaID, &s.DisplayName, &s.PhoneNumber,
 		&s.EmailDomain, &s.FromAddress, &s.FromName, &s.CallerIDNumber,
 		&s.VoiceCode, &s.VoiceVerified, &s.CreatedAt,
-		&s.QualityRating, &s.MessagingTier, &s.RcsAgentID)
+		&s.QualityRating, &s.MessagingTier, &s.RcsAgentID, &s.MailFromDomain, &s.EmailCheckedAt)
 	return s, err
 }
 
@@ -183,7 +196,17 @@ func GetSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, senderID 
 		var err error
 		sender, err = scanSender(tx.QueryRow(ctx,
 			`SELECT `+senderColumns+` FROM sender_ids WHERE id = $1`, senderID))
-		return err
+		if err != nil || sender.Channel != "EMAIL" {
+			return err
+		}
+		// An email sender's records are its domain's state, which every reader
+		// of one sender — the send path included — judges it by.
+		senders := []SenderID{sender}
+		if err := LoadSenderDNSRecords(ctx, tx, senders); err != nil {
+			return err
+		}
+		sender = senders[0]
+		return nil
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SenderID{}, ErrNotFound
@@ -218,23 +241,24 @@ func CreateSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, sender
 		if err != nil {
 			return err
 		}
-		// An email sender is not usable until its domain is authenticated, and
-		// the records to publish are derived from the domain the customer just
-		// gave us. Generating them here — in the same transaction as the sender
-		// — means the onboarding screen never renders a sender with nowhere to
-		// send the customer next.
-		if sender.Channel == "EMAIL" && sender.EmailDomain != nil && *sender.EmailDomain != "" {
-			domain := *sender.EmailDomain
-			_, err = tx.Exec(ctx, `
-				INSERT INTO sender_dns_records (tenant_id, sender_id, record_type, host, value)
-				VALUES ($1, $2, 'SPF',   $3,            $4),
-				       ($1, $2, 'DKIM',  $5,            $6),
-				       ($1, $2, 'DMARC', $7,            $8)`,
-				id.TenantID, created.ID,
-				domain, "v=spf1 include:mail.relay-platform.example ~all",
-				"relay1._domainkey."+domain, "v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCB",
-				"_dmarc."+domain, "v=DMARC1; p=quarantine; rua=mailto:dmarc@"+domain)
-			if err != nil {
+		// An email sender is not usable until its domain is authenticated. The
+		// records to publish come from the provider's identity, built by the
+		// caller, and are written in the same transaction as the sender, so
+		// the onboarding screen never renders a sender with nowhere to send
+		// the customer next.
+		if sender.Channel == "EMAIL" && len(sender.DNSRecords) > 0 {
+			for position, record := range sender.DNSRecords {
+				if _, err = tx.Exec(ctx, `
+					INSERT INTO sender_dns_records (tenant_id, sender_id, record_type, host, value,
+					    dns_type, priority, required, position)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+					id.TenantID, created.ID, record.Type, record.Host, record.Value,
+					record.DNSType, record.Priority, record.Required, position); err != nil {
+					return err
+				}
+			}
+			if _, err = tx.Exec(ctx, `UPDATE sender_ids SET mail_from_domain = $2 WHERE id = $1`,
+				created.ID, sender.MailFromDomain); err != nil {
 				return err
 			}
 			// Load them onto the sender being returned.

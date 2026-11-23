@@ -86,6 +86,12 @@ func (s *Server) toCampaign(campaign store.Campaign,
 	}
 	out.Delivered = counts.Delivered
 	out.Failed = counts.Failed
+	if campaign.EmailTracking != nil {
+		out.EmailTracking = &struct {
+			Clicks bool `json:"clicks"`
+			Opens  bool `json:"opens"`
+		}{Clicks: campaign.EmailTracking.Clicks, Opens: campaign.EmailTracking.Opens}
+	}
 	return out
 }
 
@@ -251,6 +257,11 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, problem)), nil
 	}
 	campaign.QuietHours = quiet
+	tracking, problem := emailTrackingFrom(ctx, string(body.Channel))
+	if problem != "" {
+		return gen.CreateCampaign422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+	campaign.EmailTracking = tracking
 	if body.ListId != nil && *body.ListId != "" {
 		listID, err := uuid.Parse(*body.ListId)
 		if err != nil {
@@ -297,6 +308,18 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		}
 		if disposition != sending.SendLive {
 			return gen.CreateCampaign422JSONResponse(channelUnavailable()), nil
+		}
+		// An operator paused this tenant's email, or the provider stopped it:
+		// nothing is created, and the refusal says why.
+		if *leg == "EMAIL" {
+			status, err := store.EmailSendingStatus(ctx, s.DB, identity.TenantID)
+			if err != nil {
+				return nil, err
+			}
+			if status == "paused" || status == "enforced" {
+				return gen.CreateCampaign422JSONResponse(errorBody("sending_paused",
+					"Email sending is paused for this account. Contact support to resume it.")), nil
+			}
 		}
 	}
 
@@ -668,7 +691,8 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
 		Notifier: s, Redis: s.Redis, Async: s.runAsync, LinkBaseURL: s.LinkBaseURL,
-		Channels: s.channelDisposition, ApprovedLinkCountries: s.ApprovedLinkCountries}
+		Channels: s.channelDisposition, ApprovedLinkCountries: s.ApprovedLinkCountries,
+		AppBaseURL: s.AppBaseURL, APIBaseURL: s.LinkBaseURL, EmailEvents: s.EmailEventWebhook}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called
@@ -895,4 +919,33 @@ func quietHoursOut(quiet *compliance.QuietHours) *gen.QuietHours {
 		return nil
 	}
 	return &gen.QuietHours{From: quiet.From, To: quiet.To, Zone: quiet.Zone}
+}
+
+// emailTrackingFrom reads an email campaign's tracking: {opens, clicks}, both
+// booleans, or absent for both off. Anything else is refused, never read as
+// "off". Only an email campaign carries it.
+func emailTrackingFrom(ctx context.Context, channel string) (*store.EmailTracking, string) {
+	raw, present := bodyValue(ctx, "emailTracking")
+	if !present || isNull(raw) {
+		if channel == "EMAIL" {
+			return &store.EmailTracking{}, ""
+		}
+		return nil, ""
+	}
+	var fields map[string]json.RawMessage
+	problem := "emailTracking must be { opens, clicks }, each true or false."
+	if json.Unmarshal(raw, &fields) != nil || len(fields) != 2 {
+		return nil, problem
+	}
+	var tracking store.EmailTracking
+	for key, target := range map[string]*bool{"opens": &tracking.Opens, "clicks": &tracking.Clicks} {
+		value, has := fields[key]
+		if !has || json.Unmarshal(value, target) != nil {
+			return nil, problem
+		}
+	}
+	if channel != "EMAIL" {
+		return nil, "emailTracking applies to email campaigns only."
+	}
+	return &tracking, ""
 }

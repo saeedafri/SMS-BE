@@ -251,6 +251,8 @@ type mixedPlan struct {
 
 	// unapprovedLink is why a link in the message is not approved, or "".
 	unapprovedLink string
+	// emailPaused says the tenant's email sending is stopped.
+	emailPaused bool
 
 	// refusal is the gate's verdict. Set means recorded as rejected, no money
 	// held, and the caller gets the reason.
@@ -299,7 +301,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 		state := tenants[plan.pending.identity.TenantID]
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: state.status, ChannelUnavailable: plan.disposition == SendRefused,
-			SenderStatus: plan.sender.Status,
+			SenderStatus: emailSenderStatus(plan.sender), SendingPaused: plan.emailPaused,
 			EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot,
 				plan.pending.identity, plan.sender.Country),
 			SenderID:       plan.sender.ID.String(),
@@ -475,6 +477,9 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 		plan.message = renderMessage(plan.template, request.Body, requestFields(request.Variables), nil)
 		plan.unapprovedLink, err = s.unapprovedLink(ctx, identity, sender.Channel, sender.Country,
 			plan.message.text(sender.Channel))
+		if err == nil {
+			plan.emailPaused, err = s.emailPaused(ctx, identity, sender.Channel)
+		}
 		if err != nil {
 			pending.answer(SendResult{}, err)
 			continue

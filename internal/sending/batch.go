@@ -97,6 +97,10 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	}
 
 	now := time.Now().UTC()
+	paused, err := s.emailPaused(ctx, identity, context.sender.Channel)
+	if err != nil {
+		return 0, 0, 0, err
+	}
 	frequencyCap := s.frequencyCapFor(ctx, identity, context.sender.Channel)
 	entityRegistered := store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, context.sender.Country)
 	plans := make([]sendPlan, 0, len(contacts))
@@ -164,7 +168,7 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		}
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, ChannelUnavailable: context.channelRefused,
-			SenderStatus:        context.sender.Status,
+			SenderStatus: emailSenderStatus(context.sender), SendingPaused: paused,
 			EntityNotRegistered: !entityRegistered,
 			SenderID:            context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
@@ -270,6 +274,16 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 	events := make([]store.MessageEvent, 0, len(plans))
 	rollups := make([]store.RollupRow, 0, len(plans))
 	submissions := make([]connector.Submission, 0, len(plans))
+	var emails []string
+	for _, plan := range plans {
+		if plan.refusal == "" && plan.email != "" {
+			emails = append(emails, plan.email)
+		}
+	}
+	unsubscribe, err := s.unsubscribeTokens(ctx, identity, context.template, emails)
+	if err != nil {
+		return 0, 0, holdTotal, err
+	}
 
 	// Once per batch: every message in it shares a tenant, sender and template.
 	entityID, dltTemplateID := s.dltIDs(ctx, identity, context.sender.Channel,
@@ -303,6 +317,10 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 				// handset.
 				TemplateVariables: TemplateVariables(context.template, plan.message.variables),
 			})
+			if context.sender.Channel == "EMAIL" {
+				s.emailSubmission(&submissions[len(submissions)-1], identity, context.sender,
+					context.template, plan.email, plan.message.content, unsubscribe)
+			}
 		}
 		record := store.MessageRecord{
 			TenantID: identity.TenantID, ID: plan.messageID,

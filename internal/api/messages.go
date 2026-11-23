@@ -118,9 +118,17 @@ func (s *Server) messagePage(ctx context.Context, identity store.Identity,
 	}
 
 	rules := s.failureRules(ctx)
+	events, err := s.emailEventsFor(ctx, identity.TenantID, records)
+	if err != nil {
+		return gen.MessageLogPage{}, s.clickhouseFailed(err)
+	}
 	entries := make([]gen.MessageLogEntry, 0, len(records))
 	for _, record := range records {
-		entries = append(entries, withFailure(messageLogEntry(record), rules, record))
+		entry := withFailure(messageLogEntry(record), rules, record)
+		if carriedChannel(record) == "EMAIL" {
+			entry.EmailEvents = emailEventsOut(events[record.ID])
+		}
+		entries = append(entries, entry)
 	}
 
 	result := gen.MessageLogPage{Messages: entries, Total: int(total)}
@@ -489,7 +497,15 @@ func (s *Server) GetMessage(ctx context.Context, request gen.GetMessageRequestOb
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetMessage200JSONResponse(withFailure(messageLogEntry(record), s.failureRules(ctx), record)), nil
+	entry := withFailure(messageLogEntry(record), s.failureRules(ctx), record)
+	if carriedChannel(record) == "EMAIL" {
+		events, err := s.emailEventsFor(ctx, identity.TenantID, []store.MessageRecord{record})
+		if err != nil {
+			return nil, err
+		}
+		entry.EmailEvents = emailEventsOut(events[record.ID])
+	}
+	return gen.GetMessage200JSONResponse(entry), nil
 }
 
 // pageSize reads the optional limit every list takes. Absent means the route's
@@ -531,3 +547,23 @@ const maxPageSize = 200
 // limitOutOfRange is the one message every list gives for a bad page size, so
 // the console can render it without knowing which list it came from.
 const limitOutOfRange = "Limit must be between 1 and 200."
+
+// emailEventsFor reads the provider's events for the email messages here.
+func (s *Server) emailEventsFor(ctx context.Context, tenantID uuid.UUID,
+	records []store.MessageRecord) (map[uuid.UUID][]store.EmailEventRecord, error) {
+
+	var ids []uuid.UUID
+	for _, record := range records {
+		if carriedChannel(record) == "EMAIL" {
+			ids = append(ids, record.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	conn, err := s.clickhouse(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.EmailEventsFor(ctx, conn, tenantID, ids)
+}

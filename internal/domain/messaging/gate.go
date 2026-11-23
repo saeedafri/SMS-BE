@@ -81,6 +81,10 @@ var (
 	// approved links, in a country whose regulator scrubs such links.
 	ErrURLNotWhitelisted = errors.New("messaging: a link in this message is not approved")
 
+	// ErrSendingPaused is an email for a tenant whose email sending an
+	// operator paused, or the provider stopped.
+	ErrSendingPaused = errors.New("messaging: email sending is paused for this account")
+
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
 
@@ -160,6 +164,9 @@ type GateInput struct {
 	DNDBlocked          bool
 	DNDCheckUnavailable bool
 
+	// SendingPaused says the tenant's email sending is paused or enforced.
+	SendingPaused bool
+
 	// UnapprovedLink says why a link in the message is not on the approved
 	// list, naming its host; empty when every link is approved or the rule
 	// does not apply.
@@ -199,6 +206,9 @@ func Check(input GateInput) error {
 	}
 	if input.SenderStatus != "approved" {
 		return fmt.Errorf("%w (status %s)", ErrSenderNotApproved, input.SenderStatus)
+	}
+	if input.SendingPaused {
+		return ErrSendingPaused
 	}
 	if input.TemplateStatus != "" {
 		if input.TemplateStatus != "approved" {
@@ -317,7 +327,7 @@ var refusals = []error{
 // like the others; they are kept apart only so the contract test does not fail
 // on a code the frontend has been asked to add. Move each into refusals once
 // the enum has it.
-var awaitingContract = []error{ErrFrequencyCapped, ErrEntityNotRegistered}
+var awaitingContract = []error{ErrFrequencyCapped, ErrEntityNotRegistered, ErrSendingPaused}
 
 func GateFailureCode(err error) string {
 	switch {
@@ -351,6 +361,8 @@ func GateFailureCode(err error) string {
 		return "outside_promotional_window"
 	case errors.Is(err, ErrURLNotWhitelisted):
 		return "url_not_whitelisted"
+	case errors.Is(err, ErrSendingPaused):
+		return "sending_paused"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
 	case errors.Is(err, ErrDNDBlocked):

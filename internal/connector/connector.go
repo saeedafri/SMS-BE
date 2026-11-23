@@ -12,6 +12,16 @@ import (
 
 // Submission is one message handed to a carrier.
 type Submission struct {
+	// Email is an EMAIL message's recipient, Content its filled document
+	// ({subject, bodyHtml, bodyText}), From and FromName its sender, Headers
+	// the ones the message must carry (List-Unsubscribe on marketing mail),
+	// and UnsubscribeURL the footer link a marketing message ends with.
+	Email          string
+	Content        []byte
+	From, FromName string
+	Headers        map[string]string
+	UnsubscribeURL string
+
 	MessageID string
 	Msisdn    string
 	Sender    string

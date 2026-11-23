@@ -130,6 +130,9 @@ func (r renderedMessage) text(channel string) string {
 // compute a second copy of the same answer and hand two code paths the chance
 // to disagree about it.
 func richContent(template store.Template) []byte {
+	if template.Channel == "EMAIL" {
+		return template.EmailContent
+	}
 	return template.RCSContent
 }
 

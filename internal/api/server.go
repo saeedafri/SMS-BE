@@ -154,6 +154,11 @@ type Server struct {
 	// live. Production leaves it nil.
 	ChannelModes func(channel string) gen.CapabilityMode
 
+	// Email is the email provider (SES). Nil uses the fake, which is what a
+	// deployment without SES credentials has; EmailRegion is SES_REGION.
+	Email       connector.EmailProvider
+	EmailRegion string
+
 	// Lookup answers what kind of line a number is. Nil means this deployment
 	// has no lookup provider: platform.lookup is false and both lookup routes
 	// answer 409 lookup_unavailable.
