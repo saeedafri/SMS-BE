@@ -207,7 +207,10 @@ func (s *Server) accountInvoiceRows(ctx context.Context, pool *pgxpool.Pool, ten
 func (s *Server) CreditTenantWallet(ctx context.Context, request gen.CreditTenantWalletRequestObject) (
 	gen.CreditTenantWalletResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.CreditTenantWallet401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -621,7 +624,10 @@ func (s *Server) RecordTenantPayment(ctx context.Context,
 	request gen.RecordTenantPaymentRequestObject) (
 	gen.RecordTenantPaymentResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.RecordTenantPayment401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -707,7 +713,10 @@ func (s *Server) VoidTenantPayment(ctx context.Context,
 	request gen.VoidTenantPaymentRequestObject) (
 	gen.VoidTenantPaymentResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.VoidTenantPayment401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -776,7 +785,10 @@ func (s *Server) SetTenantCreditLimit(ctx context.Context,
 	request gen.SetTenantCreditLimitRequestObject) (
 	gen.SetTenantCreditLimitResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.SetTenantCreditLimit401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil

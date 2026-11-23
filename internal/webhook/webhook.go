@@ -15,17 +15,43 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // HTTPClient has a short timeout because a customer's slow endpoint must not hold
 // our worker open. Redirects are refused: following one would send a signed
 // payload somewhere the customer never registered.
+//
+// Every connection is checked after DNS resolution. ValidateURL only sees a
+// hostname, and a name that resolves to 169.254.169.254 or 10.0.0.5 would
+// otherwise reach the instance metadata service or our own network. No proxy,
+// for the same reason: the check must see the address actually dialled.
 var HTTPClient = &http.Client{
 	Timeout: 10 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
+	Transport: publicOnlyTransport(),
+}
+
+func publicOnlyTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = (&net.Dialer{Timeout: 5 * time.Second, Control: refuseInternal}).DialContext
+	return transport
+}
+
+// refuseInternal runs on the resolved address just before each connect.
+func refuseInternal(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	if ip := net.ParseIP(host); ip == nil || isInternal(ip) {
+		return fmt.Errorf("refusing to connect to %s: not a public address", host)
+	}
+	return nil
 }
 
 // Result is what one delivery attempt produced.
@@ -145,8 +171,11 @@ func ValidateURL(raw string) error {
 }
 
 func isInternal(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil && (ip4[0] == 0 || ip4[0] == 100 && ip4[1]&0xc0 == 64) {
+		return true // 0.0.0.0/8 and the carrier-grade NAT range 100.64.0.0/10
+	}
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsUnspecified() || ip.IsMulticast()
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
 }
 
 // ValidateCIDR rejects a malformed allowlist entry. Storing one would silently

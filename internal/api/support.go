@@ -271,7 +271,11 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	if request.Body.Body == "" {
+	body := ""
+	if request.Body.Body != nil {
+		body = *request.Body.Body
+	}
+	if body == "" {
 		return gen.ReplyToConversation422JSONResponse(errorBody(codeValidation,
 			"A reply body is required.")), nil
 	}
@@ -291,7 +295,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 			"This contact has opted out, so they cannot be messaged.")), nil
 	}
 
-	segments := billing.SegmentCount(request.Body.Body)
+	segments := billing.SegmentCount(body)
 
 	// Submit the reply to the carrier, exactly as a campaign message is.
 	//
@@ -308,7 +312,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	if s.Connector != nil {
 		receipts, err := s.Connector.Submit(ctx, []connector.Submission{{
 			MessageID: messageID, Msisdn: conversation.Identity,
-			Body: request.Body.Body, Channel: conversation.Channel,
+			Body: body, Channel: conversation.Channel,
 			Country: conversation.Country,
 		}})
 		if err != nil || len(receipts) == 0 {
@@ -343,7 +347,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 
 	if _, err := store.AppendConversationMessage(ctx, s.DB, identity, store.ConversationMessage{
 		ConversationID: conversationID, Direction: "outbound",
-		Body: request.Body.Body, Segments: &segments, Status: &status,
+		Body: body, Segments: &segments, Status: &status,
 	}); err != nil {
 		return nil, err
 	}

@@ -51,12 +51,19 @@ func requestLogger(logger *slog.Logger, metrics *Metrics) func(http.Handler) htt
 			// The route pattern, not the raw path: /v1/campaigns/{id} rather
 			// than a thousand distinct paths, one per campaign id. Without
 			// this, per-route metrics are unusable and the log is unfilterable.
+			//
+			// A path that matched no route has no pattern. It goes to the log
+			// as typed, but to the metrics as one "unmatched" key: /metrics is
+			// public and its route table is never pruned, so keying it by raw
+			// path let anyone grow server memory without limit and have any
+			// text they chose echoed back.
 			route := r.URL.Path
+			metricsRoute := "unmatched"
 			if pattern := chiRoutePattern(r); pattern != "" {
-				route = pattern
+				route, metricsRoute = pattern, pattern
 			}
 
-			metrics.Record(r.Method, route, status, duration, requestID, "")
+			metrics.Record(r.Method, metricsRoute, status, duration, requestID, "")
 
 			if logger == nil {
 				return

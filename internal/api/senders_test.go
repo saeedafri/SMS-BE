@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -151,6 +153,46 @@ func TestGetSenderReturns404ForAnUnknownId(t *testing.T) {
 	}
 }
 
+// placeVoiceCall stands in for the telephony that does not exist yet: it
+// stores the code a real call would speak, where only the handset would hear
+// it. The API never hands the code to the caller.
+func placeVoiceCall(t *testing.T, h *harness, senderID, code string) {
+	t.Helper()
+	if _, err := h.admin.Exec(context.Background(),
+		`UPDATE sender_ids SET voice_code = $1, voice_verified = false WHERE id = $2`,
+		code, senderID); err != nil {
+		t.Fatalf("place voice call: %v", err)
+	}
+}
+
+// The code is proof that the caller holds the number, so the API must never
+// return it. With no telephony, the call route answers 501 and says nothing.
+func TestVoiceCallNeverReturnsTheCode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	acct := h.newAccount("owner")
+	sender := createSender(t, h, acct.Token, "+14155550133", "VOICE", "US")
+
+	call := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-call",
+		acct.Token, nil)
+	if call.Code != http.StatusNotImplemented {
+		t.Fatalf("voice-call: status = %d, want 501; body = %s", call.Code, call.Body)
+	}
+	if strings.Contains(string(call.Body), `"code":"`) {
+		t.Fatalf("voice-call body carries a code: %s", call.Body)
+	}
+	after := h.do(http.MethodGet, "/v1/sender-ids/"+sender.Id.String(), acct.Token, nil)
+	var unchanged gen.SenderId
+	after.decode(t, &unchanged)
+	state, err := unchanged.VoiceVerification.AsVoiceVerification()
+	if err != nil {
+		t.Fatalf("decode voiceVerification: %v", err)
+	}
+	if state.Status != gen.VoiceVerificationStatusUnverified {
+		t.Fatalf("status = %q after a refused call, want unverified", state.Status)
+	}
+}
+
 func TestVoiceVerificationRoundTrip(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -169,42 +211,18 @@ func TestVoiceVerificationRoundTrip(t *testing.T) {
 		t.Fatalf("status = %q, want unverified", before.Status)
 	}
 
-	call := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-call",
-		acct.Token, nil)
-	if call.Code != http.StatusOK {
-		t.Fatalf("voice-call: status = %d, want 200; body = %s", call.Code, call.Body)
-	}
-	var result gen.VoiceCallResult
-	call.decode(t, &result)
-	if len(result.Code) != 6 {
-		t.Fatalf("code = %q, want six digits", result.Code)
-	}
-
+	placeVoiceCall(t, h, sender.Id.String(), "482913")
 	wrong := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-code",
 		acct.Token, map[string]string{"code": "000000"})
 	if wrong.Code == http.StatusNoContent {
 		t.Fatal("a wrong code verified the sender")
 	}
 
-	// A wrong attempt DISCARDS the code — deliberately, so a session holder
-	// cannot brute-force six digits — so the original code is dead now and a new
-	// call is required. This test used to reuse it and fail with "Request a
-	// verification call before entering a code", which is the anti-brute-force
-	// measure working, not a bug.
-	//
-	// Not testing the discarded code here on purpose: submitting it would be
-	// another wrong attempt and would discard the REISSUED code too, which is
-	// the same trap one line further down.
-	recall := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-call",
-		acct.Token, nil)
-	if recall.Code != http.StatusOK {
-		t.Fatalf("second voice-call: status = %d; body = %s", recall.Code, recall.Body)
-	}
-	var reissued gen.VoiceCallResult
-	recall.decode(t, &reissued)
-
+	// A wrong attempt DISCARDS the code, so a session holder cannot
+	// brute-force six digits. A new call is needed before the right code works.
+	placeVoiceCall(t, h, sender.Id.String(), "715204")
 	right := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-code",
-		acct.Token, map[string]string{"code": reissued.Code})
+		acct.Token, map[string]string{"code": "715204"})
 	if right.Code != http.StatusNoContent {
 		t.Fatalf("voice-code: status = %d, want 204; body = %s", right.Code, right.Body)
 	}
@@ -229,17 +247,13 @@ func TestVoiceCodeCannotBeReplayed(t *testing.T) {
 	acct := h.newAccount("owner")
 	sender := createSender(t, h, acct.Token, "+14155550111", "VOICE", "US")
 
-	call := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-call",
-		acct.Token, nil)
-	var result gen.VoiceCallResult
-	call.decode(t, &result)
-
+	placeVoiceCall(t, h, sender.Id.String(), "306118")
 	if first := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-code",
-		acct.Token, map[string]string{"code": result.Code}); first.Code != http.StatusNoContent {
+		acct.Token, map[string]string{"code": "306118"}); first.Code != http.StatusNoContent {
 		t.Fatalf("first use: status = %d", first.Code)
 	}
 	second := h.do(http.MethodPost, "/v1/sender-ids/"+sender.Id.String()+"/voice-code",
-		acct.Token, map[string]string{"code": result.Code})
+		acct.Token, map[string]string{"code": "306118"})
 	if second.Code == http.StatusNoContent {
 		t.Fatal("a spent voice code was accepted again")
 	}

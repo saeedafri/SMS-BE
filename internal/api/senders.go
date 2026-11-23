@@ -2,10 +2,8 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
@@ -71,9 +69,9 @@ func senderResponse(s store.SenderID) gen.SenderId {
 		}
 	}
 	if s.MessagingTier != nil {
-		var tier gen.SenderId_MessagingTier
-		_ = tier.FromWaMessagingTier(gen.WaMessagingTier(*s.MessagingTier))
-		sender.MessagingTier = &tier
+		if limit, ok := messagingLimits[*s.MessagingTier]; ok {
+			sender.MessagingLimit = &limit
+		}
 	}
 
 	// Voice verification state only makes sense for a Voice sender; for every
@@ -94,6 +92,12 @@ func senderResponse(s store.SenderID) gen.SenderId {
 		sender.VoiceVerification = &verification
 	}
 	return sender
+}
+
+// messagingLimits names the stored tier the way Meta now reports it. Meta
+// raised its 1,000 tier to 2,000, so a number stored as 1000 is on TIER_2K.
+var messagingLimits = map[int32]gen.WaMessagingLimit{
+	250: gen.TIER250, 1000: gen.TIER2K, 10000: gen.TIER10K, 100000: gen.TIER100K,
 }
 
 func (s *Server) ListSenderIds(ctx context.Context, request gen.ListSenderIdsRequestObject) (gen.ListSenderIdsResponseObject, error) {
@@ -229,29 +233,17 @@ func (s *Server) GetSenderId(ctx context.Context, request gen.GetSenderIdRequest
 	return gen.GetSenderId200JSONResponse(senderResponse(sender)), nil
 }
 
-// RequestVoiceCall issues the code a verification call would speak. The
-// contract returns it directly and says why: there is no real telephony yet,
-// so the UI displays it — the same shape as Email showing DNS records for the
-// user to add. When a real Voice connector lands, this stops returning the
-// code and the contract changes with it.
-func (s *Server) RequestVoiceCall(ctx context.Context, request gen.RequestVoiceCallRequestObject) (gen.RequestVoiceCallResponseObject, error) {
-	identity, ok := identityFrom(ctx)
-	if !ok {
+// RequestVoiceCall would place the call that speaks a caller-ID verification
+// code. There is no telephony yet, and this used to hand the code back in the
+// 200 body: whoever claimed a number was given the proof that they own it, and
+// voice_verified is the only ownership check before an operator may approve a
+// voice sender. So it answers 501 until a real Voice connector places the call
+// and the code reaches only the handset.
+func (s *Server) RequestVoiceCall(ctx context.Context, _ gen.RequestVoiceCallRequestObject) (gen.RequestVoiceCallResponseObject, error) {
+	if _, ok := identityFrom(ctx); !ok {
 		return nil, errUnauthenticated
 	}
-	senderID := request.Id
-	code, err := sixDigitCode()
-	if err != nil {
-		return nil, err
-	}
-	err = store.SetSenderVoiceCode(ctx, s.DB, identity, senderID, code)
-	if errors.Is(err, store.ErrNotFound) {
-		return gen.RequestVoiceCall404JSONResponse(errorBody(codeNotFound, "No such sender.")), nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return gen.RequestVoiceCall200JSONResponse(gen.VoiceCallResult{Code: code}), nil
+	return nil, errNotImplemented("RequestVoiceCall")
 }
 
 func (s *Server) ConfirmVoiceCode(ctx context.Context, request gen.ConfirmVoiceCodeRequestObject) (gen.ConfirmVoiceCodeResponseObject, error) {
@@ -286,15 +278,6 @@ func (s *Server) ConfirmVoiceCode(ctx context.Context, request gen.ConfirmVoiceC
 		return nil, err
 	}
 	return gen.ConfirmVoiceCode204Response{}, nil
-}
-
-func sixDigitCode() (string, error) {
-	limit := big.NewInt(1_000_000)
-	n, err := rand.Int(rand.Reader, limit)
-	if err != nil {
-		return "", fmt.Errorf("api: generate voice code: %w", err)
-	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 // senderIdentityProblem validates the values a sender record would END UP with,

@@ -58,6 +58,12 @@ check: vet build test
 
 generate:
 	oapi-codegen -config oapi-codegen.yaml openapi/control.json
+	# FailureSource's rcs_vendor becomes a constant named RcsVendor, the name of
+	# the RcsVendor type, and oapi-codegen v2.8.0 does not notice the clash. The
+	# constant is renamed here, not in the contract, so the embedded spec stays
+	# byte-equal to the frontend's openapi.json.
+	perl -0pi -e 's/\bRcsVendor(\s+FailureSource = )/FailureSourceRcsVendor$$1/; s/case RcsVendor:/case FailureSourceRcsVendor:/' internal/gen/api/control.gen.go
+	gofmt -w internal/gen/api/control.gen.go
 	go run ./cmd/gen-unimplemented
 	go build ./...
 

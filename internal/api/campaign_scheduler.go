@@ -42,10 +42,11 @@ func (s *Server) LaunchDueCampaigns(ctx context.Context) error {
 		if isPromotional(template) && !compliance.PromotionalAllowedAt(campaign.Country, now) {
 			// held_until was computed wrong: this should not be selectable. Said
 			// loudly, and launched anyway — the gate still refuses each message.
+			// The campaign id goes to the log only: /metrics is public.
 			s.Logger.Error("promotional campaign selected outside its window",
 				"campaign", entry.ID, "held_until", campaign.HeldUntil)
 			if s.Metrics != nil {
-				s.Metrics.RecordIncident("held_until_wrong", entry.ID.String())
+				s.Metrics.RecordIncident("held_until_wrong", "")
 			}
 		}
 		claimed, err := store.ClaimScheduledCampaign(ctx, s.DB, identity, campaign.ID)

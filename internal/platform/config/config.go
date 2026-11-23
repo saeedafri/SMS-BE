@@ -196,6 +196,12 @@ func Load() (Config, error) {
 	if cfg.AllowGreyRoutes, err = boolEnv("ALLOW_GREY_ROUTES"); err != nil {
 		return Config{}, err
 	}
+	// The dev hooks change roles and balances. A process told it is
+	// production refuses to start with them rather than serve them: a flag
+	// copied across from a test box must not be enough to expose them.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") && cfg.EnableDevEndpoints {
+		return Config{}, errors.New("config: ENABLE_DEV_ENDPOINTS is on and APP_ENV=production; dev endpoints never run in production")
+	}
 	required := map[string]string{
 		"DATABASE_URL":    cfg.DatabaseURL,
 		"REDIS_URL":       cfg.RedisURL,

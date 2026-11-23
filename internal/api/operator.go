@@ -428,6 +428,9 @@ func (s *Server) GetTenantDetail(ctx context.Context, request gen.GetTenantDetai
 func (s *Server) SuspendTenant(ctx context.Context, request gen.SuspendTenantRequestObject) (
 	gen.SuspendTenantResponseObject, error) {
 
+	if _, err := s.requireOperatorAdmin(ctx); err != nil {
+		return nil, err
+	}
 	tenant, err := s.applyTenantChange(ctx, request.Id, "tenant.suspend",
 		func(id uuid.UUID) error {
 			// Suspending clears any abuse flag: the flag exists to mark a tenant
@@ -455,6 +458,9 @@ func (s *Server) SuspendTenant(ctx context.Context, request gen.SuspendTenantReq
 func (s *Server) ReinstateTenant(ctx context.Context, request gen.ReinstateTenantRequestObject) (
 	gen.ReinstateTenantResponseObject, error) {
 
+	if _, err := s.requireOperatorAdmin(ctx); err != nil {
+		return nil, err
+	}
 	tenant, err := s.applyTenantChange(ctx, request.Id, "tenant.reinstate",
 		func(id uuid.UUID) error {
 			// Clears the rate as well as the state: a reinstated tenant with a
@@ -479,7 +485,7 @@ func (s *Server) ThrottleTenant(ctx context.Context, request gen.ThrottleTenantR
 	// reported as a bad id. Validating the body first would answer 422 for a
 	// tenant that does not exist, and an operator chasing a typo'd id would be
 	// told their rate was wrong.
-	if _, err := s.requireOperator(ctx); err != nil {
+	if _, err := s.requireOperatorAdmin(ctx); err != nil {
 		return nil, err
 	}
 	tenantID, valid := parsePathID(request.Id)
@@ -1200,7 +1206,10 @@ func (s *Server) MoveRouteDown(ctx context.Context, request gen.MoveRouteDownReq
 func (s *Server) UpdateDefaultRate(ctx context.Context, request gen.UpdateDefaultRateRequestObject) (
 	gen.UpdateDefaultRateResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.UpdateDefaultRate401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -1294,7 +1303,10 @@ func (s *Server) findOverride(ctx context.Context, id uuid.UUID) (store.RateOver
 func (s *Server) CreateRateOverride(ctx context.Context,
 	request gen.CreateRateOverrideRequestObject) (gen.CreateRateOverrideResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.CreateRateOverride401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -1350,7 +1362,10 @@ func (s *Server) CreateRateOverride(ctx context.Context,
 func (s *Server) EditRateOverride(ctx context.Context,
 	request gen.EditRateOverrideRequestObject) (gen.EditRateOverrideResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.EditRateOverride401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil
@@ -1389,7 +1404,10 @@ func (s *Server) EditRateOverride(ctx context.Context,
 func (s *Server) RemoveRateOverride(ctx context.Context,
 	request gen.RemoveRateOverrideRequestObject) (gen.RemoveRateOverrideResponseObject, error) {
 
-	operator, err := s.requireOperator(ctx)
+	operator, err := s.requireOperatorAdmin(ctx)
+	if errors.Is(err, errForbidden) {
+		return nil, err
+	}
 	if err != nil {
 		return gen.RemoveRateOverride401JSONResponse(
 			errorBody(codeUnauthenticated, "Sign in to the operator console.")), nil

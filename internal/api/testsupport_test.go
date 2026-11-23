@@ -528,17 +528,26 @@ const (
 
 func (h *harness) operatorToken() string {
 	h.t.Helper()
-	email, password := harnessOperatorEmail, harnessOperatorPassword
+	return h.operatorTokenAs(harnessOperatorEmail, "admin")
+}
+
+// operatorTokenAs signs in as a console operator holding this role. The
+// harness's own operator is an admin; a test of what a plain operator may not
+// do needs one that is not.
+func (h *harness) operatorTokenAs(email, role string) string {
+	h.t.Helper()
+	password := harnessOperatorPassword
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		h.t.Fatalf("hash operator password: %v", err)
 	}
 	if _, err := h.admin.Exec(context.Background(), `
 		INSERT INTO operator_users (email, name, password_hash, role)
-		VALUES ($1, 'Harness Ops', $2, 'admin')
+		VALUES ($1, 'Harness Ops', $2, $3)
 		ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash,
+		                                  role = EXCLUDED.role,
 		                                  mfa_enabled = false, mfa_secret = NULL`,
-		email, hash); err != nil {
+		email, hash, role); err != nil {
 		h.t.Fatalf("seed operator: %v", err)
 	}
 	res := h.do(http.MethodPost, "/v1/operator/login", "",

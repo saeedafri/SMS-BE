@@ -220,6 +220,10 @@ func (Unimplemented) ResumeCampaign(ctx context.Context, request gen.ResumeCampa
 	return nil, errNotImplemented("ResumeCampaign")
 }
 
+func (Unimplemented) GetCapabilities(ctx context.Context, request gen.GetCapabilitiesRequestObject) (gen.GetCapabilitiesResponseObject, error) {
+	return nil, errNotImplemented("GetCapabilities")
+}
+
 func (Unimplemented) ListChatbots(ctx context.Context, request gen.ListChatbotsRequestObject) (gen.ListChatbotsResponseObject, error) {
 	return nil, errNotImplemented("ListChatbots")
 }
@@ -388,6 +392,10 @@ func (Unimplemented) SendWebhookTestEvent(ctx context.Context, request gen.SendW
 	return nil, errNotImplemented("SendWebhookTestEvent")
 }
 
+func (Unimplemented) GetEmailSendingHealth(ctx context.Context, request gen.GetEmailSendingHealthRequestObject) (gen.GetEmailSendingHealthResponseObject, error) {
+	return nil, errNotImplemented("GetEmailSendingHealth")
+}
+
 func (Unimplemented) ListFrequencyCaps(ctx context.Context, request gen.ListFrequencyCapsRequestObject) (gen.ListFrequencyCapsResponseObject, error) {
 	return nil, errNotImplemented("ListFrequencyCaps")
 }
@@ -416,8 +424,36 @@ func (Unimplemented) GetLinkConfig(ctx context.Context, request gen.GetLinkConfi
 	return nil, errNotImplemented("GetLinkConfig")
 }
 
+func (Unimplemented) ListLinkDomains(ctx context.Context, request gen.ListLinkDomainsRequestObject) (gen.ListLinkDomainsResponseObject, error) {
+	return nil, errNotImplemented("ListLinkDomains")
+}
+
+func (Unimplemented) CreateLinkDomain(ctx context.Context, request gen.CreateLinkDomainRequestObject) (gen.CreateLinkDomainResponseObject, error) {
+	return nil, errNotImplemented("CreateLinkDomain")
+}
+
+func (Unimplemented) DeleteLinkDomain(ctx context.Context, request gen.DeleteLinkDomainRequestObject) (gen.DeleteLinkDomainResponseObject, error) {
+	return nil, errNotImplemented("DeleteLinkDomain")
+}
+
+func (Unimplemented) GetLinkDomain(ctx context.Context, request gen.GetLinkDomainRequestObject) (gen.GetLinkDomainResponseObject, error) {
+	return nil, errNotImplemented("GetLinkDomain")
+}
+
+func (Unimplemented) ValidateLinkDomain(ctx context.Context, request gen.ValidateLinkDomainRequestObject) (gen.ValidateLinkDomainResponseObject, error) {
+	return nil, errNotImplemented("ValidateLinkDomain")
+}
+
 func (Unimplemented) GetLinkStats(ctx context.Context, request gen.GetLinkStatsRequestObject) (gen.GetLinkStatsResponseObject, error) {
 	return nil, errNotImplemented("GetLinkStats")
+}
+
+func (Unimplemented) LookupNumber(ctx context.Context, request gen.LookupNumberRequestObject) (gen.LookupNumberResponseObject, error) {
+	return nil, errNotImplemented("LookupNumber")
+}
+
+func (Unimplemented) LookupNumbers(ctx context.Context, request gen.LookupNumbersRequestObject) (gen.LookupNumbersResponseObject, error) {
+	return nil, errNotImplemented("LookupNumbers")
 }
 
 func (Unimplemented) GetMe(ctx context.Context, request gen.GetMeRequestObject) (gen.GetMeResponseObject, error) {
@@ -472,6 +508,14 @@ func (Unimplemented) GetOperatorCampaign(ctx context.Context, request gen.GetOpe
 	return nil, errNotImplemented("GetOperatorCampaign")
 }
 
+func (Unimplemented) GetOperatorChannels(ctx context.Context, request gen.GetOperatorChannelsRequestObject) (gen.GetOperatorChannelsResponseObject, error) {
+	return nil, errNotImplemented("GetOperatorChannels")
+}
+
+func (Unimplemented) RunChannelGoLiveCheck(ctx context.Context, request gen.RunChannelGoLiveCheckRequestObject) (gen.RunChannelGoLiveCheckResponseObject, error) {
+	return nil, errNotImplemented("RunChannelGoLiveCheck")
+}
+
 func (Unimplemented) GetConnections(ctx context.Context, request gen.GetConnectionsRequestObject) (gen.GetConnectionsResponseObject, error) {
 	return nil, errNotImplemented("GetConnections")
 }
@@ -502,6 +546,22 @@ func (Unimplemented) EnableConnection(ctx context.Context, request gen.EnableCon
 
 func (Unimplemented) TestConnection(ctx context.Context, request gen.TestConnectionRequestObject) (gen.TestConnectionResponseObject, error) {
 	return nil, errNotImplemented("TestConnection")
+}
+
+func (Unimplemented) GetFailureReasons(ctx context.Context, request gen.GetFailureReasonsRequestObject) (gen.GetFailureReasonsResponseObject, error) {
+	return nil, errNotImplemented("GetFailureReasons")
+}
+
+func (Unimplemented) CreateFailureReason(ctx context.Context, request gen.CreateFailureReasonRequestObject) (gen.CreateFailureReasonResponseObject, error) {
+	return nil, errNotImplemented("CreateFailureReason")
+}
+
+func (Unimplemented) GetUnmappedFailureCodes(ctx context.Context, request gen.GetUnmappedFailureCodesRequestObject) (gen.GetUnmappedFailureCodesResponseObject, error) {
+	return nil, errNotImplemented("GetUnmappedFailureCodes")
+}
+
+func (Unimplemented) UpdateFailureReason(ctx context.Context, request gen.UpdateFailureReasonRequestObject) (gen.UpdateFailureReasonResponseObject, error) {
+	return nil, errNotImplemented("UpdateFailureReason")
 }
 
 func (Unimplemented) OperatorLogin(ctx context.Context, request gen.OperatorLoginRequestObject) (gen.OperatorLoginResponseObject, error) {
@@ -570,6 +630,10 @@ func (Unimplemented) ApproveRcsAgent(ctx context.Context, request gen.ApproveRcs
 
 func (Unimplemented) RejectRcsAgent(ctx context.Context, request gen.RejectRcsAgentRequestObject) (gen.RejectRcsAgentResponseObject, error) {
 	return nil, errNotImplemented("RejectRcsAgent")
+}
+
+func (Unimplemented) GetOperatorRcsLaunches(ctx context.Context, request gen.GetOperatorRcsLaunchesRequestObject) (gen.GetOperatorRcsLaunchesResponseObject, error) {
+	return nil, errNotImplemented("GetOperatorRcsLaunches")
 }
 
 func (Unimplemented) ApproveRegistrationItem(ctx context.Context, request gen.ApproveRegistrationItemRequestObject) (gen.ApproveRegistrationItemResponseObject, error) {
@@ -660,12 +724,28 @@ func (Unimplemented) GetTenantDetail(ctx context.Context, request gen.GetTenantD
 	return nil, errNotImplemented("GetTenantDetail")
 }
 
+func (Unimplemented) SetTenantChannel(ctx context.Context, request gen.SetTenantChannelRequestObject) (gen.SetTenantChannelResponseObject, error) {
+	return nil, errNotImplemented("SetTenantChannel")
+}
+
 func (Unimplemented) SetTenantCreditLimit(ctx context.Context, request gen.SetTenantCreditLimitRequestObject) (gen.SetTenantCreditLimitResponseObject, error) {
 	return nil, errNotImplemented("SetTenantCreditLimit")
 }
 
 func (Unimplemented) DismissFlag(ctx context.Context, request gen.DismissFlagRequestObject) (gen.DismissFlagResponseObject, error) {
 	return nil, errNotImplemented("DismissFlag")
+}
+
+func (Unimplemented) GetOperatorTenantEmail(ctx context.Context, request gen.GetOperatorTenantEmailRequestObject) (gen.GetOperatorTenantEmailResponseObject, error) {
+	return nil, errNotImplemented("GetOperatorTenantEmail")
+}
+
+func (Unimplemented) PauseTenantEmail(ctx context.Context, request gen.PauseTenantEmailRequestObject) (gen.PauseTenantEmailResponseObject, error) {
+	return nil, errNotImplemented("PauseTenantEmail")
+}
+
+func (Unimplemented) ResumeTenantEmail(ctx context.Context, request gen.ResumeTenantEmailRequestObject) (gen.ResumeTenantEmailResponseObject, error) {
+	return nil, errNotImplemented("ResumeTenantEmail")
 }
 
 func (Unimplemented) FlagTenantForAbuse(ctx context.Context, request gen.FlagTenantForAbuseRequestObject) (gen.FlagTenantForAbuseResponseObject, error) {
@@ -728,8 +808,20 @@ func (Unimplemented) ExportUserActivity(ctx context.Context, request gen.ExportU
 	return nil, errNotImplemented("ExportUserActivity")
 }
 
+func (Unimplemented) GetOperatorWaOnboarding(ctx context.Context, request gen.GetOperatorWaOnboardingRequestObject) (gen.GetOperatorWaOnboardingResponseObject, error) {
+	return nil, errNotImplemented("GetOperatorWaOnboarding")
+}
+
 func (Unimplemented) ListPricing(ctx context.Context, request gen.ListPricingRequestObject) (gen.ListPricingResponseObject, error) {
 	return nil, errNotImplemented("ListPricing")
+}
+
+func (Unimplemented) GetPublicUnsubscribe(ctx context.Context, request gen.GetPublicUnsubscribeRequestObject) (gen.GetPublicUnsubscribeResponseObject, error) {
+	return nil, errNotImplemented("GetPublicUnsubscribe")
+}
+
+func (Unimplemented) ConfirmPublicUnsubscribe(ctx context.Context, request gen.ConfirmPublicUnsubscribeRequestObject) (gen.ConfirmPublicUnsubscribeResponseObject, error) {
+	return nil, errNotImplemented("ConfirmPublicUnsubscribe")
 }
 
 func (Unimplemented) ListRcsAgents(ctx context.Context, request gen.ListRcsAgentsRequestObject) (gen.ListRcsAgentsResponseObject, error) {
@@ -806,6 +898,14 @@ func (Unimplemented) GetSenderId(ctx context.Context, request gen.GetSenderIdReq
 
 func (Unimplemented) UpdateSenderId(ctx context.Context, request gen.UpdateSenderIdRequestObject) (gen.UpdateSenderIdResponseObject, error) {
 	return nil, errNotImplemented("UpdateSenderId")
+}
+
+func (Unimplemented) VerifyEmailDns(ctx context.Context, request gen.VerifyEmailDnsRequestObject) (gen.VerifyEmailDnsResponseObject, error) {
+	return nil, errNotImplemented("VerifyEmailDns")
+}
+
+func (Unimplemented) VerifyWaSetup(ctx context.Context, request gen.VerifyWaSetupRequestObject) (gen.VerifyWaSetupResponseObject, error) {
+	return nil, errNotImplemented("VerifyWaSetup")
 }
 
 func (Unimplemented) RequestVoiceCall(ctx context.Context, request gen.RequestVoiceCallRequestObject) (gen.RequestVoiceCallResponseObject, error) {
@@ -970,4 +1070,12 @@ func (Unimplemented) SetDefaultPaymentMethod(ctx context.Context, request gen.Se
 
 func (Unimplemented) TopUpWallet(ctx context.Context, request gen.TopUpWalletRequestObject) (gen.TopUpWalletResponseObject, error) {
 	return nil, errNotImplemented("TopUpWallet")
+}
+
+func (Unimplemented) CompleteWaEmbeddedSignup(ctx context.Context, request gen.CompleteWaEmbeddedSignupRequestObject) (gen.CompleteWaEmbeddedSignupResponseObject, error) {
+	return nil, errNotImplemented("CompleteWaEmbeddedSignup")
+}
+
+func (Unimplemented) GetWaEmbeddedSignupConfig(ctx context.Context, request gen.GetWaEmbeddedSignupConfigRequestObject) (gen.GetWaEmbeddedSignupConfigResponseObject, error) {
+	return nil, errNotImplemented("GetWaEmbeddedSignupConfig")
 }

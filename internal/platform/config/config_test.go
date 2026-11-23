@@ -231,3 +231,22 @@ func TestDNDRegisterDefaultsToNoneAndRefusesAnUnknownName(t *testing.T) {
 		t.Fatal("Load accepted DND_REGISTER=some-provider")
 	}
 }
+
+func TestDevEndpointsRefuseToStartInProduction(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("ENABLE_DEV_ENDPOINTS", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("started with dev endpoints on in production")
+	}
+
+	t.Setenv("ENABLE_DEV_ENDPOINTS", "false")
+	if _, err := Load(); err != nil {
+		t.Fatalf("production without dev endpoints refused to start: %v", err)
+	}
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("ENABLE_DEV_ENDPOINTS", "true")
+	if _, err := Load(); err != nil {
+		t.Fatalf("a test box with dev endpoints refused to start: %v", err)
+	}
+}
