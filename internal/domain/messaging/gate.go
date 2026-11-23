@@ -11,6 +11,10 @@ import (
 // criticises incumbents for.
 var (
 	ErrTenantSuspended = errors.New("messaging: tenant is suspended")
+	// ErrChannelUnavailable is a send on a channel that is not live for this
+	// tenant: the deployment has no real connector for it, or the operator has
+	// not switched it on for them. Nothing is held and nothing is dispatched.
+	ErrChannelUnavailable = errors.New("messaging: this channel is not live for this account")
 	// ErrEntityNotRegistered is a tenant whose own registration with the
 	// destination's regulator is not complete — in India, the principal entity
 	// AND the telemarketer mapping. The dashboard has refused to start a
@@ -102,6 +106,9 @@ var (
 // thing in the system.
 type GateInput struct {
 	TenantStatus string
+	// ChannelUnavailable says the channel is not live for this tenant and
+	// this send is not a simulated one.
+	ChannelUnavailable bool
 	// EntityNotRegistered says the tenant's entity-tier registrations for the
 	// sender's country are not all approved. Negative so a caller that never
 	// looked is not mistaken for one that was told no; every dispatch path sets it.
@@ -168,6 +175,9 @@ type GateInput struct {
 func Check(input GateInput) error {
 	if input.TenantStatus == "suspended" {
 		return ErrTenantSuspended
+	}
+	if input.ChannelUnavailable {
+		return ErrChannelUnavailable
 	}
 	if !input.RecipientValid {
 		return ErrInvalidRecipient
@@ -281,7 +291,7 @@ func IsRefusal(err error) bool {
 // reads it, and a test checks that each maps to a code the contract declares,
 // so a new refusal cannot reach a customer as "Refused" with no reason.
 var refusals = []error{
-	ErrTenantSuspended, ErrSenderNotApproved, ErrTemplateNotApproved,
+	ErrTenantSuspended, ErrChannelUnavailable, ErrSenderNotApproved, ErrTemplateNotApproved,
 	ErrSenderTemplateMismatch, ErrSuppressed, ErrDNDBlocked, ErrDNDCheckUnavailable,
 	ErrInsufficientFunds,
 	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
@@ -305,6 +315,8 @@ func GateFailureCode(err error) string {
 		return "content_not_allowed"
 	case errors.Is(err, ErrTenantSuspended):
 		return "tenant_suspended"
+	case errors.Is(err, ErrChannelUnavailable):
+		return "channel_unavailable"
 	case errors.Is(err, ErrEntityNotRegistered):
 		return "entity_not_registered"
 	case errors.Is(err, ErrSenderNotApproved):

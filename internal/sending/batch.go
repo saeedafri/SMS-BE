@@ -152,7 +152,8 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 
 		dndBlocked, dndUnavailable := s.dndStatus(ctx, context.sender.Channel, msisdn, context.template)
 		gateErr := messaging.Check(messaging.GateInput{
-			TenantStatus: context.tenantStatus, SenderStatus: context.sender.Status,
+			TenantStatus: context.tenantStatus, ChannelUnavailable: context.channelRefused,
+			SenderStatus:        context.sender.Status,
 			EntityNotRegistered: !entityRegistered,
 			SenderID:            context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
@@ -429,7 +430,9 @@ func (s *Service) writeBatch(ctx context.Context, records []store.MessageRecord,
 // batchContext is everything identical across a campaign's recipients,
 // resolved once instead of per message.
 type batchContext struct {
-	sender         store.SenderID
+	sender store.SenderID
+	// channelRefused says the leg's channel is not live for this tenant.
+	channelRefused bool
 	templateID     uuid.UUID
 	templateStatus string
 	templateSender string

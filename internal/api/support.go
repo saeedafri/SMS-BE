@@ -8,6 +8,7 @@ import (
 
 	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -294,6 +295,13 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 		return gen.ReplyToConversation422JSONResponse(errorBody(codeValidation,
 			"This contact has opted out, so they cannot be messaged.")), nil
 	}
+	disposition, err := s.channelDisposition(ctx, identity.TenantID, conversation.Channel, false)
+	if err != nil {
+		return nil, err
+	}
+	if disposition != sending.SendLive {
+		return gen.ReplyToConversation422JSONResponse(channelUnavailable()), nil
+	}
 
 	segments := billing.SegmentCount(body)
 
@@ -309,8 +317,14 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	// is reproducible rather than a coin toss.
 	status := "queued"
 	messageID := uuid.NewString()
-	if s.Connector != nil {
-		receipts, err := s.Connector.Submit(ctx, []connector.Submission{{
+	// The channel's own gateway, as a campaign message would take. The sandbox
+	// is only what a deployment with no gateway for this channel falls back to.
+	gateway := s.Carriers.For(conversation.Channel)
+	if gateway == nil {
+		gateway = s.Connector
+	}
+	if gateway != nil {
+		receipts, err := gateway.Submit(ctx, []connector.Submission{{
 			MessageID: messageID, Msisdn: conversation.Identity,
 			Body: body, Channel: conversation.Channel,
 			Country: conversation.Country,
@@ -333,7 +347,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 			// TakeReportsFor, not DrainReports: draining emptied the whole
 			// queue to find one report and discarded the rest, so every other
 			// message in flight lost its settlement and stalled at "sent".
-			if sandbox, ok := s.Connector.(*connector.Sandbox); ok {
+			if sandbox, ok := gateway.(*connector.Sandbox); ok {
 				for _, report := range sandbox.TakeReportsFor(messageID) {
 					if report.Delivered {
 						status = "delivered"

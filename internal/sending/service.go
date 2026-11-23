@@ -41,6 +41,10 @@ type Service struct {
 	// is the one that matters.
 	Logger *slog.Logger
 
+	// Channels says whether a channel is live, simulated or refused for a
+	// tenant. Nil treats every channel as live.
+	Channels ChannelCheck
+
 	// Hot is the configuration cache the send path reads through. Nil means
 	// every lookup goes to Postgres, which is the behaviour before this existed
 	// and what the tests that assert on freshness rely on.
@@ -214,6 +218,10 @@ type SendRequest struct {
 	// OneTimeCode marks a Verify message whose body is a live code. Its text is
 	// never stored, and the carrier receipt's text field is blanked.
 	OneTimeCode bool
+
+	// TestMode is a send made with a developer test key. On a channel in
+	// sandbox mode it is simulated rather than refused.
+	TestMode bool
 }
 
 // storedText is the text a message row keeps: nil when there is none to show, and
@@ -294,14 +302,28 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 
 	// 3. Price it. Segment arithmetic is shared with the estimate endpoint, so
 	// the quote a user saw and the charge they get cannot disagree.
+	// What this channel does for this tenant: go out, be simulated, or be
+	// refused. Asked before the price, so a channel that is not live says so
+	// rather than "no rate". A simulated message costs nothing.
+	disposition, err := s.disposition(ctx, identity.TenantID, sender.Channel, request.TestMode)
+	if err != nil {
+		return SendResult{}, err
+	}
 	segments := billing.SegmentCount(request.Body)
 	rate, err := store.CachedPricingRate(ctx, s.DB, s.Hot, identity.TenantID, sender.Country, sender.Channel, "")
-	if err != nil {
+	if err != nil && disposition != SendRefused {
 		return SendResult{Status: "rejected", FailureCode: "no_rate",
 				Currency: refusalCurrency(identity, sender.Country)},
 			fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel)
 	}
+	if err != nil {
+		rate = store.PricingRate{Currency: refusalCurrency(identity, sender.Country)}
+	}
 	cost := int64(segments) * rate.PerSegmentMinor
+	simulated := disposition == SendSimulated
+	if simulated {
+		cost = 0
+	}
 
 	// 4. Gather the rest of the gate's inputs.
 	templateStatus, templateSender := "", ""
@@ -361,7 +383,8 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	// 5. The gate. Nothing has been charged and nothing has been sent yet, so
 	// a refusal here costs the tenant nothing at all.
 	gateErr := messaging.Check(messaging.GateInput{
-		TenantStatus: tenantStatus, SenderStatus: sender.Status,
+		TenantStatus: tenantStatus, ChannelUnavailable: disposition == SendRefused,
+		SenderStatus:        sender.Status,
 		EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
 		SenderID:            sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,
@@ -418,16 +441,19 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	}
 
 	// 6. Hold the money. The hold is taken before submission so a carrier can
-	// never receive a message we have not reserved payment for.
-	if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
-		Currency: rate.Currency, Type: "charge", AmountMinor: cost,
-		Description: "Message hold " + messageID.String(),
-	}); err != nil {
-		if errors.Is(err, store.ErrInsufficientFunds) {
-			return SendResult{Status: "rejected", FailureCode: "insufficient_balance"},
-				messaging.ErrInsufficientFunds
+	// never receive a message we have not reserved payment for. A simulated
+	// message costs nothing, so it holds nothing: the ledger has no zero row.
+	if cost > 0 {
+		if _, err := store.AppendLedgerEntry(ctx, s.DB, identity, store.LedgerEntry{
+			Currency: rate.Currency, Type: "charge", AmountMinor: cost,
+			Description: "Message hold " + messageID.String(),
+		}); err != nil {
+			if errors.Is(err, store.ErrInsufficientFunds) {
+				return SendResult{Status: "rejected", FailureCode: "insufficient_balance"},
+					messaging.ErrInsufficientFunds
+			}
+			return SendResult{}, err
 		}
-		return SendResult{}, err
 	}
 
 	// 7. Pick the path, record as queued, then submit.
@@ -447,7 +473,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt:        now, UpdatedAt: now, Version: 1,
 		SentByKind: sentByKind, SentByID: sentByID, OTP: request.OneTimeCode,
-		RenderedText: storedText(sentText, request.OneTimeCode),
+		RenderedText: storedText(sentText, request.OneTimeCode), Simulated: simulated,
 	}, "", string(messaging.StateQueued), ""); err != nil {
 		return SendResult{}, err
 	}
@@ -458,7 +484,11 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	}
 
 	entityID, dltTemplateID := s.dltIDs(ctx, identity, sender.Channel, sender.Country, template)
-	receipts, err := s.carrierFor(sender.Channel).Submit(ctx, []connector.Submission{{
+	gateway := s.carrierFor(sender.Channel)
+	if simulated {
+		gateway = s.Connector
+	}
+	receipts, err := gateway.Submit(ctx, []connector.Submission{{
 		MessageID: messageID.String(), Msisdn: msisdn, Sender: sender.Header,
 		Body:    sentText,
 		Channel: sender.Channel, Country: sender.Country,
@@ -501,7 +531,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		Carrier: carrier, RouteID: routeID, DeliveredChannel: carriedBy(sender.Channel, false),
 		CreatedAt: now, SentAt: &sentAt, UpdatedAt: time.Now().UTC(), Version: 2,
 		SentByKind: sentByKind, SentByID: sentByID, OTP: request.OneTimeCode,
-		RenderedText: storedText(sentText, request.OneTimeCode),
+		RenderedText: storedText(sentText, request.OneTimeCode), Simulated: simulated,
 	}
 	update.ErrorCode, update.ErrorClass = outcome.codes()
 	if outcome.release {
@@ -680,7 +710,7 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		JourneyID: current.JourneyID, JourneyName: current.JourneyName,
 		SentByKind: current.SentByKind, SentByID: current.SentByID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
-		RenderedText: current.RenderedText, OTP: current.OTP,
+		RenderedText: current.RenderedText, OTP: current.OTP, Simulated: current.Simulated,
 	}
 	applyReceipt(&record, report)
 	if report.Delivered {

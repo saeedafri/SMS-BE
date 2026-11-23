@@ -284,6 +284,7 @@ func (s *Server) SendMessage(ctx context.Context, request gen.SendMessageRequest
 	result, err := service.Send(ctx, identity, sending.SendRequest{
 		SenderID: request.Body.SenderId, TemplateID: request.Body.TemplateId,
 		Msisdn: to, Body: body, Variables: variables,
+		TestMode: keyEnvironment(ctx) == "test",
 	})
 	// Send returns a populated result AND the gate's error when it declines,
 	// because a refused send is still a recorded message with a reason. Only a
@@ -439,6 +440,10 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 		flag := gen.MessageFraudFlag(record.FraudFlag)
 		entry.FraudFlag = &flag
 	}
+	// Stated on every row, false included: a simulated message never left the
+	// platform and was never billed, and a client must not have to guess.
+	simulated := record.Simulated
+	entry.Simulated = &simulated
 	return entry
 }
 

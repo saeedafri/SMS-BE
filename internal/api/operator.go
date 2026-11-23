@@ -422,7 +422,13 @@ func (s *Server) GetTenantDetail(ctx context.Context, request gen.GetTenantDetai
 		tenant.MessagesSent30d = usage.MessagesSent30d
 		tenant.LastActivityAt = usage.LastActivityAt
 	}
-	return gen.GetTenantDetail200JSONResponse(toTenantDetail(tenant)), nil
+	detail := toTenantDetail(tenant)
+	channels, err := s.tenantCapabilities(ctx, tenant.ID)
+	if err != nil {
+		return nil, err
+	}
+	detail.Channels = &channels
+	return gen.GetTenantDetail200JSONResponse(detail), nil
 }
 
 func (s *Server) SuspendTenant(ctx context.Context, request gen.SuspendTenantRequestObject) (

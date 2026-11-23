@@ -81,6 +81,24 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 
 	var created LedgerEntry
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
+		var err error
+		created, err = appendLedgerInTx(ctx, tx, id, entry)
+		return err
+	})
+	if errors.Is(err, ErrInsufficientFunds) {
+		return LedgerEntry{}, ErrInsufficientFunds
+	}
+	if err != nil {
+		return LedgerEntry{}, fmt.Errorf("store: append ledger entry: %w", err)
+	}
+	return created, nil
+}
+
+// appendLedgerInTx is AppendLedgerEntry inside a transaction the caller
+// holds, for a ledger movement that must land together with another write.
+func appendLedgerInTx(ctx context.Context, tx pgx.Tx, id Identity, entry LedgerEntry) (LedgerEntry, error) {
+	var created LedgerEntry
+	err := func() error {
 		// Create the wallet on first use, then lock it. ON CONFLICT DO NOTHING
 		// keeps two simultaneous first top-ups from racing on the insert.
 		if _, err := tx.Exec(ctx,
@@ -149,14 +167,8 @@ func AppendLedgerEntry(ctx context.Context, pool *pgxpool.Pool, id Identity,
 			}
 		}
 		return nil
-	})
-	if errors.Is(err, ErrInsufficientFunds) {
-		return LedgerEntry{}, ErrInsufficientFunds
-	}
-	if err != nil {
-		return LedgerEntry{}, fmt.Errorf("store: append ledger entry: %w", err)
-	}
-	return created, nil
+	}()
+	return created, err
 }
 
 // LedgerPage returns one page of entries, newest first, using keyset

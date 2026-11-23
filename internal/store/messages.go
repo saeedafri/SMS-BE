@@ -69,6 +69,9 @@ type MessageRecord struct {
 	// OTP marks a Verify one-time-code message: its text is never stored and the
 	// receipt's own text field is blanked out of DLRRaw.
 	OTP bool
+	// Simulated is a message accepted on a sandbox channel: recorded, never
+	// handed to a carrier, never billed. Its CostMinor is always 0.
+	Simulated bool
 
 	// The carrier's receipt that settled the message. All nil until one has.
 	DLRStat        *string
@@ -97,7 +100,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 		segments, cost_minor, currency, route_id, carrier_ref, carrier,
 		created_at, sent_at, delivered_at, updated_at, version,
 		sent_by_kind, sent_by_id, read_at, rendered_text, otp, dlr_stat, dlr_err,
-		dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw)`)
+		dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated)`)
 	if err != nil {
 		return fmt.Errorf("store: prepare message batch: %w", err)
 	}
@@ -115,6 +118,7 @@ func InsertMessages(ctx context.Context, conn driver.Conn, records []MessageReco
 			record.SentByKind, record.SentByID, record.ReadAt,
 			record.RenderedText, record.OTP, record.DLRStat, record.DLRErr,
 			record.DLRSubmittedAt, record.DLRDoneAt, record.DLRReceivedAt, record.DLRRaw,
+			record.Simulated,
 		); err != nil {
 			return fmt.Errorf("store: append message: %w", err)
 		}
@@ -232,7 +236,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 		       msisdn, email, status,
 		       error_code, error_class, fraud_flag, segments, cost_minor, currency,
 		       `+deliveredChannelColumn+`,
-		       created_at, sent_at, delivered_at, updated_at
+		       created_at, sent_at, delivered_at, updated_at, simulated
 		FROM messages FINAL
 		WHERE `+where+`
 		ORDER BY created_at DESC, id DESC
@@ -251,7 +255,7 @@ func QueryMessages(ctx context.Context, conn driver.Conn, tenantID uuid.UUID,
 			&record.ErrorCode, &record.ErrorClass, &record.FraudFlag, &record.Segments,
 			&record.CostMinor, &record.Currency, &record.DeliveredChannel,
 			&record.CreatedAt, &record.SentAt, &record.DeliveredAt,
-			&record.UpdatedAt); err != nil {
+			&record.UpdatedAt, &record.Simulated); err != nil {
 			return nil, 0, fmt.Errorf("store: scan message: %w", err)
 		}
 		out = append(out, record)
@@ -292,7 +296,7 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		       msisdn, email, route_id, carrier_ref, carrier, delivered_channel,
 		       created_at, sent_at, delivered_at, read_at, sent_by_kind, sent_by_id,
 		       error_code, error_class, version, rendered_text, otp, dlr_stat, dlr_err,
-		       dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw
+		       dlr_submitted_at, dlr_done_at, dlr_received_at, dlr_raw, simulated
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.Status, &record.Segments, &record.CostMinor,
@@ -304,7 +308,7 @@ func LoadMessageState(ctx context.Context, conn driver.Conn, tenantID, messageID
 		&record.DeliveredAt, &record.ReadAt, &record.SentByKind, &record.SentByID,
 		&record.ErrorCode, &record.ErrorClass, &record.Version, &record.RenderedText,
 		&record.OTP, &record.DLRStat, &record.DLRErr, &record.DLRSubmittedAt,
-		&record.DLRDoneAt, &record.DLRReceivedAt, &record.DLRRaw)
+		&record.DLRDoneAt, &record.DLRReceivedAt, &record.DLRRaw, &record.Simulated)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}
@@ -342,7 +346,7 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		       msisdn, email, status, error_code, error_class, fraud_flag,
 		       segments, cost_minor, currency, carrier, carrier_ref,
 		       `+deliveredChannelColumn+`,
-		       created_at, sent_at, delivered_at, updated_at
+		       created_at, sent_at, delivered_at, updated_at, simulated
 		FROM messages FINAL WHERE tenant_id = ? AND id = ?`,
 		tenantID, messageID,
 	).Scan(&record.ID, &record.CampaignID, &record.CampaignName,
@@ -351,7 +355,7 @@ func GetMessage(ctx context.Context, conn driver.Conn, tenantID, messageID uuid.
 		&record.Status, &record.ErrorCode, &record.ErrorClass, &record.FraudFlag,
 		&record.Segments, &record.CostMinor, &record.Currency, &record.Carrier,
 		&record.CarrierRef, &record.DeliveredChannel, &record.CreatedAt, &record.SentAt,
-		&record.DeliveredAt, &record.UpdatedAt)
+		&record.DeliveredAt, &record.UpdatedAt, &record.Simulated)
 	if err != nil {
 		return MessageRecord{}, ErrNotFound
 	}

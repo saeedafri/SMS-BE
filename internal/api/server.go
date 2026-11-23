@@ -148,6 +148,16 @@ type Server struct {
 	// its hourly tick scans the warehouse once a month rather than every hour.
 	invoicedPeriod time.Time
 
+	// ChannelModes, when set, replaces what this deployment's own connectors
+	// say about each channel's mode. Tests set it: their carrier is the
+	// sandbox, which on a real deployment is exactly what makes a channel not
+	// live. Production leaves it nil.
+	ChannelModes func(channel string) gen.CapabilityMode
+
+	// ConfigKeys says which configuration keys are present, by name. Values
+	// are never held here, so none can be returned.
+	ConfigKeys map[string]bool
+
 	// Connector is the carrier the send path submits to. Nil means no data
 	// plane, so campaign and send endpoints refuse rather than silently
 	// accepting messages nothing will ever deliver.
@@ -442,6 +452,9 @@ func NewRouter(s *Server) http.Handler {
 
 	// Test send to a few of the customer's own handsets. See test_send.go.
 	s.mountTestSendRoutes(r)
+
+	// Switching a channel on or off for a tenant. See channels.go.
+	s.mountChannelRoutes(r)
 
 	// Keyword chatbots. See chatbots.go.
 	s.mountChatbotRoutes(r)

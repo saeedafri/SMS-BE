@@ -253,6 +253,10 @@ type mixedPlan struct {
 	// held, and the caller gets the reason.
 	refusal    string
 	refusalErr error
+
+	// disposition is what this message's channel does for its tenant. A
+	// simulated message costs 0 and goes to the sandbox, never a carrier.
+	disposition Disposition
 }
 
 // walletKey groups the messages whose holds can move as one ledger entry.
@@ -291,7 +295,8 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 	for _, plan := range plans {
 		state := tenants[plan.pending.identity.TenantID]
 		gateErr := messaging.Check(messaging.GateInput{
-			TenantStatus: state.status, SenderStatus: plan.sender.Status,
+			TenantStatus: state.status, ChannelUnavailable: plan.disposition == SendRefused,
+			SenderStatus: plan.sender.Status,
 			EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot,
 				plan.pending.identity, plan.sender.Country),
 			SenderID:       plan.sender.ID.String(),
@@ -411,20 +416,33 @@ func (s *Service) planMixedBatch(ctx context.Context, batch []*pendingSend) (
 			msisdn, valid = audience.NormaliseE164(request.Msisdn)
 		}
 
+		// Asked before the price, as on the single-send path, so a channel
+		// that is not live says so rather than "no rate".
+		disposition, err := s.disposition(ctx, identity.TenantID, sender.Channel, request.TestMode)
+		if err != nil {
+			pending.answer(SendResult{}, err)
+			continue
+		}
 		segments := billing.SegmentCount(request.Body)
 		rate, err := store.CachedPricingRate(ctx, s.DB, s.Hot, identity.TenantID,
 			sender.Country, sender.Channel, "")
-		if err != nil {
+		if err != nil && disposition != SendRefused {
 			pending.answer(SendResult{Status: "rejected", FailureCode: "no_rate",
 				Currency: refusalCurrency(identity, sender.Country)},
 				fmt.Errorf("sending: no rate for %s/%s", sender.Country, sender.Channel))
 			continue
 		}
+		if err != nil {
+			rate = store.PricingRate{Currency: refusalCurrency(identity, sender.Country)}
+		}
 
 		plan := &mixedPlan{
 			pending: pending, messageID: uuid.New(), sender: sender, rate: rate,
 			msisdn: msisdn, valid: valid, segments: segments,
-			cost: int64(segments) * rate.PerSegmentMinor,
+			cost: int64(segments) * rate.PerSegmentMinor, disposition: disposition,
+		}
+		if plan.disposition == SendSimulated {
+			plan.cost = 0
 		}
 
 		if request.TemplateID != nil {
@@ -620,6 +638,7 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 			DeliveredChannel: carriedBy(plan.sender.Channel, plan.refusal != ""),
 			CreatedAt:        now, UpdatedAt: now, Version: 1,
 			SentByKind: sentByKind, SentByID: sentByID,
+			Simulated: plan.refusal == "" && plan.disposition == SendSimulated,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: plan.pending.identity.TenantID, MessageID: plan.messageID,
@@ -635,6 +654,10 @@ func (s *Service) recordMixedQueued(ctx context.Context, plans []*mixedPlan) err
 	}
 	return s.writeBatch(ctx, records, events, rollups)
 }
+
+// simulatedGroup keys the simulated messages of a batch, which no channel name
+// can collide with.
+const simulatedGroup = "simulated"
 
 // submitMixedBatch hands the accepted messages to their carriers, one call per
 // channel rather than one per message.
@@ -652,7 +675,13 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 		}
 		entityID, dltTemplateID := s.dltIDs(ctx, plan.pending.identity,
 			plan.sender.Channel, plan.sender.Country, plan.template)
-		byChannel[plan.sender.Channel] = append(byChannel[plan.sender.Channel],
+		// Simulated messages are grouped apart: they go to the sandbox whatever
+		// gateway their channel has.
+		group := plan.sender.Channel
+		if plan.disposition == SendSimulated {
+			group = simulatedGroup
+		}
+		byChannel[group] = append(byChannel[group],
 			connector.Submission{
 				MessageID: plan.messageID.String(), Msisdn: plan.msisdn,
 				Sender:  plan.sender.Header,
@@ -671,7 +700,11 @@ func (s *Service) submitMixedBatch(ctx context.Context, plans []*mixedPlan) (
 
 	receipts := map[string]connector.Receipt{}
 	for channel, submissions := range byChannel {
-		batch, err := s.carrierFor(channel).Submit(ctx, submissions)
+		gateway := s.carrierFor(channel)
+		if channel == simulatedGroup {
+			gateway = s.Connector
+		}
+		batch, err := gateway.Submit(ctx, submissions)
 		if err != nil {
 			return nil, fmt.Errorf("sending: submit batch: %w", err)
 		}
@@ -740,6 +773,7 @@ func (s *Service) settleMixedBatch(ctx context.Context, plans []*mixedPlan,
 			Carrier: plan.carrier, RouteID: plan.routeID,
 			DeliveredChannel: carriedBy(plan.sender.Channel, false),
 			CreatedAt:        plan.createdAt, SentAt: &settled, UpdatedAt: settled, Version: 2,
+			Simulated: plan.disposition == SendSimulated,
 		})
 		events = append(events, store.MessageEvent{
 			TenantID: plan.pending.identity.TenantID, MessageID: plan.messageID,

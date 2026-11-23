@@ -275,6 +275,22 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		}
 	}
 
+	// A campaign on a channel that is not live for this tenant is refused
+	// before anything is created, priced or held. Both legs count: a fallback
+	// that cannot send is a campaign that fails halfway.
+	for _, leg := range []*string{&campaign.Channel, campaign.FallbackChannel} {
+		if leg == nil {
+			continue
+		}
+		disposition, err := s.channelDisposition(ctx, identity.TenantID, *leg, false)
+		if err != nil {
+			return nil, err
+		}
+		if disposition != sending.SendLive {
+			return gen.CreateCampaign422JSONResponse(channelUnavailable()), nil
+		}
+	}
+
 	// The tracked link, after drip and once both legs are known: a {{link}} in
 	// either leg's template needs one, and a link needs a {{link}} somewhere.
 	link, linkProblem, err := s.campaignLink(ctx, identity, body.Link, campaign)
@@ -590,7 +606,8 @@ func (s *Server) rawSendingService(ctx context.Context) *sending.Service {
 	}
 	return &sending.Service{DB: s.DB, ClickHouse: clickhouse, Connector: s.Connector,
 		Carriers: s.Carriers, Logger: s.Logger, Hot: s.Hot, Settled: s.MessageSettled, DND: s.DND,
-		Notifier: s, Redis: s.Redis, Async: s.runAsync, LinkBaseURL: s.LinkBaseURL}
+		Notifier: s, Redis: s.Redis, Async: s.runAsync, LinkBaseURL: s.LinkBaseURL,
+		Channels: s.channelDisposition}
 }
 
 // StartSendCoalescer turns on batching for the transactional send API. Called

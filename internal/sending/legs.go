@@ -54,6 +54,13 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 			sender.Country, sender.Channel)
 	}
 
+	// A campaign or journey is never a test-key send, so a leg on a channel
+	// that is not live for this tenant refuses every recipient at the gate.
+	disposition, err := s.disposition(ctx, identity.TenantID, sender.Channel, false)
+	if err != nil {
+		return batchContext{}, err
+	}
+
 	// The brand every message on this leg goes out under, and the path its
 	// traffic takes. One sender per leg, so one of each.
 	rcsCarrier, agentID := s.rcsPath(ctx, identity, sender)
@@ -69,6 +76,7 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 		rcsCarrier: rcsCarrier, agentID: agentID,
 		variableMapping: mapping,
 		skipped:         skipped,
+		channelRefused:  disposition != SendLive,
 	}, nil
 }
 

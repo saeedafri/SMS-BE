@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -348,6 +349,7 @@ func run() error {
 		Abuse: api.AbuseLimits{PerIPMinute: cfg.AbuseIPPerMinute,
 			PerTokenMinute: cfg.AbuseTokenPerMinute, Ignore: cfg.AbuseIgnore},
 		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL, LinkBaseURL: cfg.LinkBaseURL,
+		ConfigKeys:               presentKeys(api.ChannelConfigKeyNames()),
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,
 		CarrierWebhookToken:      cfg.CarrierWebhookToken,
@@ -457,4 +459,15 @@ func run() error {
 	// recorded; abandoning it there is the one shutdown that loses something.
 	apiServer.StopSendCoalescer()
 	return err
+}
+
+// presentKeys says which of these environment keys hold a value. Only the
+// yes or no leaves here: the operator console lists keys by name and presence,
+// and a value it never receives is a value it can never show.
+func presentKeys(names []string) map[string]bool {
+	present := make(map[string]bool, len(names))
+	for _, name := range names {
+		present[name] = strings.TrimSpace(os.Getenv(name)) != ""
+	}
+	return present
 }

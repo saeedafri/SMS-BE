@@ -26,6 +26,7 @@ import (
 	"github.com/saeedafri/sms-be/internal/domain/auth"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
+	gen "github.com/saeedafri/sms-be/internal/gen/api"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -168,7 +169,7 @@ func newHarnessWithInviteCode(t *testing.T, code string) *harness {
 	h.router = api.NewRouter(&api.Server{
 		DB: h.pool, OperatorDB: h.operatorPool, AdminDB: h.admin,
 		EnableDevEndpoints: true, Gateway: billing.ManualGateway{},
-		SignupInviteCode: code,
+		SignupInviteCode: code, ChannelModes: testChannelModes,
 		Logger: slog.New(slog.NewJSONHandler(h.logs,
 			&slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
@@ -210,6 +211,11 @@ func newHarness(t *testing.T) *harness {
 		// than a stub that would agree with whatever the handler did.
 		Media:  mediastore.New(t.TempDir(), []byte("test-signing-key"), "https://api.test"),
 		Logger: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		// The harness's only carrier is the sandbox. Counted as live for SMS
+		// and RCS, the two channels that send for real; WhatsApp and Email
+		// stay in sandbox and Voice disabled, as on a deployment with no
+		// connector for them.
+		ChannelModes: testChannelModes,
 	}
 	h.router = api.NewRouter(h.server)
 	return h
@@ -649,4 +655,14 @@ func (h *harness) registerEntity(tenantID uuid.UUID, country string) {
 			h.t.Fatalf("register entity %s/%s: %v", country, object.Key, err)
 		}
 	}
+}
+
+func testChannelModes(channel string) gen.CapabilityMode {
+	switch channel {
+	case "SMS", "RCS":
+		return gen.CapabilityModeLive
+	case "WHATSAPP", "EMAIL":
+		return gen.CapabilityModeSandbox
+	}
+	return gen.CapabilityModeDisabled
 }
