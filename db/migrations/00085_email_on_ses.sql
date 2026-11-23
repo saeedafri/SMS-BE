@@ -49,25 +49,26 @@ CREATE POLICY email_unsubscribe_tokens_operator ON email_unsubscribe_tokens
     FOR ALL USING (acting_as_operator()) WITH CHECK (acting_as_operator());
 GRANT SELECT, INSERT, DELETE ON email_unsubscribe_tokens TO sms_app;
 
--- Provider events already applied. A redelivered event finds its id here and
--- changes nothing: one suppression or consent write per event, ever.
-CREATE TABLE email_event_receipts (
+-- Provider events already applied (SES events, WhatsApp statuses). A
+-- redelivered event finds its id here and changes nothing: one suppression,
+-- consent write or settlement per event, ever.
+CREATE TABLE provider_event_receipts (
     event_id    text        PRIMARY KEY,
     tenant_id   uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     received_at timestamptz NOT NULL DEFAULT now()
 );
-ALTER TABLE email_event_receipts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE email_event_receipts FORCE  ROW LEVEL SECURITY;
-CREATE POLICY email_event_receipts_isolation ON email_event_receipts
+ALTER TABLE provider_event_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provider_event_receipts FORCE  ROW LEVEL SECURITY;
+CREATE POLICY provider_event_receipts_isolation ON provider_event_receipts
     USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
-GRANT SELECT, INSERT ON email_event_receipts TO sms_app;
+GRANT SELECT, INSERT ON provider_event_receipts TO sms_app;
 
 -- An email campaign's open and click tracking, {opens, clicks}; null elsewhere.
 ALTER TABLE campaigns ADD COLUMN email_tracking jsonb;
 
 -- +goose Down
 ALTER TABLE campaigns DROP COLUMN email_tracking;
-DROP TABLE email_event_receipts;
+DROP TABLE provider_event_receipts;
 DROP TABLE email_unsubscribe_tokens;
 ALTER TABLE tenants DROP COLUMN email_sending_status;
 ALTER TABLE sender_ids DROP COLUMN email_checked_at, DROP COLUMN mail_from_domain;

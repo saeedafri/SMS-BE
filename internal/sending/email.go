@@ -152,7 +152,7 @@ func (s *Service) ApplyEmailEvent(ctx context.Context, event connector.EmailEven
 		return fmt.Errorf("sending: email event without a message: %w", err)
 	}
 	identity := store.Identity{TenantID: tenantID}
-	claimed, err := store.ClaimEmailEvent(ctx, s.DB, identity, event.EventID)
+	claimed, err := store.ClaimProviderEvent(ctx, s.DB, identity, event.EventID)
 	if err != nil || !claimed {
 		return err
 	}

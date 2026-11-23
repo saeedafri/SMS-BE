@@ -353,7 +353,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 		if err != nil {
 			return SendResult{}, err
 		}
-		templateStatus = template.Status
+		templateStatus = SendableStatus(template)
 		templateSender = template.SenderID.String()
 	}
 
@@ -409,8 +409,9 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	gateErr := messaging.Check(messaging.GateInput{
 		TenantStatus: tenantStatus, ChannelUnavailable: disposition == SendRefused,
 		SenderStatus: emailSenderStatus(sender), SendingPaused: paused,
-		EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
-		SenderID:            sender.ID.String(), TemplateStatus: templateStatus,
+		OnboardingIncomplete: whatsAppIncomplete(sender),
+		EntityNotRegistered:  !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
+		SenderID:             sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,
 		CarrierTemplateStatus: s.carrierTemplateStatusFor(sender.Channel, rcsCarrier, template),
 		BalanceMinor:          balance, CostMinor: cost, RecipientValid: recipientValid,
@@ -736,7 +737,11 @@ func (s *Service) settle(ctx context.Context, identity store.Identity,
 		SentByKind: current.SentByKind, SentByID: current.SentByID,
 		CreatedAt: current.CreatedAt, UpdatedAt: occurred, Version: current.Version + 1,
 		RenderedText: current.RenderedText, OTP: current.OTP, Simulated: current.Simulated,
-		FallbackReason: current.FallbackReason,
+		FallbackReason: current.FallbackReason, ProviderBilling: current.ProviderBilling,
+	}
+	if report.ProviderBilling != "" {
+		billing := report.ProviderBilling
+		record.ProviderBilling = &billing
 	}
 	applyReceipt(&record, report)
 	if report.Delivered {

@@ -193,9 +193,20 @@ func (s *Server) tenantCapabilities(ctx context.Context, tenantID uuid.UUID) (
 	if err != nil {
 		return nil, err
 	}
+	disconnected, err := store.WhatsAppDisconnected(ctx, s.DB, tenantID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]gen.ChannelCapability, 0, len(channelOrder))
 	for _, channel := range channelOrder {
-		out = append(out, s.channelCapability(channel, enabled[string(channel)]))
+		capability := s.channelCapability(channel, enabled[string(channel)])
+		// Meta removed or disabled the tenant's WhatsApp account: nothing of
+		// theirs can send until they connect again.
+		if channel == gen.ChannelIdWHATSAPP && disconnected {
+			reason := "Your WhatsApp number was disconnected from Relay. Connect it again to send."
+			capability.Mode, capability.Reason = gen.CapabilityModeSandbox, &reason
+		}
+		out = append(out, capability)
 	}
 	return out, nil
 }

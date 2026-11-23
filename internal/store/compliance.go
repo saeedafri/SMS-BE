@@ -48,6 +48,10 @@ type SenderID struct {
 	QualityRating *string
 	MessagingTier *int32
 
+	// WhatsApp is a WhatsApp sender's connection facts; nil on every other
+	// channel.
+	WhatsApp *WhatsAppFacts
+
 	// MailFromDomain is an email sender's custom MAIL FROM domain, and
 	// EmailCheckedAt when its identity was last read from the provider.
 	MailFromDomain *string
@@ -182,7 +186,10 @@ func ListSenderIDs(ctx context.Context, pool *pgxpool.Pool, id Identity,
 		// result set per connection, so leaving this open makes the DNS query
 		// fail with a "conn busy" that looks nothing like its cause.
 		rows.Close()
-		return LoadSenderDNSRecords(ctx, tx, out)
+		if err := LoadSenderDNSRecords(ctx, tx, out); err != nil {
+			return err
+		}
+		return LoadWhatsAppFacts(ctx, tx, out)
 	})
 	if err != nil {
 		return nil, 0, fmt.Errorf("store: list sender ids: %w", err)
@@ -196,13 +203,17 @@ func GetSenderID(ctx context.Context, pool *pgxpool.Pool, id Identity, senderID 
 		var err error
 		sender, err = scanSender(tx.QueryRow(ctx,
 			`SELECT `+senderColumns+` FROM sender_ids WHERE id = $1`, senderID))
-		if err != nil || sender.Channel != "EMAIL" {
+		if err != nil {
 			return err
 		}
-		// An email sender's records are its domain's state, which every reader
-		// of one sender — the send path included — judges it by.
+		// An email sender's records and a WhatsApp sender's connection are
+		// the state every reader of one sender — the send path included —
+		// judges it by.
 		senders := []SenderID{sender}
 		if err := LoadSenderDNSRecords(ctx, tx, senders); err != nil {
+			return err
+		}
+		if err := LoadWhatsAppFacts(ctx, tx, senders); err != nil {
 			return err
 		}
 		sender = senders[0]
@@ -371,6 +382,10 @@ type Template struct {
 	RCSContent   []byte
 	WAContent    []byte
 	EmailContent []byte
+	// WADefinition is a WhatsApp template on Meta's component model, and
+	// WAState Meta's standing for it, which decides whether it can be sent.
+	WADefinition []byte
+	WAState      []byte
 
 	// The carrier's own approval, which is not the same approval as Status.
 	// See db/migrations/00037_rcs_carrier_templates.sql — a template can be
@@ -389,7 +404,7 @@ const templateColumns = `id, sender_id, name, channel, country, body, category,
 	variables, cta_url, status, rejection_reason, created_at,
 	rcs_content, wa_content, email_content,
 	carrier_vendor, carrier_template_id, carrier_status,
-	carrier_rejection_reason, carrier_submitted_at, carrier_updated_at`
+	carrier_rejection_reason, carrier_submitted_at, carrier_updated_at, wa_definition, wa_state`
 
 func scanTemplate(row pgx.Row) (Template, error) {
 	var t Template
@@ -398,7 +413,8 @@ func scanTemplate(row pgx.Row) (Template, error) {
 		&t.Variables, &t.CtaURL, &t.Status, &t.RejectionReason, &t.CreatedAt,
 		&t.RCSContent, &t.WAContent, &t.EmailContent,
 		&t.CarrierVendor, &t.CarrierTemplateID, &t.CarrierStatus,
-		&t.CarrierRejectionReason, &t.CarrierSubmittedAt, &t.CarrierUpdatedAt)
+		&t.CarrierRejectionReason, &t.CarrierSubmittedAt, &t.CarrierUpdatedAt,
+		&t.WADefinition, &t.WAState)
 	return t, err
 }
 
@@ -527,8 +543,8 @@ func CreateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templa
 		created, err = scanTemplate(tx.QueryRow(ctx, `
 			INSERT INTO templates (tenant_id, sender_id, name, channel, country,
 			    body, category, external_id, dlt_category, variables, cta_url,
-			    rcs_content, wa_content, email_content)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			    rcs_content, wa_content, email_content, wa_definition, wa_state)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 			RETURNING `+templateColumns,
 			id.TenantID, template.SenderID, template.Name, template.Channel,
 			template.Country, template.Body, template.Category,
@@ -539,7 +555,8 @@ func CreateTemplate(ctx context.Context, pool *pgxpool.Pool, id Identity, templa
 			// to the message table — see internal/store/messages.go.
 			nullableJSON(template.RCSContent),
 			nullableJSON(template.WAContent),
-			nullableJSON(template.EmailContent)))
+			nullableJSON(template.EmailContent), nullableJSON(template.WADefinition),
+			nullableJSON(template.WAState)))
 		return err
 	})
 	if isUniqueViolation(err) {

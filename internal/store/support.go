@@ -236,6 +236,7 @@ type Conversation struct {
 	Unread             bool
 	Suppressed         bool
 	LastMessagePreview string
+	LastInboundAt      *time.Time
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 }
@@ -271,6 +272,9 @@ const conversationColumns = `
 	COALESCE((SELECT m.body FROM conversation_messages m
 	          WHERE m.conversation_id = c.id
 	          ORDER BY m.created_at DESC, m.id DESC LIMIT 1), ''),
+	-- The customer's last message, which opens WhatsApp's 24-hour window.
+	(SELECT max(m.created_at) FROM conversation_messages m
+	 WHERE m.conversation_id = c.id AND m.direction = 'inbound'),
 	c.created_at, c.updated_at`
 
 func scanConversation(row pgx.Row) (Conversation, error) {
@@ -279,7 +283,7 @@ func scanConversation(row pgx.Row) (Conversation, error) {
 		&conversation.ContactName, &conversation.Country,
 		&conversation.Channel, &conversation.Status,
 		&conversation.Unread, &conversation.Suppressed,
-		&conversation.LastMessagePreview,
+		&conversation.LastMessagePreview, &conversation.LastInboundAt,
 		&conversation.CreatedAt, &conversation.UpdatedAt)
 	return conversation, err
 }

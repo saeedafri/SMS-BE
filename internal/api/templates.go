@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/saeedafri/sms-be/internal/domain/compliance"
 	"github.com/saeedafri/sms-be/internal/domain/rcs"
+	"github.com/saeedafri/sms-be/internal/domain/whatsapp"
 	"github.com/saeedafri/sms-be/internal/store"
 
 	gen "github.com/saeedafri/sms-be/internal/gen/api"
@@ -81,7 +84,88 @@ func templateResponse(t store.Template) gen.Template {
 			template.EmailContent = &content
 		}
 	}
+	if len(t.WADefinition) > 0 {
+		var definition gen.WaTemplateDefinition
+		if err := json.Unmarshal(t.WADefinition, &definition); err == nil {
+			template.WaDefinition = &definition
+		}
+	}
+	if len(t.WAState) > 0 {
+		var state gen.WaTemplateState
+		if err := json.Unmarshal(t.WAState, &state); err == nil {
+			template.WaState = &state
+		}
+	}
 	return template
+}
+
+// tooManyTemplates is Meta's hourly allowance on new templates, answered with
+// the 429 the frontend's mock gives; the contract does not declare it yet.
+type tooManyTemplates struct{}
+
+func (tooManyTemplates) VisitCreateTemplateResponse(w http.ResponseWriter) error {
+	writeError(w, http.StatusTooManyRequests, "rate_limited",
+		"WhatsApp allows 100 new templates an hour. Try again later.")
+	return nil
+}
+
+// whatsAppTemplate checks a template written in Meta's component model, sends
+// it for Meta's review, and returns what to store: the definition, Meta's
+// first standing for it, and its variables. A refusal is a response to return.
+func (s *Server) whatsAppTemplate(ctx context.Context, identity store.Identity, sender store.SenderID,
+	submitted *gen.WaTemplateDefinition) ([]byte, []byte, []string, gen.CreateTemplateResponseObject, error) {
+
+	raw, err := json.Marshal(submitted)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	definition, err := whatsapp.Parse(raw)
+	if err != nil {
+		return nil, nil, nil, gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
+			"The WhatsApp template could not be read.")), nil
+	}
+	if problem := definition.Validate(); problem != "" {
+		return nil, nil, nil, gen.CreateTemplate422JSONResponse(errorBody(codeValidation, problem)), nil
+	}
+	clash, recent, err := store.WhatsAppTemplateCreation(ctx, s.DB, identity, sender.ID,
+		definition.Name, definition.Language, s.now().Add(-time.Hour))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if clash {
+		return nil, nil, nil, gen.CreateTemplate409JSONResponse(errorBody(codeConflict, fmt.Sprintf(
+			"A template called %s already exists in this language.", definition.Name))), nil
+	}
+	if recent >= whatsapp.TemplatesPerHour {
+		return nil, nil, nil, tooManyTemplates{}, nil
+	}
+	// Meta reviews templates on the tenant's own WhatsApp account, so the
+	// number has to be connected first.
+	if sender.WhatsApp == nil || !sender.WhatsApp.HasToken || sender.WabaID == nil {
+		return nil, nil, nil, gen.CreateTemplate422JSONResponse(errorBody("onboarding_incomplete",
+			"Connect this WhatsApp number before creating templates for it.")), nil
+	}
+	token := ""
+	if s.Secrets != nil {
+		sealed, err := store.WhatsAppToken(ctx, s.DB, identity, sender.ID)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if token, err = s.Secrets.Decrypt(sealed); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	metaID, err := s.whatsAppProvider().SubmitTemplate(ctx, token, *sender.WabaID, raw)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("submit whatsapp template: %w", err)
+	}
+	state, err := json.Marshal(map[string]any{
+		"status": "pending", "qualityRating": "unknown", "category": definition.Category,
+		"categoryChangedByMeta": false, "atRisk": false, "locked": false,
+		"rejectionReason": nil, "rejectionInfo": nil, "pausedUntil": nil,
+		"metaTemplateId": metaID, "submittedAt": s.now().UTC(), "decidedAt": nil,
+	})
+	return raw, state, definition.Variables(), nil, err
 }
 
 func (s *Server) ListTemplates(ctx context.Context, request gen.ListTemplatesRequestObject) (gen.ListTemplatesResponseObject, error) {
@@ -312,6 +396,25 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 		}
 	}
 
+	// A WhatsApp template in Meta's component model is Meta's to review.
+	var waDefinition, waState []byte
+	if request.Body.WaDefinition != nil {
+		if sender.Channel != "WHATSAPP" || waContent != nil {
+			return gen.CreateTemplate422JSONResponse(errorBody(codeValidation,
+				"A WhatsApp definition goes with a WhatsApp sender, instead of waContent.")), nil
+		}
+		var refusal gen.CreateTemplateResponseObject
+		waDefinition, waState, variables, refusal, err = s.whatsAppTemplate(ctx, identity, sender,
+			request.Body.WaDefinition)
+		if err != nil || refusal != nil {
+			return refusal, err
+		}
+		if category == nil {
+			value := strings.ToUpper(string(request.Body.WaDefinition.Category))
+			category = &value
+		}
+	}
+
 	created, err := store.CreateTemplate(ctx, s.DB, identity, store.Template{
 		SenderID: sender.ID,
 		Name:     name,
@@ -328,6 +431,8 @@ func (s *Server) CreateTemplate(ctx context.Context, request gen.CreateTemplateR
 		RCSContent:   rcsContent,
 		WAContent:    waContent,
 		EmailContent: emailContent,
+		WADefinition: waDefinition,
+		WAState:      waState,
 	})
 	if errors.Is(err, store.ErrConflict) {
 		return gen.CreateTemplate409JSONResponse(errorBody(codeConflict,
@@ -591,6 +696,9 @@ func applyTemplateSubstance(ctx context.Context, edited *store.Template,
 // body's tokens, or — for a template whose words live in rich content — every
 // token anywhere in that content.
 func templateVariables(template store.Template) []string {
+	if definition, err := whatsapp.Parse(template.WADefinition); len(template.WADefinition) > 0 && err == nil {
+		return definition.Variables()
+	}
 	if template.Body != nil && *template.Body != "" {
 		return compliance.ParseVariables(*template.Body)
 	}

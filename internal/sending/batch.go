@@ -169,8 +169,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: context.tenantStatus, ChannelUnavailable: context.channelRefused,
 			SenderStatus: emailSenderStatus(context.sender), SendingPaused: paused,
-			EntityNotRegistered: !entityRegistered,
-			SenderID:            context.sender.ID.String(), TemplateStatus: context.templateStatus,
+			OnboardingIncomplete: whatsAppIncomplete(context.sender),
+			EntityNotRegistered:  !entityRegistered,
+			SenderID:             context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
 			// The carrier's own approval, which is separate from ours. Checked
 			// per recipient like everything else in the gate, even though it is

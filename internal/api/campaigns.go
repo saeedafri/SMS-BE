@@ -309,6 +309,18 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 		if disposition != sending.SendLive {
 			return gen.CreateCampaign422JSONResponse(channelUnavailable()), nil
 		}
+		// A WhatsApp number whose setup is not finished sends nothing.
+		if *leg == "WHATSAPP" {
+			legSender := senderID
+			if leg == campaign.FallbackChannel && campaign.FallbackSenderID != nil {
+				legSender = *campaign.FallbackSenderID
+			}
+			if sender, err := store.GetSenderID(ctx, s.DB, identity, legSender); err == nil &&
+				(sender.WhatsApp == nil || !sender.WhatsApp.Ready()) {
+				return gen.CreateCampaign422JSONResponse(errorBody("onboarding_incomplete",
+					"This WhatsApp number's setup is not finished. Complete it before sending.")), nil
+			}
+		}
 		// An operator paused this tenant's email, or the provider stopped it:
 		// nothing is created, and the refusal says why.
 		if *leg == "EMAIL" {
@@ -432,6 +444,20 @@ func (s *Server) CreateCampaign(ctx context.Context, request gen.CreateCampaignR
 			campaign.CostMinorMin = estimate.CostMinorMin
 			campaign.CostMinorMax = estimate.CostMinorMax
 			campaign.Currency = estimate.Currency
+		}
+	}
+
+	// A WhatsApp number may reach a bounded count of distinct people a day. A
+	// campaign for more than are left is refused before anything is created,
+	// charged or held. Meta's own code for this is unread (decision D-D).
+	if campaign.Channel == "WHATSAPP" {
+		if template, err := store.GetTemplate(ctx, s.DB, identity, templateID); err == nil &&
+			len(template.WAState) > 0 && sending.SendableStatus(template) != "approved" {
+			return gen.CreateCampaign422JSONResponse(errorBody("template_not_approved",
+				"WhatsApp has not approved this template, so it cannot be sent.")), nil
+		}
+		if refusal := s.overWhatsAppLimit(ctx, identity, senderID, campaign.Recipients); refusal != nil {
+			return gen.CreateCampaign422JSONResponse(*refusal), nil
 		}
 	}
 
@@ -948,4 +974,30 @@ func emailTrackingFrom(ctx context.Context, channel string) (*store.EmailTrackin
 		return nil, "emailTracking applies to email campaigns only."
 	}
 	return &tracking, ""
+}
+
+// overWhatsAppLimit refuses a campaign for more people than the number's
+// daily limit leaves, or nil when it fits or the limit is unknown.
+func (s *Server) overWhatsAppLimit(ctx context.Context, identity store.Identity, senderID uuid.UUID,
+	recipients int) *gen.Error {
+
+	sender, err := store.GetSenderID(ctx, s.DB, identity, senderID)
+	if err != nil || sender.WhatsApp == nil {
+		return nil
+	}
+	limit := waLimitContacts(sender.WhatsApp.Limit)
+	if limit == nil {
+		return nil
+	}
+	used := 0
+	if out := s.withContactsUsed(ctx, identity, senderResponse(sender)); out.UniqueContactsUsed24h != nil {
+		used = *out.UniqueContactsUsed24h
+	}
+	if left := *limit - used; recipients > left {
+		body := errorBody("messaging_limit_reached", fmt.Sprintf(
+			"This WhatsApp number can reach %d more people today and this campaign has %d. "+
+				"Send to fewer people, or wait for the limit to rise.", max(left, 0), recipients))
+		return &body
+	}
+	return nil
 }

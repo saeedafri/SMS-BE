@@ -85,6 +85,10 @@ var (
 	// operator paused, or the provider stopped.
 	ErrSendingPaused = errors.New("messaging: email sending is paused for this account")
 
+	// ErrOnboardingIncomplete is a send on a WhatsApp number whose setup is
+	// not finished, or that was disconnected.
+	ErrOnboardingIncomplete = errors.New("messaging: this WhatsApp number's setup is not complete")
+
 	ErrRCSAgentNotResolved = errors.New(
 		"messaging: this sender has no RCS agent identity on that carrier")
 
@@ -167,6 +171,9 @@ type GateInput struct {
 	// SendingPaused says the tenant's email sending is paused or enforced.
 	SendingPaused bool
 
+	// OnboardingIncomplete says a WhatsApp sender's setup is not complete.
+	OnboardingIncomplete bool
+
 	// UnapprovedLink says why a link in the message is not on the approved
 	// list, naming its host; empty when every link is approved or the rule
 	// does not apply.
@@ -194,6 +201,9 @@ func Check(input GateInput) error {
 	}
 	if input.ChannelUnavailable {
 		return ErrChannelUnavailable
+	}
+	if input.OnboardingIncomplete {
+		return ErrOnboardingIncomplete
 	}
 	if !input.RecipientValid {
 		return ErrInvalidRecipient
@@ -319,7 +329,7 @@ var refusals = []error{
 	ErrInvalidRecipient, ErrCarrierTemplateNotApproved, ErrContentNotAllowed,
 	ErrRegisteredTemplateRequired, ErrTemplateBodyMismatch,
 	ErrRCSAgentNotResolved, ErrOutsidePromotionalWindow,
-	ErrVariableUnresolved, ErrURLNotWhitelisted,
+	ErrVariableUnresolved, ErrURLNotWhitelisted, ErrOnboardingIncomplete,
 }
 
 // awaitingContract are refusals whose code is not yet in the contract's
@@ -363,6 +373,8 @@ func GateFailureCode(err error) string {
 		return "url_not_whitelisted"
 	case errors.Is(err, ErrSendingPaused):
 		return "sending_paused"
+	case errors.Is(err, ErrOnboardingIncomplete):
+		return "onboarding_incomplete"
 	case errors.Is(err, ErrSuppressed):
 		return "recipient_suppressed"
 	case errors.Is(err, ErrDNDBlocked):

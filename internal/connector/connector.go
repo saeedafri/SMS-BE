@@ -132,9 +132,12 @@ type DeliveryReport struct {
 	Delivered  bool
 	// Read is set by an RCS read receipt, which the handset itself sends. It
 	// implies Delivered: a message cannot be read without arriving.
-	Read       bool
-	ErrorCode  string
-	OccurredAt time.Time
+	Read bool
+	// ProviderBilling is the provider's own pricing for the message, as JSON,
+	// copied as it came (Meta's pricing object). Information only.
+	ProviderBilling string
+	ErrorCode       string
+	OccurredAt      time.Time
 
 	// The carrier's own receipt, kept as it arrived so an operator can answer
 	// "what did the network report". Stat is the status word verbatim (DELIVRD,

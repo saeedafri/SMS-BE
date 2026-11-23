@@ -69,7 +69,7 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 
 	return batchContext{
 		sender: sender, templateID: templateID,
-		templateStatus: template.Status, templateSender: template.SenderID.String(),
+		templateStatus: SendableStatus(template), templateSender: template.SenderID.String(),
 		template: template, body: templateText(template),
 		rate: rate, tenantStatus: tenantStatus,
 		campaignID: campaignID,

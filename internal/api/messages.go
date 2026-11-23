@@ -467,6 +467,27 @@ func messageLogEntry(record store.MessageRecord) gen.MessageLogEntry {
 	// platform and was never billed, and a client must not have to guess.
 	simulated := record.Simulated
 	entry.Simulated = &simulated
+	// WhatsApp's own id for the message, kept so a support request can quote
+	// it, and Meta's pricing copied as it came — never Relay's price.
+	if record.Channel == "WHATSAPP" && record.CarrierRef != nil {
+		entry.ProviderMessageId = record.CarrierRef
+	}
+	if record.ProviderBilling != nil {
+		var billing struct {
+			Billable bool   `json:"billable"`
+			Category string `json:"category"`
+			Model    string `json:"model"`
+			Type     string `json:"type"`
+		}
+		if json.Unmarshal([]byte(*record.ProviderBilling), &billing) == nil {
+			entry.ProviderBilling = &struct {
+				Billable bool   `json:"billable"`
+				Category string `json:"category"`
+				Model    string `json:"model"`
+				Type     string `json:"type"`
+			}{billing.Billable, billing.Category, billing.Model, billing.Type}
+		}
+	}
 	return entry
 }
 

@@ -234,12 +234,12 @@ func OptOutEmail(ctx context.Context, pool *pgxpool.Pool, id Identity, email str
 	return int(changed), nil
 }
 
-// ClaimEmailEvent records a provider event as applied, and says false when it
+// ClaimProviderEvent records a provider event as applied, and says false when it
 // already was: a redelivered event changes nothing.
-func ClaimEmailEvent(ctx context.Context, pool *pgxpool.Pool, id Identity, eventID string) (bool, error) {
+func ClaimProviderEvent(ctx context.Context, pool *pgxpool.Pool, id Identity, eventID string) (bool, error) {
 	var claimed bool
 	err := WithTenant(ctx, pool, id.TenantID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `INSERT INTO email_event_receipts (event_id, tenant_id)
+		tag, err := tx.Exec(ctx, `INSERT INTO provider_event_receipts (event_id, tenant_id)
 			VALUES ($1, $2) ON CONFLICT (event_id) DO NOTHING`, eventID, id.TenantID)
 		claimed = tag.RowsAffected() == 1
 		return err

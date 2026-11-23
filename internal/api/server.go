@@ -154,6 +154,17 @@ type Server struct {
 	// live. Production leaves it nil.
 	ChannelModes func(channel string) gen.CapabilityMode
 
+	// WhatsApp is Meta's Cloud API. Nil uses the fake. The Meta* values are
+	// the app's public identifiers (returned to the browser's SDK) and its
+	// secrets (never returned); WhatsAppOnboardingCap is Meta's weekly cap.
+	WhatsApp              connector.WhatsAppProvider
+	MetaAppID             string
+	MetaConfigID          string
+	MetaGraphVersion      string
+	MetaAppSecret         string
+	MetaVerifyToken       string
+	WhatsAppOnboardingCap int
+
 	// Email is the email provider (SES). Nil uses the fake, which is what a
 	// deployment without SES credentials has; EmailRegion is SES_REGION.
 	Email       connector.EmailProvider
@@ -397,6 +408,8 @@ func NewRouter(s *Server) http.Handler {
 		"POST /v1/links/domains":                       {"domain"},
 		"POST /v1/lookups":                             {"msisdn", "fields"},
 		"POST /v1/lookups/batch":                       {"msisdns"},
+		"POST /v1/whatsapp/embedded-signup/complete": {"code", "wabaId", "phoneNumberId",
+			"businessId", "event"},
 		// Recorded, not refused: the create body allows unknown keys, but its
 		// quietHours object does not, and the handler needs the raw value to say so.
 		"POST /v1/campaigns": {recordOnly},
@@ -490,6 +503,9 @@ func NewRouter(s *Server) http.Handler {
 
 	// Adding and editing failure-dictionary rules. See failures.go.
 	s.mountFailureReasonRoutes(r)
+
+	// Meta's webhook: the subscription handshake and signed updates. See whatsapp.go.
+	s.mountWhatsAppWebhookRoutes(r)
 
 	// Keyword chatbots. See chatbots.go.
 	s.mountChatbotRoutes(r)

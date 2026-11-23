@@ -811,7 +811,7 @@ func GetRcsAgentAsOperator(ctx context.Context, pool *pgxpool.Pool,
 
 // LaunchCounts is how many agents stand in each launch state with one carrier.
 type LaunchCounts struct {
-	Carrier                                  string
+	Carrier                                   string
 	NotSubmitted, Pending, Approved, Rejected int
 }
 

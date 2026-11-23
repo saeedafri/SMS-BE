@@ -44,6 +44,7 @@ func senderResponse(s store.SenderID) gen.SenderId {
 		sender.DnsRecords = &records
 	}
 	sender.EmailIdentity = emailIdentityOut(s)
+	withWhatsApp(&sender, s)
 
 	// WhatsApp health, when Meta has assigned it. Left absent rather than sent
 	// as a zero value: "no rating yet" and "rated red" are different facts, and
@@ -118,7 +119,7 @@ func (s *Server) ListSenderIds(ctx context.Context, request gen.ListSenderIdsReq
 	}
 	out := make([]gen.SenderId, 0, len(items))
 	for _, item := range items {
-		out = append(out, senderResponse(item))
+		out = append(out, s.withContactsUsed(ctx, identity, senderResponse(item)))
 	}
 	return gen.ListSenderIds200JSONResponse(gen.SenderIdPage{SenderIds: out, Total: total}), nil
 }
@@ -237,7 +238,7 @@ func (s *Server) GetSenderId(ctx context.Context, request gen.GetSenderIdRequest
 	if err != nil {
 		return nil, err
 	}
-	return gen.GetSenderId200JSONResponse(senderResponse(sender)), nil
+	return gen.GetSenderId200JSONResponse(s.withContactsUsed(ctx, identity, senderResponse(sender))), nil
 }
 
 // RequestVoiceCall would place the call that speaks a caller-ID verification

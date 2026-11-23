@@ -2,12 +2,18 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/saeedafri/sms-be/internal/connector"
+	"github.com/saeedafri/sms-be/internal/domain/audience"
 	"github.com/saeedafri/sms-be/internal/domain/billing"
+	"github.com/saeedafri/sms-be/internal/domain/whatsapp"
 	"github.com/saeedafri/sms-be/internal/sending"
 	"github.com/saeedafri/sms-be/internal/store"
 
@@ -143,9 +149,79 @@ func (s *Server) AddSupportMessage(ctx context.Context, request gen.AddSupportMe
 	return gen.AddSupportMessage200JSONResponse(toTicketDetail(ticket, messages)), nil
 }
 
-func toConversation(conversation store.Conversation) gen.Conversation {
+// customerWindow is when a WhatsApp conversation's 24-hour window closes, or
+// nil when it is closed. The instant of expiry is itself closed.
+func customerWindow(conversation store.Conversation, now time.Time) *time.Time {
+	if conversation.Channel != "WHATSAPP" || conversation.LastInboundAt == nil {
+		return nil
+	}
+	expires := conversation.LastInboundAt.Add(24 * time.Hour)
+	if !expires.After(now) {
+		return nil
+	}
+	return &expires
+}
+
+// conversationJSON writes a closed WhatsApp window as an explicit null: the
+// inbox reads null as closed and an absent field as "the server does not say".
+type conversationJSON struct{ gen.Conversation }
+
+func (c conversationJSON) MarshalJSON() ([]byte, error) {
+	body, err := json.Marshal(c.Conversation)
+	return closedWindow(body, c.Channel, c.WindowExpiresAt), err
+}
+
+type conversationDetailJSON struct{ gen.ConversationDetail }
+
+func (c conversationDetailJSON) MarshalJSON() ([]byte, error) {
+	body, err := json.Marshal(c.ConversationDetail)
+	return closedWindow(body, c.Channel, c.WindowExpiresAt), err
+}
+
+func closedWindow(body []byte, channel gen.ConversationChannelId, expires *time.Time) []byte {
+	if channel != "WHATSAPP" || expires != nil || len(body) < 2 {
+		return body
+	}
+	return append(body[:len(body)-1], `,"windowExpiresAt":null}`...)
+}
+
+// conversationResponse answers every conversation route through the JSON above.
+type conversationResponse struct{ body any }
+
+func (r conversationResponse) VisitListConversationsResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func (r conversationResponse) VisitGetConversationResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func (r conversationResponse) VisitReplyToConversationResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func (r conversationResponse) VisitCloseConversationResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func (r conversationResponse) VisitReopenConversationResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func (r conversationResponse) VisitMarkConversationReadResponse(w http.ResponseWriter) error {
+	writeJSON(w, http.StatusOK, r.body)
+	return nil
+}
+
+func toConversation(conversation store.Conversation, now time.Time) gen.Conversation {
 	return gen.Conversation{
-		Id: conversation.ID, ContactId: conversation.ContactID,
+		WindowExpiresAt: customerWindow(conversation, now),
+		Id:              conversation.ID, ContactId: conversation.ContactID,
 		ContactName: conversation.ContactName, Identity: conversation.Identity,
 		Channel: gen.ConversationChannelId(conversation.Channel),
 		Status:  gen.ConversationStatus(conversation.Status),
@@ -156,10 +232,11 @@ func toConversation(conversation store.Conversation) gen.Conversation {
 }
 
 func toConversationDetail(conversation store.Conversation,
-	messages []store.ConversationMessage) gen.ConversationDetail {
+	messages []store.ConversationMessage, now time.Time) gen.ConversationDetail {
 
 	out := gen.ConversationDetail{
-		Id: conversation.ID, ContactId: conversation.ContactID,
+		WindowExpiresAt: customerWindow(conversation, now),
+		Id:              conversation.ID, ContactId: conversation.ContactID,
 		ContactName: conversation.ContactName, Identity: conversation.Identity,
 		Channel: gen.ConversationChannelId(conversation.Channel),
 		Status:  gen.ConversationStatus(conversation.Status),
@@ -216,33 +293,36 @@ func (s *Server) ListConversations(ctx context.Context, request gen.ListConversa
 	if err != nil {
 		return nil, err
 	}
-	out := make([]gen.Conversation, 0, len(conversations))
+	out := make([]conversationJSON, 0, len(conversations))
 	for _, conversation := range conversations {
-		out = append(out, toConversation(conversation))
+		out = append(out, conversationJSON{toConversation(conversation, s.now())})
 	}
 	// total is the count matching the filter, not len(out). They were the same
 	// number only while this endpoint returned everything.
-	result := gen.ConversationPage{Conversations: out, Total: total}
-	return gen.ListConversations200JSONResponse(result), nil
+	return conversationResponse{struct {
+		Conversations []conversationJSON `json:"conversations"`
+		Total         int                `json:"total"`
+	}{out, total}}, nil
 }
 
 // conversationDetail is the shared read-back every conversation mutation ends
 // with, so a reply and a close return the same shape from the same source.
 func (s *Server) conversationDetail(ctx context.Context, identity store.Identity,
-	id string) (gen.ConversationDetail, bool, error) {
+	id string) (conversationResponse, bool, error) {
 
 	conversationID, valid := parsePathID(id)
 	if !valid {
-		return gen.ConversationDetail{}, false, nil
+		return conversationResponse{}, false, nil
 	}
 	conversation, messages, err := store.GetConversation(ctx, s.DB, identity, conversationID)
 	if errors.Is(err, store.ErrNotFound) {
-		return gen.ConversationDetail{}, false, nil
+		return conversationResponse{}, false, nil
 	}
 	if err != nil {
-		return gen.ConversationDetail{}, false, err
+		return conversationResponse{}, false, err
 	}
-	return toConversationDetail(conversation, messages), true, nil
+	return conversationResponse{conversationDetailJSON{
+		toConversationDetail(conversation, messages, s.now())}}, true, nil
 }
 
 func (s *Server) GetConversation(ctx context.Context, request gen.GetConversationRequestObject) (gen.GetConversationResponseObject, error) {
@@ -257,7 +337,7 @@ func (s *Server) GetConversation(ctx context.Context, request gen.GetConversatio
 	if !found {
 		return gen.GetConversation404JSONResponse(errorBody("not_found", "No such conversation.")), nil
 	}
-	return gen.GetConversation200JSONResponse(detail), nil
+	return detail, nil
 }
 
 // ReplyToConversation sends an outbound message in a thread.
@@ -276,9 +356,10 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	if request.Body.Body != nil {
 		body = *request.Body.Body
 	}
-	if body == "" {
+	// Exactly one of free text or a template.
+	if (strings.TrimSpace(body) == "") == (request.Body.TemplateId == nil) {
 		return gen.ReplyToConversation422JSONResponse(errorBody(codeValidation,
-			"A reply body is required.")), nil
+			"Send a reply body or a template, one of the two.")), nil
 	}
 	conversationID, valid := parsePathID(request.Id)
 	if !valid {
@@ -301,6 +382,36 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	}
 	if disposition != sending.SendLive {
 		return gen.ReplyToConversation422JSONResponse(channelUnavailable()), nil
+	}
+	// WhatsApp's order: setup, template approval, variables, then the window.
+	if conversation.Channel == "WHATSAPP" {
+		ready, err := s.whatsAppReady(ctx, identity)
+		if err != nil {
+			return nil, err
+		}
+		if !ready {
+			return gen.ReplyToConversation422JSONResponse(errorBody("onboarding_incomplete",
+				"This workspace's WhatsApp number is not set up yet, so it cannot reply.")), nil
+		}
+	}
+	if request.Body.TemplateId != nil {
+		template, err := store.GetTemplate(ctx, s.DB, identity, *request.Body.TemplateId)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		values := map[string]string{}
+		if request.Body.Variables != nil {
+			values = *request.Body.Variables
+		}
+		text, refusal := templateReply(template, err == nil, conversation.Channel, values)
+		if refusal != nil {
+			return gen.ReplyToConversation422JSONResponse(*refusal), nil
+		}
+		// A template reply does not reopen the window; only the customer writing does.
+		body = text
+	} else if conversation.Channel == "WHATSAPP" && customerWindow(conversation, s.now()) == nil {
+		return gen.ReplyToConversation422JSONResponse(errorBody("outside_customer_window",
+			"This person last wrote more than 24 hours ago. Reply with an approved template.")), nil
 	}
 
 	segments := billing.SegmentCount(body)
@@ -404,7 +515,7 @@ func (s *Server) ReplyToConversation(ctx context.Context, request gen.ReplyToCon
 	if !found {
 		return gen.ReplyToConversation404JSONResponse(errorBody("not_found", "No such conversation.")), nil
 	}
-	return gen.ReplyToConversation200JSONResponse(detail), nil
+	return detail, nil
 }
 
 func (s *Server) CloseConversation(ctx context.Context, request gen.CloseConversationRequestObject) (gen.CloseConversationResponseObject, error) {
@@ -425,7 +536,7 @@ func (s *Server) CloseConversation(ctx context.Context, request gen.CloseConvers
 	if err != nil {
 		return nil, err
 	}
-	return gen.CloseConversation200JSONResponse(detail), nil
+	return detail, nil
 }
 
 func (s *Server) ReopenConversation(ctx context.Context, request gen.ReopenConversationRequestObject) (gen.ReopenConversationResponseObject, error) {
@@ -446,7 +557,7 @@ func (s *Server) ReopenConversation(ctx context.Context, request gen.ReopenConve
 	if err != nil {
 		return nil, err
 	}
-	return gen.ReopenConversation200JSONResponse(detail), nil
+	return detail, nil
 }
 
 func (s *Server) MarkConversationRead(ctx context.Context, request gen.MarkConversationReadRequestObject) (gen.MarkConversationReadResponseObject, error) {
@@ -467,5 +578,46 @@ func (s *Server) MarkConversationRead(ctx context.Context, request gen.MarkConve
 	if err != nil {
 		return nil, err
 	}
-	return gen.MarkConversationRead200JSONResponse(detail), nil
+	return detail, nil
+}
+
+// templateReply fills a template for a conversation reply, or says why it
+// cannot be sent: it must be WhatsApp-approved and every variable needs a value.
+func templateReply(template store.Template, found bool, channel string,
+	values map[string]string) (string, *gen.Error) {
+
+	definition, err := whatsapp.Parse(template.WADefinition)
+	if !found || template.Channel != channel || len(template.WADefinition) == 0 || err != nil ||
+		sending.SendableStatus(template) != "approved" {
+		body := errorBody("template_not_approved",
+			"This template is not approved by WhatsApp, so it cannot be sent.")
+		return "", &body
+	}
+	text := definition.Body()
+	if text == "" {
+		text = template.Name
+	}
+	filled := audience.Fill(text, values, nil)
+	if len(filled.Missing) > 0 {
+		body := errorBody("variables_missing", "Give a value for every variable: "+
+			strings.Join(filled.Missing, ", ")+".")
+		return "", &body
+	}
+	return filled.Text, nil
+}
+
+// whatsAppReady says the tenant has a WhatsApp number able to send.
+func (s *Server) whatsAppReady(ctx context.Context, identity store.Identity) (bool, error) {
+	channel := "WHATSAPP"
+	senders, _, err := store.ListSenderIDs(ctx, s.DB, identity,
+		store.CatalogueFilter{Channel: &channel, Limit: 200})
+	if err != nil {
+		return false, err
+	}
+	for _, sender := range senders {
+		if sender.WhatsApp != nil && sender.WhatsApp.Ready() {
+			return true, nil
+		}
+	}
+	return false, nil
 }

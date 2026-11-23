@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -352,6 +353,12 @@ func run() error {
 		OperatorDB: operatorPool, AppBaseURL: cfg.AppBaseURL, LinkBaseURL: cfg.LinkBaseURL,
 		ConfigKeys:               presentKeys(api.ChannelConfigKeyNames()),
 		EmailRegion:              strings.TrimSpace(os.Getenv("SES_REGION")),
+		MetaAppID:                strings.TrimSpace(os.Getenv("META_APP_ID")),
+		MetaConfigID:             strings.TrimSpace(os.Getenv("META_EMBEDDED_SIGNUP_CONFIG_ID")),
+		MetaGraphVersion:         envOr("META_GRAPH_API_VERSION", "v21.0"),
+		MetaAppSecret:            strings.TrimSpace(os.Getenv("META_APP_SECRET")),
+		MetaVerifyToken:          strings.TrimSpace(os.Getenv("META_WEBHOOK_VERIFY_TOKEN")),
+		WhatsAppOnboardingCap:    atoiOr(os.Getenv("WHATSAPP_ONBOARDING_CAP"), 10),
 		RCSCarrier:               rcsCarrier,
 		Carriers:                 carriers,
 		CarrierWebhookToken:      cfg.CarrierWebhookToken,
@@ -482,4 +489,18 @@ func dndRegister(mode string) sending.DNDRegister {
 		return sending.OperatorScrubs{}
 	}
 	return sending.CacheDNDLookups(sending.NoDNDRegister{}, time.Now)
+}
+
+func envOr(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func atoiOr(value string, fallback int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
 }
