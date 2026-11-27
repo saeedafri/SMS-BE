@@ -65,7 +65,7 @@ and which message type.
 ### 2.3 The webhook in Sigmo (needed for delivery reports)
 Sigmo → RCS → RCS Settings → Webhooks → **Add Event Webhook**:
 
-- URL: `http://189.72.144.98:8080/v1/carrier-webhooks/rcs/trustsignal/<token>`.
+- URL: `https://srv2130239.hstgr.cloud/v1/carrier-webhooks/rcs/trustsignal/<token>`.
   The token is sent to you separately; it is a secret and is kept out of this repo.
 - Events: **Delivery Status**, **Template**, **User Response**. Agent Delivery
   Status is optional.

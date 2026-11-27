@@ -196,7 +196,7 @@ func Load() (Config, error) {
 		JWTSigningKey:    os.Getenv("JWT_SIGNING_KEY"),
 		LogLevel:         envOr("LOG_LEVEL", "info"),
 		ResendAPIKey:     os.Getenv("RESEND_API_KEY"),
-		MailFrom:         envOr("MAIL_FROM", "Relay <noreply@saqibsaeed.cloud>"),
+		MailFrom:         envOr("MAIL_FROM", "Relay <noreply@srv2130239.hstgr.cloud>"),
 		AppBaseURL:       strings.TrimRight(envOr("APP_BASE_URL", "http://localhost:3000"), "/"),
 	}
 

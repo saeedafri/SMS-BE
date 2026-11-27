@@ -163,7 +163,7 @@ w = out.write
 
 w(f"""# Relay backend — everything the UI team needs
 
-**Base URL:** `http://189.72.144.98:8080`
+**Base URL:** `https://srv2130239.hstgr.cloud`
 **Operations:** {len(operations)} across {len(spec['paths'])} paths
 **Schemas:** {len(schemas)}
 **Date:** 5 September 2026

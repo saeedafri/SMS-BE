@@ -9,7 +9,7 @@ Two claims are checked against production for every operation in the contract:
 """
 import json, os, re, sys, urllib.error, urllib.request
 
-BASE = os.environ.get("API", "http://189.72.144.98:8080")
+BASE = os.environ.get("API", "https://srv2130239.hstgr.cloud")
 spec = json.load(open(os.environ["SPEC"]))
 key_source = open(os.environ["KEY_SCOPES"]).read()
 

@@ -5,7 +5,7 @@ Read this first. Each package has its own reply beside it (`BACKEND_REPLY_2026-1
 ## Update, 27 Nov 2026: tested and deployed
 
 The deployment and the test databases moved to the Hostinger server (`189.72.144.98`, API at
-`http://189.72.144.98:8080`); every push to `main` now deploys there. The first database-backed run
+`https://srv2130239.hstgr.cloud`); every push to `main` now deploys there. The first database-backed run
 of these packages found 11 failures, fixed in `3dc692f` and `42dfda0`; the full suite is now
 1349 pass, 0 fail. The rest of this page is as written on 23 Nov, before any of that:
 

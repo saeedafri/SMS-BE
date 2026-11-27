@@ -142,7 +142,7 @@ would double-run the scheduler, journeys and invoicing (the retry worker alone u
         ▼
  Hostinger server 189.72.144.98, Debian 13, 2 vCPU, 7.8 GB  — compose project relay-test, /opt/relay-test
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ relay-test-api   public :8080, 512 MB, image keeps a :prev tag            │
+ │ nginx :443 https://srv2130239.hstgr.cloud → relay-test-api 127.0.0.1:8080 │
  │   ├─ relay-test-postgres   Postgres 16, 127.0.0.1:15432, 2 GB             │
  │   ├─ relay-test-clickhouse ClickHouse 24.8, 127.0.0.1:8123/9000, 2 GB     │
  │   └─ relay-test-redis      Redis 7, 127.0.0.1:16380, 192 MB               │
@@ -157,7 +157,7 @@ would double-run the scheduler, journeys and invoicing (the retry worker alone u
 Deploy steps (`deploy.yml`): pre-deploy pg_dump, goose migrate, ClickHouse migrate
 (`scripts/clickhouse_migrate.py`), rebuild and restart the API container, poll
 `http://127.0.0.1:8080/healthz` until it names the pushed commit, **roll back to the :prev image**
-on failure, then probe `http://189.72.144.98:8080/healthz` from outside. Migrations are not
+on failure, then probe `https://srv2130239.hstgr.cloud/healthz` from outside. Migrations are not
 rolled back with the image. Backups: `deploy/relay-backup.sh`, timer `deploy/relay-backup.timer`
 `OnCalendar=*-*-* 02:30:00`, kept on the same disk unless `BACKUP_RCLONE_TARGET` is set — RPO is
 up to 24 h.

@@ -36,7 +36,7 @@ func TestOnlyFixtureAddressesGetTheFixedDevTokens(t *testing.T) {
 		// Real addresses. Every one of these was takeable before the fix.
 		{"agentantigravity33@gmail.com", false, "a real inbox"},
 		{"founder@acme.com", false, ".com is registrable — near-miss on the fixture domain"},
-		{"someone@saqibsaeed.cloud", false, "the deployment's own domain"},
+		{"someone@srv2130239.hstgr.cloud", false, "the deployment's own hostname"},
 		{"admin@example.com.attacker.io", false, "reserved TLD in the middle, not at the end"},
 		{"user@test.evil.com", false, "reserved label as a subdomain, not the TLD"},
 		{"a@b.testing", false, "longer TLD that merely starts with the reserved one"},

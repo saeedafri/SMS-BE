@@ -25,7 +25,7 @@ stash or discard someone else's frontend work to make the pull succeed.
    Hostinger server next to the databases (`scripts/remote-test.sh`, ~3 minutes; `RUN=<pattern>`
    narrows it). `make test-local` is the slow path through the tunnel.
 2. **Then live**: every push to `main` deploys to the Hostinger server (`.github/workflows/deploy.yml`).
-   Confirm the deploy run succeeded and that `http://189.72.144.98:8080/healthz` reports the pushed
+   Confirm the deploy run succeeded and that `https://srv2130239.hstgr.cloud/healthz` reports the pushed
    commit, then exercise the change against that public API. A green local suite is not a
    finished task.
 
@@ -33,10 +33,13 @@ stash or discard someone else's frontend work to make the pull succeed.
 
 The only deployment is the Hostinger server **189.72.144.98** (`ssh hostinger-test`, root). Relay
 runs there as the docker compose project `relay-test` in `/opt/relay-test` (`deploy/docker-compose.yml`):
-containers `relay-test-api` (public :8080), `relay-test-postgres` (127.0.0.1:15432),
+containers `relay-test-api` (127.0.0.1:8080, public as **https://srv2130239.hstgr.cloud** through
+nginx, `deploy/nginx/relay-api.conf`), `relay-test-postgres` (127.0.0.1:15432),
 `relay-test-clickhouse` (127.0.0.1:8123/9000), `relay-test-redis` (127.0.0.1:16380). Its secrets
 live only on the server, in `/opt/relay-test/.env` and `/opt/relay-test/api.env`.
 
-The same server runs things that are NOT Relay's: nginx on :80/:443, postgresql@17 on :5432, a
+Relay's only file in that server's nginx is `/etc/nginx/sites-available/relay-api`; the
+certificate is certbot's and renews itself. The same server runs things that are NOT Relay's: the
+other nginx sites on :80/:443, postgresql@17 on :5432, a
 Next.js app on :3000, `smpp-v3.service` and everything under `/opt/smpp-*`. Never modify, restart
 or reconfigure any of them.

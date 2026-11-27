@@ -3,7 +3,8 @@
 # Self-contained: its own containers, network and volumes, all named relay-test-*.
 # It shares nothing with what already runs on this machine (nginx :80/:443,
 # postgres@17 :5432, next-server :3000, smpp-v3) and must never touch it.
-# Datastores listen on loopback only; the API on :8080 is the one public port.
+# Everything listens on loopback; the public API is https://srv2130239.hstgr.cloud
+# through nginx.
 #
 # The deploy workflow copies this file to /opt/relay-test and the binaries to
 # /opt/relay-test/release. Secrets live only on the server: .env (the
@@ -103,8 +104,9 @@ services:
       GOGC: "80"
     volumes:
       - media:/var/lib/relay
+    # Loopback only: the public door is nginx on :443 (deploy/nginx/relay-api.conf).
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}

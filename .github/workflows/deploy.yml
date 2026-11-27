@@ -1,6 +1,7 @@
 name: Deploy to Hostinger
 
-# Push to main -> verify, build, deploy to the Hostinger server (189.72.144.98),
+# Push to main -> verify, build, deploy to the Hostinger server (189.72.144.98,
+# public API https://srv2130239.hstgr.cloud),
 # where Relay runs as the docker compose project `relay-test` in /opt/relay-test.
 #
 # That server also runs things that are not Relay's: nginx on :80/:443,
@@ -171,10 +172,10 @@ jobs:
           EOSSH
 
       - name: Confirm public endpoint
-        # From outside the server — the loopback check above would pass even
-        # if the published port were broken.
+        # Through nginx and TLS, from outside the server — the loopback check
+        # above would pass even if the public route were broken.
         run: |
-          base="http://${{ secrets.HOSTINGER_HOST }}:8080"
+          base="https://srv2130239.hstgr.cloud"
           body=$(curl -s --max-time 20 "$base/healthz")
           echo "$base/healthz -> $body"
           echo "$body" | grep -q "\"commit\":\"$GITHUB_SHA\""

@@ -9,7 +9,7 @@
 # Writes are included deliberately: read access proves a screen opens, not that
 # a button works. The caller resets demo state afterwards.
 set -uo pipefail
-B=${API:-http://189.72.144.98:8080}
+B=${API:-https://srv2130239.hstgr.cloud}
 
 tok() {
   curl -s --max-time 20 -X POST "$B/v1/auth/login" -H 'Content-Type: application/json' \

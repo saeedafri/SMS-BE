@@ -42,11 +42,11 @@ Say this, and defend it under questioning:
 Relay runs on the Hostinger server `189.72.144.98` as the docker compose project
 `relay-test` in `/opt/relay-test` (`deploy/docker-compose.yml`). Every push to
 `main` deploys there (`.github/workflows/deploy.yml`). The public API is
-`http://189.72.144.98:8080`.
+`https://srv2130239.hstgr.cloud`.
 
 | | |
 |---|---|
-| API | container `relay-test-api`, public :8080 |
+| API | container `relay-test-api` on 127.0.0.1:8080, public as `https://srv2130239.hstgr.cloud` through nginx (Let's Encrypt, auto-renewed) |
 | Postgres | container `relay-test-postgres`, 127.0.0.1:15432, databases `sms` and `sms_test` |
 | ClickHouse | container `relay-test-clickhouse`, 127.0.0.1:8123/9000, capped at 2 GB |
 | Redis | container `relay-test-redis`, 127.0.0.1:16380 |
