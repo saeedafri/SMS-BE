@@ -39,22 +39,22 @@ Say this, and defend it under questioning:
 
 ## Deployed
 
-Relay is live on the shared Hostinger VPS at `31.97.186.223`, alongside
-Rentocloud and EMS. Full detail in [deployment.md](deployment.md).
+Relay runs on the Hostinger server `189.72.144.98` as the docker compose project
+`relay-test` in `/opt/relay-test` (`deploy/docker-compose.yml`). Every push to
+`main` deploys there (`.github/workflows/deploy.yml`). The public API is
+`http://189.72.144.98:8080`.
 
 | | |
 |---|---|
-| API | systemd `relay-api`, loopback :8080, published via nginx |
-| Postgres | **reuses** the existing `ems-postgres` container, separate `sms` database |
-| ClickHouse | new container, hard-capped at 1 GB |
-| Redis | Relay's own on :6380 — **not** shared, see below |
-| Email | Resend, verified `saqibsaeed.cloud`, transactional only |
-| **Total RAM** | **518 MB idle, 812 MB after a full test run** — 5.17 GB still free |
+| API | container `relay-test-api`, public :8080 |
+| Postgres | container `relay-test-postgres`, 127.0.0.1:15432, databases `sms` and `sms_test` |
+| ClickHouse | container `relay-test-clickhouse`, 127.0.0.1:8123/9000, capped at 2 GB |
+| Redis | container `relay-test-redis`, 127.0.0.1:16380 |
+| Backups | `relay-backup.timer` nightly: Postgres, ClickHouse and media to `/opt/relay-test/backups` |
 
-Redis is the one thing deliberately *not* reused: `ems-redis` runs
-`maxmemory-policy noeviction`, so anything of Relay's that filled its 200 MB
-would start failing **EMS's** writes. A dedicated instance that evicts costs
-12 MB, which is less than that risk is worth.
+The server also runs software that is not Relay's (nginx on :80/:443,
+postgresql@17 on :5432, a Next.js app on :3000, smpp-v3). Relay shares nothing
+with it and never touches it.
 
 Tenant isolation was verified against the live database, not just in tests:
 8 tenants exist, a session scoped to the demo tenant sees exactly 1 and **0**

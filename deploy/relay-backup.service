@@ -1,8 +1,8 @@
 [Unit]
-Description=Relay nightly Postgres backup
+Description=Relay nightly backup (Postgres, ClickHouse, media)
 After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/relay/relay-backup.sh
+ExecStart=/opt/relay-test/relay-backup.sh
 SyslogIdentifier=relay-backup

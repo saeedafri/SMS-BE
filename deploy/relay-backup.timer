@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the Relay Postgres backup nightly
+Description=Run the Relay backup nightly
 
 [Timer]
 # 02:30 server time, away from the day's traffic. Persistent catches up a run

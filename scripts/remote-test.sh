@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Run the full test suite ON the AWS server, next to its databases.
+# Run the full test suite ON the Hostinger server, next to its databases.
 #
-# Why: from this Mac every database round trip to ap-south-1 costs ~26 ms, a
-# tenant-scoped write is four of them, and the suite took ~15 minutes waiting
-# on the network. On the server the same round trip is ~0.1 ms.
+# Why: from this Mac every database round trip crosses the internet, a
+# tenant-scoped write is four of them, and the suite spends most of its time
+# waiting on the network. On the server the same round trip is ~0.1 ms.
 #
 # Nothing starts on this machine and Go is not installed on the server: the
 # test binaries are cross-compiled HERE, copied over, and run THERE against the
-# same test databases the local suite always used (sms_test, the test
-# ClickHouse database, Redis) — only the tunnel ports are swapped for the
-# server's own loopback ports. They run at the lowest CPU and I/O priority, so
-# live traffic always wins.
+# test databases (sms_test in relay-test-postgres, sms_test in
+# relay-test-clickhouse, Redis db 1). The connection settings are the server's
+# own /opt/relay-test/tests/test.env, so no database password lives on this
+# machine. They run at the lowest CPU and I/O priority, so live traffic wins.
 #
 # Not covered: -race. Cross-compiling with the race detector needs cgo; use
 # `make test-race` (local, slow) when that is wanted.
@@ -18,8 +18,8 @@
 # Usage: scripts/remote-test.sh [go test -run pattern]
 set -euo pipefail
 
-HOST=${RELAY_AWS:-relay-aws}
-REMOTE=relay-tests          # in the remote user's home, not under /opt/relay
+HOST=${RELAY_HOST:-hostinger-test}
+REMOTE=/opt/relay-test/tests
 RUN=${1:-}
 cd "$(dirname "$0")/.."
 
@@ -30,28 +30,23 @@ mkdir -p "$work/bin"
 start=$(date +%s)
 pkgs=$(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)
 echo "compiling $(echo "$pkgs" | wc -l | tr -d ' ') test packages for linux..."
+# shellcheck disable=SC2086 # one argument per package
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$work/bin/" $pkgs
 
-# The four variables the tests read, from .env, with the tunnel's local ports
-# swapped for the server's loopback ports. Written 0600 and never printed.
-umask 077
-grep -E '^(TEST_DATABASE_URL|TEST_DATABASE_ADMIN_URL|TEST_CLICKHOUSE_URL|REDIS_URL)=' .env \
-  | sed -e 's/:15432/:5432/g' -e 's/:16380/:6380/g' > "$work/test.env"
-# A test with no database URL SKIPS and reports ok — a suite that silently
-# skips is the one failure this script must never produce.
-[ "$(wc -l < "$work/test.env" | tr -d ' ')" = "4" ] || { echo "missing test settings in .env" >&2; exit 2; }
-
 echo "uploading..."
-ssh "$HOST" "mkdir -p $REMOTE/bin"
-rsync -az --delete "$work/bin/" "$HOST:$REMOTE/bin/"
-rsync -a "$work/test.env" "$HOST:$REMOTE/test.env"
+# tar over ssh: the server has no rsync, and installing packages there is not ours.
+COPYFILE_DISABLE=1 tar --no-xattrs -czf - -C "$work" bin | ssh "$HOST" "rm -rf $REMOTE/bin && mkdir -p $REMOTE && tar -xzf - -C $REMOTE"
 compiled=$(date +%s)
 
 echo "running on $HOST..."
-ssh "$HOST" "RUN='$RUN' bash -s" <<'EOS'
+set +e
+ssh "$HOST" "RUN='$RUN' REMOTE='$REMOTE' bash -s" <<'EOS'
 set -uo pipefail
-cd ~/relay-tests
-chmod 600 test.env
+cd "$REMOTE"
+# A test with no database URL SKIPS and reports ok — a suite that silently
+# skips is the one failure this script must never produce.
+[ "$(grep -cE '^(TEST_DATABASE_URL|TEST_DATABASE_ADMIN_URL|TEST_CLICKHOUSE_URL|REDIS_URL)=' test.env 2>/dev/null)" = "4" ] \
+  || { echo "missing test settings in $REMOTE/test.env" >&2; exit 2; }
 set -a; . ./test.env; set +a
 rm -rf logs; mkdir -p logs
 args=(-test.count=1 -test.timeout=15m)

@@ -22,8 +22,8 @@ const (
 // deliverToken emails the link. The token itself is logged only when no mail
 // provider is configured — local development and the test suite, where the log
 // is the only way to follow the link. With real mail the log shows that a token
-// was issued and never the token: logs are shipped to CloudWatch, and a reset
-// token there would let anyone with log access take over any account.
+// was issued and never the token: logs are kept and read by whoever runs the
+// server, and a reset token there would let anyone with log access take over any account.
 //
 // The token is deliberately NOT returned in the response, even behind a
 // development flag. These endpoints answer 204 by contract, and a reset token

@@ -19,11 +19,10 @@ vet:
 
 # The full suite, and the one to run before a push: ~3 minutes.
 #
-# It runs ON the AWS server, next to its databases. From this machine every
-# round trip to ap-south-1 is ~26 ms and a tenant-scoped write is four of them,
-# so the suite spent ~15 minutes waiting on the network; there it is ~0.1 ms.
-# The test binaries are compiled HERE and nothing starts on this machine. See
-# scripts/remote-test.sh. RUN=<pattern> narrows it.
+# It runs ON the Hostinger server, next to its databases: from this machine
+# every round trip crosses the internet and a tenant-scoped write is four of
+# them; there it is ~0.1 ms. The test binaries are compiled HERE and nothing
+# starts on this machine. See scripts/remote-test.sh. RUN=<pattern> narrows it.
 test:
 	./scripts/remote-test.sh "$(RUN)"
 
@@ -67,8 +66,8 @@ generate:
 	go run ./cmd/gen-unimplemented
 	go build ./...
 
-# Postgres, Redis and ClickHouse all live on the AWS server and listen on its
-# loopback only, so `tunnel-up` — not a local install — is what makes them
+# Postgres, Redis and ClickHouse all live on the Hostinger server and listen on
+# its loopback only, so `tunnel-up` — not a local install — is what makes them
 # reachable. .env points at the forwarded ports.
 db-setup: tunnel-up
 	@echo "databases live on the VPS; run migrate-test to bring sms_test up to date"
@@ -83,10 +82,10 @@ migrate-status:
 	$(ENV) && goose -dir db/migrations postgres "$$DATABASE_ADMIN_URL" status
 
 tunnel-up:
-	./scripts/aws-tunnel.sh start
+	./scripts/tunnel.sh start
 
 tunnel-down:
-	./scripts/aws-tunnel.sh stop
+	./scripts/tunnel.sh stop
 
 # clickhouse_migrate.py reads the host and credentials from the environment
 # rather than a URL: urllib drops credentials embedded in a URL and the request

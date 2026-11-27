@@ -94,7 +94,7 @@ type harness struct {
 
 // newHarnessWithInviteCode builds a server that gates self-registration, which
 // is what a public deployment looks like.
-// The datastores live in ap-south-1 behind an SSH tunnel, so a query costs
+// From a laptop the datastores are behind an SSH tunnel, so a query costs
 // ~50ms and opening a pool costs a TCP handshake, a Postgres startup and a
 // ping on top of it. Opening three of them PER TEST cost about a second before
 // any test did anything, which across this package's 400-odd tests was roughly

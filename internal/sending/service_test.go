@@ -38,7 +38,7 @@ type fixture struct {
 
 // One set of handles for the package, opened once.
 //
-// The datastores are in ap-south-1 behind an SSH tunnel, so opening a pool
+// From a laptop the datastores are behind an SSH tunnel, so opening a pool
 // costs a handshake and a ping at ~50ms a round trip. newFixture opened three
 // of them per test; with forty-odd tests that was most of a minute spent
 // connecting before any test did anything.

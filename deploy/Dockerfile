@@ -1,21 +1,12 @@
-# Multi-stage: the runtime image carries the binary and nothing else.
-FROM golang:1.26-alpine AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-# Static build so the runtime image needs no libc at all.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
-      -o /out/control-api ./cmd/control-api && \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
-      -o /out/seed-demo ./cmd/seed-demo
-
+# Runtime only. The deploy workflow cross-compiles the binaries on the GitHub
+# runner and ships them beside this file, so the 2-CPU server never runs a Go
+# build and the image holds the binaries and the migrations, nothing else.
 FROM alpine:3.20
-# ca-certificates for outbound https (webhooks); wget for the healthcheck.
-RUN apk add --no-cache ca-certificates wget && \
-    adduser -D -H -s /sbin/nologin relay
+RUN apk add --no-cache ca-certificates wget tzdata && \
+    adduser -D -H -s /sbin/nologin relay && \
+    mkdir -p /var/lib/relay && chown relay:relay /var/lib/relay
 WORKDIR /opt/relay
-COPY --from=build /out/control-api /out/seed-demo ./
+COPY bin/control-api bin/seed-demo bin/operator-admin ./
 COPY db ./db
 USER relay
 EXPOSE 8080

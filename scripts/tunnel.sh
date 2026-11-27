@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# Forward the AWS datastores (relay-prod, ap-south-1) to localhost. They listen
-# on 127.0.0.1 on the server and are not published, so SSH is the only way in.
+# Forward Relay's datastores on the Hostinger server (189.72.144.98) to
+# localhost. They listen on the server's loopback only, so SSH is the only way in.
 #
-#   local 18080 -> the live control-api, including /v1/dev/* which nginx
-#                  denies on the public hostname — the browser gate needs those
-#   local 15432 -> relay-postgres     (databases: sms, sms_test)
-#   local 16380 -> relay-redis-1
-#   local  8123 -> relay-clickhouse-1 HTTP
-#   local  9000 -> relay-clickhouse-1 native — the port is not negotiable:
+#   local 18080 -> the relay-test-api container, including /v1/dev/*
+#   local 15432 -> relay-test-postgres   (databases: sms, sms_test)
+#   local 16380 -> relay-test-redis
+#   local  8123 -> relay-test-clickhouse HTTP
+#   local  9000 -> relay-test-clickhouse native — the port is not negotiable:
 #                  store.OpenClickHouse derives the native address as host:9000
 #                  from the HTTP URL, so a forwarded port would be ignored.
 #
-# Needs the `relay-aws` host in ~/.ssh/config (HostName 3.111.226.170, User
-# ubuntu, IdentityFile ~/.ssh/relay-aws) and SSH allowed from your IP.
+# Needs the `hostinger-test` host in ~/.ssh/config (HostName 189.72.144.98,
+# User root, your key in the server's authorized_keys).
 #
-# Usage: scripts/aws-tunnel.sh [start|stop|status]
+# Usage: scripts/tunnel.sh [start|stop|status]
 set -euo pipefail
 
-HOST=${RELAY_AWS:-relay-aws}
-PIDFILE=${TMPDIR:-/tmp}/relay-aws-tunnel.pid
+HOST=${RELAY_HOST:-hostinger-test}
+PIDFILE=${TMPDIR:-/tmp}/relay-tunnel.pid
 
 case "${1:-start}" in
 start)
@@ -29,12 +28,12 @@ start)
     ssh -f -N -o ExitOnForwardFailure=yes \
         -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
         -L 18080:127.0.0.1:8080 \
-        -L 15432:127.0.0.1:5432 \
-        -L 16380:127.0.0.1:6380 \
+        -L 15432:127.0.0.1:15432 \
+        -L 16380:127.0.0.1:16380 \
         -L 8123:127.0.0.1:8123 \
         -L 9000:127.0.0.1:9000 \
         "$HOST"
-    pgrep -f "15432:127.0.0.1:5432" > "$PIDFILE"
+    pgrep -f "15432:127.0.0.1:15432" > "$PIDFILE"
     echo "tunnel up (pid $(cat "$PIDFILE"))"
     ;;
 stop)

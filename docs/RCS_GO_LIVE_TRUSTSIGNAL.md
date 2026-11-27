@@ -65,7 +65,7 @@ and which message type.
 ### 2.3 The webhook in Sigmo (needed for delivery reports)
 Sigmo → RCS → RCS Settings → Webhooks → **Add Event Webhook**:
 
-- URL: `https://sms-api.saqibsaeed.cloud/v1/carrier-webhooks/rcs/trustsignal/<token>`.
+- URL: `http://189.72.144.98:8080/v1/carrier-webhooks/rcs/trustsignal/<token>`.
   The token is sent to you separately; it is a secret and is kept out of this repo.
 - Events: **Delivery Status**, **Template**, **User Response**. Agent Delivery
   Status is optional.
@@ -118,12 +118,12 @@ a phone without RCS fails as `nonrcs` with no SMS. Either use Sigmo's own
 1. **Store the Sigmo account in Relay.** You run this, because it asks for the
    API key without echoing it and needs a real terminal:
    ```
-   ssh -t relay-aws 'sudo bash -c "set -a; . /opt/relay/.env; set +a; cd /opt/relay && ./operator-admin rcs-connection add trustsignal Sigmo"'
+   ssh -t hostinger-test 'docker exec -it relay-test-api /opt/relay/operator-admin rcs-connection add trustsignal Sigmo'
    ```
    Press Enter at `baseUrl` to keep the default, then paste the API key. It
    prints a connection id. Then:
    ```
-   ssh -t relay-aws 'sudo bash -c "set -a; . /opt/relay/.env; set +a; cd /opt/relay && ./operator-admin rcs-connection enable <id>"'
+   ssh -t hostinger-test 'docker exec -it relay-test-api /opt/relay/operator-admin rcs-connection enable <id>'
    ```
    The API picks it up within a minute. Its boot line then reads `operators=[TRUSTSIGNAL]`.
 2. **Link the tenant's RCS agent to the Sigmo bot:**

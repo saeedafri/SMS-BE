@@ -101,8 +101,8 @@ jobs:
             You are running in GitHub Actions, not on Saeed's laptop:
             - ../SMS-UI is already checked out at the handoff's ref. Skip
               CLAUDE.md rule 1's fetch/merge; just read it.
-            - The AWS server, its databases and SSH are unreachable. Skip
-              `make test` and every live step of rule 2. Run `make vet`,
+            - The Hostinger server, its databases and SSH are not reachable
+              from here. Skip `make test` and every live step of rule 2. Run `make vet`,
               `make build`, and `go test` on packages that need no database.
             - In the PR description, list every test you wrote that still
               needs `make test` against the real databases before merging.

@@ -1,0 +1,127 @@
+# Relay on the Hostinger server (189.72.144.98), the only deployment.
+#
+# Self-contained: its own containers, network and volumes, all named relay-test-*.
+# It shares nothing with what already runs on this machine (nginx :80/:443,
+# postgres@17 :5432, next-server :3000, smpp-v3) and must never touch it.
+# Datastores listen on loopback only; the API on :8080 is the one public port.
+#
+# The deploy workflow copies this file to /opt/relay-test and the binaries to
+# /opt/relay-test/release. Secrets live only on the server: .env (the
+# variables below) and api.env (the API's; see api.env.example).
+#
+#   cd /opt/relay-test && docker compose up -d
+
+name: relay-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-test-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD}
+    command: >
+      postgres -c shared_buffers=512MB -c effective_cache_size=1536MB
+               -c max_connections=200 -c log_min_duration_statement=500
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:15432:5432"
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits: {memory: 2G}
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: relay-test-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: sms
+      CLICKHOUSE_USER: relay
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./clickhouse-limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
+    # 8123/9000 are free on this host and the API derives the native port as
+    # host:9000 from the HTTP URL, so the host-side test run needs both as-is.
+    ports:
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
+    ulimits:
+      nofile: {soft: 262144, hard: 262144}
+    deploy:
+      resources:
+        limits: {memory: 2G, cpus: "1.5"}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  redis:
+    image: redis:7-alpine
+    container_name: relay-test-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --save ""
+    ports:
+      - "127.0.0.1:16380:6379"
+    deploy:
+      resources:
+        limits: {memory: 192M, cpus: "0.5"}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  api:
+    build: ./release
+    image: relay-test-api:latest
+    container_name: relay-test-api
+    restart: unless-stopped
+    env_file: ./api.env
+    environment:
+      GOMEMLIMIT: 400MiB
+      GOGC: "80"
+    volumes:
+      - media:/var/lib/relay
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    deploy:
+      resources:
+        limits: {memory: 512M}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: "50m", max-file: "5"}
+
+volumes:
+  pgdata:
+  chdata:
+  media:

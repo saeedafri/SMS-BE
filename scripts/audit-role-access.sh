@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Relay role-access evidence matrix.
 #
-# Gathers, asserts nothing. Every request goes to the LIVE API over TLS, with a
+# Gathers, asserts nothing. Every request goes to the LIVE API, with a
 # real session token obtained by a real login — the same path a browser session
 # takes. The point is to measure where the frontend's idea of access differs
 # from the backend's, rather than to read either side's code and form an opinion.
@@ -9,7 +9,7 @@
 # Writes are included deliberately: read access proves a screen opens, not that
 # a button works. The caller resets demo state afterwards.
 set -uo pipefail
-B=${API:-https://sms-api.saqibsaeed.cloud}
+B=${API:-http://189.72.144.98:8080}
 
 tok() {
   curl -s --max-time 20 -X POST "$B/v1/auth/login" -H 'Content-Type: application/json' \
