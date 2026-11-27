@@ -668,15 +668,16 @@ func apply(ctx context.Context, pool *pgxpool.Pool, includeHistory bool) error {
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO campaigns (id, tenant_id, name, channel, country, list_id, sender_id,
 		                       template_id, status, send_started_at, scheduled_at, recipients,
-		                       segments_per_message, cost_minor_min, cost_minor_max, currency)
+		                       segments_per_message_min, segments_per_message_max,
+		                       cost_minor_min, cost_minor_max, currency)
 		VALUES ($1, $3, 'Festive flash sale', 'SMS', 'IN', $4, $5, $6,
-		        'sent', '2026-06-20T10:05:00Z', NULL, $10, 1, $10 * 12, $10 * 12, 'INR'),
+		        'sent', '2026-06-20T10:05:00Z', NULL, $10, 1, 1, $10 * 12, $10 * 12, 'INR'),
 		       ($2, $3, 'Weekend RCS promo',  'RCS', 'IN', $4, $7, $8,
-		        'sending', now() - interval '20 seconds', NULL, $10, 1, $10 * 21, $10 * 45, 'INR'),
+		        'sending', now() - interval '20 seconds', NULL, $10, 1, 1, $10 * 21, $10 * 45, 'INR'),
 		       ($9, $3, 'Payment reminders',  'SMS', 'IN', $4, $5, $6,
 		        -- Scheduled in the future so it stays scheduled: a past date would
 		        -- describe a campaign that should already have sent.
-		        'scheduled', NULL, now() + interval '3 days', 900, 1, 21600, 21600, 'INR')`,
+		        'scheduled', NULL, now() + interval '3 days', 900, 1, 1, 21600, 21600, 'INR')`,
 		campaignOne, campaignTwo, tenantID, listID, smsID, smsTemplate,
 		rcsID, rcsTemplate, campaignThree, historyMessagesPerCampaign); err != nil {
 		return fmt.Errorf("seed campaigns: %w", err)

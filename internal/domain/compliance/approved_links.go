@@ -64,7 +64,7 @@ func UnapprovedLink(text string, approved []string) (host, reason string) {
 		case host == "":
 			return link, "Enter a full, valid URL (https://...)."
 		case isShortener(host):
-			return host, "URL shorteners are not allowed under DLT. Use the full URL."
+			return host, host + " is a URL shortener. URL shorteners are not allowed under DLT. Use the full URL."
 		case !allowed[host]:
 			return host, fmt.Sprintf("%s is not on your approved links. Add this exact host "+
 				"under Compliance, in your DLT account first.", host)

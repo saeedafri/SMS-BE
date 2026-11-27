@@ -25,6 +25,11 @@ type EmailConnector struct {
 
 func (EmailConnector) Name() string { return "email" }
 
+// TemplatesReviewed is false: an email provider sends whatever it is handed.
+// Without it the gate waits for a carrier verdict no email template ever gets
+// and refuses every live email carrier_template_not_approved.
+func (EmailConnector) TemplatesReviewed() bool { return false }
+
 func (EmailConnector) Health(context.Context) connector.Health {
 	return connector.Health{Healthy: true, Detail: "email provider"}
 }

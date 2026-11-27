@@ -60,6 +60,12 @@ var (
 		"sender.approved", "sender.rejected",
 		"template.approved", "template.rejected",
 		"wallet.low_balance", "wallet.depleted",
+		// Email's provider events.
+		"message.bounced", "message.complained", "message.unsubscribed",
+		// WhatsApp: Meta's verdicts on a number and its templates.
+		"sender.quality_changed", "sender.limit_changed", "sender.restricted",
+		"sender.disconnected",
+		"template.paused", "template.disabled", "template.category_changed",
 	}
 	// India DLT's content-template taxonomy. Deliberately NOT merged with
 	// TemplateCategory (Meta's WhatsApp taxonomy) even though both contain
