@@ -1,6 +1,6 @@
 # Backend reply, 23 Nov 2026: WP5 RCS carousels and rich suggestions
 
-Commit `2f4d047` (local, not pushed). ClickHouse `008_message_fallback_reason.sql`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+Commit `2f4d047` (local, not pushed). ClickHouse `008_message_fallback_reason.sql`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 Content rules (`internal/domain/rcs/content.go`) run in your order (undeclared field, structure,
 limits, then the regime's URL rule) and ran and pass: `TestRCSContentLimits`,

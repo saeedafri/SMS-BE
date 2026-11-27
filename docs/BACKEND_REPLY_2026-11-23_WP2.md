@@ -2,7 +2,7 @@
 
 Commit `22a5b28` (local, not pushed). Migration `00081_failure_reasons.sql`: your 128 mock rows
 (read from `src/mocks`, ids fr-0001 to fr-0128) plus 19 of ours (fr-0129 to fr-0147); `00086` adds
-fr-0148 `sending_paused`, fr-0149 `variables_missing`, fr-0150 `messaging_limit_reached`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+fr-0148 `sending_paused`, fr-0149 `variables_missing`, fr-0150 `messaging_limit_reached`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 Resolution order (route, vendor, channel and source exact, prefix family, unmapped) is a pure
 function with mutation-style tests: `TestResolutionOrder`, `TestAnUnknownCodeIsUnmappedAndKeepsTheRawCode`,

@@ -6,7 +6,7 @@ Status: 16 Oct 2026. Derived from [08-gap-analysis.md](08-gap-analysis.md). The 
 
 - **Team.** One backend stream (SMS-BE) and one frontend stream (SMS-UI, via `HANDOFF_TO_UI_*` docs and the relay bridge).
 - **Effort.** Estimates are in engineer-weeks (ew) for someone who knows the code. Calendar time also depends on the external lead times in §2, which usually dominate.
-- **Done means live.** Every epic follows the project rule: "tested locally against remote datastores, then live on relay-aws, then proven against the public API". An epic is not done until its acceptance criteria pass **live**.
+- **Done means live.** Every epic follows the project rule: "tested locally against remote datastores, then live on the Hostinger server, then proven against the public API". An epic is not done until its acceptance criteria pass **live**.
 - **Order.** Integrity first, then India-complete, then channel parity, then enterprise and reseller, then international. Channel work runs in parallel with India-complete because its external lead times are long.
 
 ---
@@ -73,7 +73,7 @@ Total engineering effort is roughly 70–90 ew across both streams. With one bac
 - **A4 voice verification.** Remove the code from the response (`internal/api/senders.go:254`). Until Epic 2.3 lands, verification by voice call returns 501/unavailable.
 - **B2 `/metrics`.** Require an operator token or a loopback/allowlisted IP (`server.go:370-373`).
 - **B3 SSRF.** Check addresses at dial time with a custom `net.Dialer.Control` that refuses private, loopback and link-local ranges after DNS resolution (`internal/webhook/webhook.go`).
-- **B7 / B8 / B9 production flags.** Read the production values of `ENABLE_DEV_ENDPOINTS`, `SIGNUP_INVITE_CODE` and `OPERATOR_IP_ALLOWLIST` on relay-aws (Saeed runs this with `!`, since the classifier blocks remote reads). Make the boot step **refuse to start** with `ENABLE_DEV_ENDPOINTS=1` when `APP_ENV=production`. Add an invite-code field to signup, or remove the gate deliberately.
+- **B7 / B8 / B9 production flags.** Read the production values of `ENABLE_DEV_ENDPOINTS`, `SIGNUP_INVITE_CODE` and `OPERATOR_IP_ALLOWLIST` on the Hostinger server (Saeed runs this with `!`, since the classifier blocks remote reads). Make the boot step **refuse to start** with `ENABLE_DEV_ENDPOINTS=1` when `APP_ENV=production`. Add an invite-code field to signup, or remove the gate deliberately.
 - **B10.** Enable RLS on `rate_overrides`, or document that only the operator pool reads it.
 - **B6.** Cloudflare Turnstile on signup, login and forgot-password: UI widget plus a backend verification call.
 - Rotate the Trustsignal webhook token printed on 11 Oct (from the checkpoint).

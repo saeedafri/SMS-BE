@@ -2,13 +2,13 @@
 
 Read this first. Each package has its own reply beside it (`BACKEND_REPLY_2026-11-23_<package>.md`).
 
-## The one fact that limits every reply
+## Update, 27 Nov 2026: tested and deployed
 
-The AWS server (`relay-aws`, 3.111.226.170) has not answered on ports 22, 80 or 443 since
-23 Nov (`ssh: connect to host 3.111.226.170 port 22: Operation timed out`, re-checked after WP4).
-The test databases and the deployment both live there. So, for **every** package:
+The deployment and the test databases moved to the Hostinger server (`189.72.144.98`, API at
+`http://189.72.144.98:8080`); every push to `main` now deploys there. The first database-backed run
+of these packages found 11 failures, fixed in `3dc692f` and `42dfda0`; the full suite is now
+1349 pass, 0 fail. The rest of this page is as written on 23 Nov, before any of that:
 
-- The code is written and committed **locally**. Nothing is pushed or deployed.
 - Every acceptance row has a test, or is marked "no test" below. Tests that need Postgres or
   ClickHouse **have not run yet**: locally they skip (no `TEST_DATABASE_URL`), and `make test` runs
   them on the server. Pure unit tests (domain rules, config, webhook dialer) **have run and pass**.

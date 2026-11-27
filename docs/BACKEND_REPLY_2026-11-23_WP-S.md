@@ -1,6 +1,6 @@
 # Backend reply, 23 Nov 2026: WP-S integrity and security
 
-Commit `fffd42a` (local, not pushed). Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+Commit `fffd42a` (local, not pushed). Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 | Your id | What we did | Test | Ran? |
 |---|---|---|---|

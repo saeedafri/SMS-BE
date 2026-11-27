@@ -2,7 +2,7 @@
 
 Commit `83c9f33` (local, not pushed); one rename in `31ec59f` (the receipts table is now
 `provider_event_receipts`, shared with WhatsApp). Migrations `00085_email_on_ses`, `00086_refusal_rows`,
-ClickHouse `009_email_events`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+ClickHouse `009_email_events`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 **Code-complete on the fake only.** Every SES call goes through `connector.EmailProvider`; the only
 implementation is `FakeEmail`. The real SES adapter and the SES event endpoint are not built (below).

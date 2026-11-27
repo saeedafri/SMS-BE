@@ -101,14 +101,14 @@ only (no `rcs` reference in `SMS-UI/src/app/(admin)/admin/connections`).
 
 | Store | Role | Wiring |
 |---|---|---|
-| Postgres 16 (`deploy/aws/docker-compose.yml:12-13`) | Control plane: tenants, users, money ledger, compliance registry, campaigns, routes, connections. RLS on 55 tables (§2). | Tenant pool `store.Open` with startup retry (`cmd/control-api/main.go:76-85`); separate **operator pool** with cross-tenant visibility (`:122-127`); admin (migration-role) pool opened **only** when dev endpoints are on (`:109-117`) |
-| ClickHouse 24.8 (`docker-compose.yml:40-41`, limited to 2 GB / 1.5 CPU at `:59`) | Data plane: every message row, every state transition, hourly rollups (§2.3) | Self-healing handle `store.NewClickHousePool` (`main.go:103`) — reconnects per tick rather than once at boot |
-| Redis 7 (`docker-compose.yml:70-71`, 192 MB / 0.5 CPU at `:79`) | Rate limiting only: send limiter, login backoff, abuse guard bans | `store.OpenRedis`; boot **continues without it** and limits fail open (`main.go:87-96`, `internal/api/send_ratelimit.go:41-49`) |
+| Postgres 16 (`deploy/docker-compose.yml`) | Control plane: tenants, users, money ledger, compliance registry, campaigns, routes, connections. RLS on 55 tables (§2). | Tenant pool `store.Open` with startup retry (`cmd/control-api/main.go:76-85`); separate **operator pool** with cross-tenant visibility (`:122-127`); admin (migration-role) pool opened **only** when dev endpoints are on (`:109-117`) |
+| ClickHouse 24.8 (`docker-compose.yml`, limited to 2 GB / 1.5 CPU) | Data plane: every message row, every state transition, hourly rollups (§2.3) | Self-healing handle `store.NewClickHousePool` (`main.go:103`) — reconnects per tick rather than once at boot |
+| Redis 7 (`docker-compose.yml`, 192 MB / 0.5 CPU) | Rate limiting only: send limiter, login backoff, abuse guard bans | `store.OpenRedis`; boot **continues without it** and limits fail open (`main.go:87-96`, `internal/api/send_ratelimit.go:41-49`) |
 | Local disk (`MEDIA_ROOT`) | RCS brand artwork and verification documents | `mediastore.New`, only when root + signing key + base URL are all set (`main.go:221-228`) |
 | In-process `HotCache` (2 s TTL) | Sender, tenant status, pricing rate, entity-registration lookups | `main.go:327`; wallet balance and suppression deliberately uncached (`main.go:313-326`) |
 
-All three datastores run as containers on the same EC2 box as the API, on loopback
-(`Makefile:63-66` comment; `deploy/aws/docker-compose.yml`).
+All three datastores run as containers beside the API container on the Hostinger server, on
+loopback (`deploy/docker-compose.yml`).
 
 ### 1.3 Background loops (all in `cmd/control-api/main.go`)
 
@@ -135,37 +135,39 @@ would double-run the scheduler, journeys and invoicing (the retry worker alone u
 
 ```
  GitHub push to main
-        │  .github/workflows/deploy.yml (concurrency group deploy-aws, no cancel)
+        │  .github/workflows/deploy.yml (concurrency group deploy-hostinger, no cancel)
         ▼
  ubuntu runner: go vet ‖ go test ./... (datastore tests SKIP) ‖ go build control-api, seed-demo, operator-admin
-        │ scp
+        │ tar over ssh
         ▼
- EC2 relay-prod, ap-south-1, 2 vCPU  (memory: aws-server.md; UNVERIFIED instance type)
+ Hostinger server 189.72.144.98, Debian 13, 2 vCPU, 7.8 GB  — compose project relay-test, /opt/relay-test
  ┌──────────────────────────────────────────────────────────────────────────┐
- │ nginx (deploy/aws/nginx, JSON access log → CloudWatch)  + fail2ban        │
- │   └─► relay-api.service  /opt/relay/control-api  MemoryMax=512M, Restart=always │
- │          ├─ Postgres 16 container (loopback)                              │
- │          ├─ ClickHouse 24.8 container (2 GB, 1.5 CPU)                     │
- │          └─ Redis 7 container (192 MB, 0.5 CPU)                           │
- │ relay-backup.timer 02:30 daily → pg_dump + ClickHouse native → S3         │
+ │ relay-test-api   public :8080, 512 MB, image keeps a :prev tag            │
+ │   ├─ relay-test-postgres   Postgres 16, 127.0.0.1:15432, 2 GB             │
+ │   ├─ relay-test-clickhouse ClickHouse 24.8, 127.0.0.1:8123/9000, 2 GB     │
+ │   └─ relay-test-redis      Redis 7, 127.0.0.1:16380, 192 MB               │
+ │ relay-backup.timer daily → pg_dump + ClickHouse native + media, on disk   │
+ │ (nginx, postgresql@17, a Next.js app and smpp-v3 on the same box are not  │
+ │  Relay's and are never touched)                                           │
  └──────────────────────────────────────────────────────────────────────────┘
         ▲                                   ▲
-   SMS-UI on Vercel (BFF)            Operators' SMPP (VIDEOCON), Trustsignal HTTPS
+   SMS-UI on Vercel (BFF)            Operators' SMPP, Trustsignal HTTPS
 ```
 
-Deploy steps (`deploy.yml:101-185`): goose migrate with the admin URL, ClickHouse migrate
-(`scripts/clickhouse_migrate.py`), `systemctl restart relay-api`, poll
-`http://127.0.0.1:8080/healthz` for `"status":"ok"`, **roll back the binary** on failure, then
-probe `https://sms-api.saqibsaeed.cloud/healthz`. Migrations are not rolled back with the binary.
-Backups: `deploy/relay-backup.sh:30` (pg_dump), `:52-53` (ClickHouse), `:46` (S3 upload), timer
-`deploy/relay-backup.timer` `OnCalendar=*-*-* 02:30:00` — RPO is up to 24 h.
+Deploy steps (`deploy.yml`): pre-deploy pg_dump, goose migrate, ClickHouse migrate
+(`scripts/clickhouse_migrate.py`), rebuild and restart the API container, poll
+`http://127.0.0.1:8080/healthz` until it names the pushed commit, **roll back to the :prev image**
+on failure, then probe `http://189.72.144.98:8080/healthz` from outside. Migrations are not
+rolled back with the image. Backups: `deploy/relay-backup.sh`, timer `deploy/relay-backup.timer`
+`OnCalendar=*-*-* 02:30:00`, kept on the same disk unless `BACKUP_RCLONE_TARGET` is set — RPO is
+up to 24 h.
 
-The API process is capped at **512 MB** (`deploy/relay-api.service:39`).
+The API container is capped at **512 MB** (`deploy/docker-compose.yml`).
 
 ### 1.5 Throughput
 
-Measured on 4 Sep 2026 (`docs/PERFORMANCE_live-send-throughput-2026-09-04.md`), **on the
-retired Hostinger VPS, not on AWS** — no AWS re-measurement exists in the repo:
+Measured on 4 Sep 2026 (`docs/PERFORMANCE_live-send-throughput-2026-09-04.md`), on an earlier
+server — no re-measurement on the current Hostinger server exists in the repo:
 
 | Concurrency | Before coalescer | After coalescer |
 |---|---|---|
@@ -188,16 +190,15 @@ in `db/clickhouse/001_messages.sql:3-4`; ~190/s sustained is ~1.6 crore/day only
 
 ### 1.6 Observability
 
-- Structured JSON logs via `slog` (`internal/platform/telemetry/logger.go`); nginx JSON access
-  log for CloudWatch (`deploy/aws/nginx/conf.d-00-relay-logformat.conf:1`).
+- Structured JSON logs via `slog` (`internal/platform/telemetry/logger.go`), read with
+  `docker logs relay-test-api` on the server.
 - In-process metrics at `GET /metrics` — counters, timings, recent incidents, slow requests
   > 250 ms — **deliberately no Prometheus** (`internal/api/observability.go:1-25`), and the
   endpoint is **unauthenticated** (`internal/api/server.go:370-373`).
 - `/healthz` (dependency check, 503 when down) and `/readyz` (`server.go:366-369`).
 - Worker panics recorded as incidents (`main.go:147` and every `Supervise` call).
 - No tracing (OpenTelemetry appears only as an indirect dependency, `go.mod:43-44`), no
-  alerting on the platform itself in code — CloudWatch configuration is outside the repo
-  (UNVERIFIED).
+  alerting on the platform itself.
 
 ### 1.7 Architecture gaps
 

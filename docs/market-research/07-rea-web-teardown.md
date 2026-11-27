@@ -401,7 +401,7 @@ That does not mean they don't use it: billing pages sit behind login and were no
     `/operator` and `/mfa`, redirects with 307 to `/login?callbackUrl=…`.
 - **No secret-looking values** in any delivered chunk. Regexes run: `NEXT_PUBLIC_*`,
   `sk_/pk_(live|test)`, `AKIA…`, JWT `eyJ…`, `re_…`, `api[_-]key`, all with zero hits [curl]. The
-  backend host `sms-api.saqibsaeed.cloud` does not appear in the client bundles. All calls go
+  backend host does not appear in the client bundles. All calls go
   same-origin (consistent with `connect-src 'self'`). Storage on the signup page is empty (E2:
   no localStorage, sessionStorage, IndexedDB or cache keys).
 - **Signup form** (E2 accessibility tree, E5 screenshot): Full name, Work email, Password ("At

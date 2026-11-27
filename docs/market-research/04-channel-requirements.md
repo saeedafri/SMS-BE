@@ -707,7 +707,7 @@ Test plan:
 
 | Piece | Proposal | Reuses |
 |---|---|---|
-| Account setup | One SES account in ap-south-1 (same AWS account as relay-prod). Request production access. Create a configuration set per tenant or use SES **tenants** (`CreateTenant`, `CreateTenantResourceAssociation`) [V docs]. Reputation policy "standard". | — |
+| Account setup | One SES account in ap-south-1. Request production access. Create a configuration set per tenant or use SES **tenants** (`CreateTenant`, `CreateTenantResourceAssociation`) [V docs]. Reputation policy "standard". | — |
 | Domain identity | On email sender create, call `CreateEmailIdentity(domain, DkimSigningAttributes{NextSigningKeyLength: RSA_2048_BIT})`. SES returns 3 DKIM CNAME tokens; store them as the DKIM rows. Also call `PutEmailIdentityMailFromAttributes(mail.<domain>)`, giving SPF `v=spf1 include:amazonses.com ~all` on the MAIL FROM subdomain plus an MX record. | Replace placeholders at `SMS-BE/internal/store/compliance.go:226-235`; table `db/migrations/00017_sender_dns_records.sql` |
 | Verification | A periodic job calls `GetEmailIdentity` → `DkimAttributes.Status` and `MailFromAttributes.MailFromDomainStatus` → records verified/failed. Delete the dev advance endpoint for production (`SMS-BE/internal/api/dev.go:38,256`). | Scheduler pattern of `LaunchDueCampaigns` (`SMS-BE/internal/api/campaign_scheduler.go:19`) |
 | DMARC | Advise `p=none` first with `rua` to a Relay-owned address; parse aggregate reports later. Never default `p=quarantine` on a domain whose other mail streams Relay cannot see (current default at `compliance.go:234` risks a customer's corporate mail). | — |

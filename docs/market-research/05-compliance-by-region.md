@@ -242,7 +242,7 @@ HELP keyword and no quiet hours.
 
 | Item | Why | Relay today |
 |---|---|---|
-| **SOC 2 Type II** | The default ask from US buyers. The observation window is at least 3–12 months, so start the clock early. | None. A single 2-vCPU EC2 with no documented controls. (Shared context notes that relay-aws is effectively a test environment.) |
+| **SOC 2 Type II** | The default ask from US buyers. The observation window is at least 3–12 months, so start the clock early. | None. A single 2-vCPU server with no documented controls. (The Hostinger server is a test environment.) |
 | **ISO/IEC 27001:2022** | Asked for by EU, India and GCC enterprises and banks. The 2013 certificates expired **31 Oct 2025**, so new certification must be to 2022. https://www.lrqa.com/en/insights/articles/preparing-for-iso-270012022-transition-by-october-2025/ (15 Oct 2026) | None |
 | **GDPR DPA + SCCs + sub-processor list** | Needed for any EU/UK customer, and Relay is a processor. | None |
 | **DPDP processor terms** | Indian enterprises will add these to MSAs before May 2027. | None |

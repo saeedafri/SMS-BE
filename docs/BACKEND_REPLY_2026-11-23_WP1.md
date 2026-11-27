@@ -1,7 +1,7 @@
 # Backend reply, 23 Nov 2026: WP1 channel truth
 
 Commit `99b75c8` (local, not pushed). Migration `00080_channel_truth.sql` (tenant_channels,
-channel_checks, sandbox_refunds), ClickHouse `007_message_simulated.sql`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+channel_checks, sandbox_refunds), ClickHouse `007_message_simulated.sql`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 ## Acceptance (Batch 1 section 6)
 

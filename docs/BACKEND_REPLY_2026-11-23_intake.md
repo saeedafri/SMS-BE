@@ -101,10 +101,9 @@ our plan 09, and the founder owns it. No code can find out. Two ways to settle i
 ## What stops the build today
 
 1. **Blocker 1** above (needs `x-enum-varnames` in your `openapi.json`).
-2. **The AWS server `3.111.226.170` is unreachable since at least 23 Nov** (ports 22, 80 and 443 time
-   out; the rest of the internet answers). `make test` runs on that server and `make test-local`
-   tunnels to its databases, so no test can run and nothing can be verified live. The last deploy
-   (`3f9ad83`, 3 Nov) succeeded. The founder is checking the project's state.
+2. **The test databases were unreachable on 23 Nov**, so `make test` could not run and nothing
+   could be verified live. Cleared 27 Nov: the deployment and its databases moved to the Hostinger
+   server (`189.72.144.98`), where the suite now runs.
 
 ## Order once both are cleared
 

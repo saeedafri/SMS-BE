@@ -2,7 +2,7 @@
 
 Commit `8087ce2` (local, not pushed). Migrations `00082_approved_links`, `00083_campaign_quiet_hours`,
 `00084_link_domains_and_lookups`. Config: `DND_MODE` (deny, operator, ncpr; default deny),
-`APPROVED_LINK_COUNTRIES` (default IN), `LINK_DOMAIN_TARGET`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+`APPROVED_LINK_COUNTRIES` (default IN), `LINK_DOMAIN_TARGET`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 Pure rules ran and pass: `TestApprovedLinks`, `TestQuietHoursAreTheHoursOfSilence`, `TestQuietHoursProblems`,
 `TestLaunchMovesUntilNeitherRuleMovesIt`, `TestDNDModeDefaultsToDenyAndRefusesAnUnknownMode`,

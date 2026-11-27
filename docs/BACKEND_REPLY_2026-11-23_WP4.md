@@ -1,7 +1,7 @@
 # Backend reply, 23 Nov 2026: WP4 WhatsApp on the Meta Cloud API
 
 Commit `31ec59f` (local, not pushed). Migration `00087_whatsapp_cloud_api`, ClickHouse
-`010_provider_billing`. Status of every row: the test is written; tests that need a database **have not run** (relay-aws unreachable, see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
+`010_provider_billing`. Status of every row: the test is written; tests that need a database **ran on 27 Nov** on the Hostinger server and pass (see `BACKEND_REPLY_2026-11-23_status.md`). Script outputs are in that file. Evidence from the deployment: none yet.
 
 **Code-complete on the fake only.** Every Meta call goes through `connector.WhatsAppProvider`
 (exchange code, subscribe, register, account, submit template); the only implementation is
