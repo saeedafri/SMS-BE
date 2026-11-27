@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -178,8 +179,14 @@ func TestVoiceCallNeverReturnsTheCode(t *testing.T) {
 	if call.Code != http.StatusNotImplemented {
 		t.Fatalf("voice-call: status = %d, want 501; body = %s", call.Code, call.Body)
 	}
-	if strings.Contains(string(call.Body), `"code":"`) {
-		t.Fatalf("voice-call body carries a code: %s", call.Body)
+	// The error envelope has its own error.code; the verification code used
+	// to travel as a top-level "code", so that is where a leak would show.
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(call.Body, &body); err != nil {
+		t.Fatalf("voice-call body is not JSON: %s", call.Body)
+	}
+	if _, leaked := body["code"]; leaked || !strings.Contains(string(body["error"]), `"not_implemented"`) {
+		t.Fatalf("voice-call body carries a code or the wrong error: %s", call.Body)
 	}
 	after := h.do(http.MethodGet, "/v1/sender-ids/"+sender.Id.String(), acct.Token, nil)
 	var unchanged gen.SenderId

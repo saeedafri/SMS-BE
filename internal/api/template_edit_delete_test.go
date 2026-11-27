@@ -265,8 +265,9 @@ func TestAnEditReDerivesVariablesFromTheWordsItLeavesBehind(t *testing.T) {
 	rcs := h.seedTemplateOn(acct, h.seedSender(acct, "RCS"), "RCS", "pending_review",
 		map[string]any{"rcs_content": card})
 	res = h.patchTemplate(acct, rcs, map[string]any{"rcsContent": map[string]any{
-		"kind": "card", "title": "Hi {{first_name}}", "description": "Order {{order_id}}",
-		"suggestions": []any{map[string]any{"kind": "reply", "label": "Thanks {{city}}",
+		"kind": "card", "card": map[string]any{"mediaUrl": "https://cdn.relay.test/card.png",
+			"title": "Hi {{first_name}}", "description": "Order {{order_id}}"},
+		"suggestions": []any{map[string]any{"type": "reply", "text": "Thanks {{city}}",
 			"postbackData": "ok"}},
 	}})
 	if res.Code != http.StatusOK {

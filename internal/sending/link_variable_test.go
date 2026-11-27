@@ -392,6 +392,9 @@ func TestAnEmailBodyCarriesTheLink(t *testing.T) {
 	f.service.Carriers = connector.Registry{Default: mail}
 	f.service.LinkBaseURL = linkBase
 	sender := f.seedApprovedSender("mail"+uuid.NewString()[:4]+"@relay.test", "EMAIL")
+	// Its own rate: another package's test may or may not have added one.
+	f.exec(`INSERT INTO pricing_rates (country, channel, category, per_segment_minor, currency)
+	        VALUES ('IN', 'EMAIL', '', 10, 'INR') ON CONFLICT DO NOTHING`)
 	template := uuid.New()
 	f.exec(`INSERT INTO templates (id, tenant_id, sender_id, name, channel, country, body, variables, status, category)
 	        VALUES ($1, $2, $3, 'Email link', 'EMAIL', 'IN', 'Your offer: {{link}}', '{link}', 'approved', 'UTILITY')`,

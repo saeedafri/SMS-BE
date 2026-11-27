@@ -205,8 +205,9 @@ func (h *harness) approvedSenderOn(tenant account, channel string) string {
 	var id string
 	if err := h.admin.QueryRow(context.Background(), `
 		INSERT INTO sender_ids (tenant_id, header, channel, country, status)
-		VALUES ($1, 'SENDAP', $2, 'IN', 'approved') RETURNING id`,
-		tenant.TenantID, channel).Scan(&id); err != nil {
+		VALUES ($1, $3, $2, 'IN', 'approved') RETURNING id`,
+		// A distinct header per call: a test may want two senders on one channel.
+		tenant.TenantID, channel, "SENDA"+string(rune('A'+h.nextSenderSeq()%26))).Scan(&id); err != nil {
 		h.t.Fatalf("seed sender: %v", err)
 	}
 	h.registerEntity(tenant.TenantID, "IN")

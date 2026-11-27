@@ -42,13 +42,18 @@ func (h *harness) whatsAppSender(tenant account, ready bool) (senderID, wabaID s
 	if ready {
 		payment = "card"
 	}
+	// Sealed with the server's own key: a route that calls Meta decrypts it.
+	sealed, err := h.server.Secrets.Encrypt("test-business-token")
+	if err != nil {
+		h.t.Fatal(err)
+	}
 	if err := h.admin.QueryRow(context.Background(), `
 		INSERT INTO sender_ids (tenant_id, header, channel, country, status, waba_id,
 		    wa_phone_number_id, wa_token_sealed, wa_token_status, wa_subscribed, wa_registered,
 		    wa_payment_method, wa_display_name_status, wa_messaging_limit)
-		VALUES ($1, $2, 'WHATSAPP', 'IN', 'approved', $3, $2, 'sealed', 'ok', true, true,
+		VALUES ($1, $2, 'WHATSAPP', 'IN', 'approved', $3, $2, $5, 'ok', true, true,
 		    $4, 'approved', 'TIER_250') RETURNING id`,
-		tenant.TenantID, fmt.Sprint(rand.Int64N(1<<52)), wabaID, payment).Scan(&senderID); err != nil {
+		tenant.TenantID, fmt.Sprint(rand.Int64N(1<<52)), wabaID, payment, sealed).Scan(&senderID); err != nil {
 		h.t.Fatalf("seed whatsapp sender: %v", err)
 	}
 	h.registerEntity(tenant.TenantID, "IN")
@@ -80,17 +85,18 @@ func (h *harness) whatsAppList(tenant account, people int) string {
 	h.t.Helper()
 	list := uuid.New()
 	ctx := context.Background()
-	if _, err := h.admin.Exec(ctx, `INSERT INTO contact_lists (id, tenant_id, name) VALUES ($1, $2, 'WA')`,
-		list, tenant.TenantID); err != nil {
+	// Named and numbered by the list's own id, so one tenant can hold several.
+	if _, err := h.admin.Exec(ctx, `INSERT INTO contact_lists (id, tenant_id, name) VALUES ($1, $2, $3)`,
+		list, tenant.TenantID, "WA "+list.String()); err != nil {
 		h.t.Fatal(err)
 	}
 	if _, err := h.admin.Exec(ctx, `
 		WITH added AS (
 		    INSERT INTO contacts (tenant_id, msisdn, country, fields, consent)
-		    SELECT $1, '+9197' || lpad(g::text, 8, '0'), 'IN', '{"first_name":"Asha"}', '{"WHATSAPP":"opted_in"}'
+		    SELECT $1, '+9197' || lpad(($4 + g)::text, 8, '0'), 'IN', '{"first_name":"Asha"}', '{"WHATSAPP":"opted_in"}'
 		    FROM generate_series(1, $3) g RETURNING id)
 		INSERT INTO contact_list_members (list_id, contact_id, tenant_id) SELECT $2, id, $1 FROM added`,
-		tenant.TenantID, list, people); err != nil {
+		tenant.TenantID, list, people, h.nextSenderSeq()*100_000); err != nil {
 		h.t.Fatal(err)
 	}
 	return list.String()
@@ -226,8 +232,8 @@ func TestWhatsAppRepliesKeepTheCustomerWindow(t *testing.T) {
 	for name, body := range map[string]map[string]any{
 		"neither": {}, "both": {"body": "hi", "templateId": approved},
 	} {
-		if res := reply(body); res.Code != http.StatusUnprocessableEntity || res.errorCode(t) != "validation" {
-			t.Errorf("%s = %d %s, want 422 validation", name, res.Code, res.Body)
+		if res := reply(body); res.Code != http.StatusUnprocessableEntity || res.errorCode(t) != "validation_failed" {
+			t.Errorf("%s = %d %s, want 422 validation_failed", name, res.Code, res.Body)
 		}
 	}
 	if res := reply(map[string]any{"body": "hello"}); res.errorCode(t) != "outside_customer_window" {
@@ -265,6 +271,12 @@ func TestEmbeddedSignupRefusesBeforeSpendingTheCode(t *testing.T) {
 	h := newHarness(t)
 	h.server.WhatsApp = connector.NewFakeWhatsApp()
 	tenant, other := h.newAccount("owner"), h.newAccount("owner")
+	// At least one onboarding this week, so the cap below is a real number:
+	// a cap of 0 means "use the default of 10", not "nobody".
+	if _, err := h.admin.Exec(context.Background(),
+		`INSERT INTO wa_onboardings (tenant_id) VALUES ($1)`, other.TenantID); err != nil {
+		t.Fatal(err)
+	}
 	var onboarded int
 	_ = h.admin.QueryRow(context.Background(), `SELECT count(*) FROM wa_onboardings
 		WHERE onboarded_at > now() - interval '7 days'`).Scan(&onboarded)

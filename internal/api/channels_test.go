@@ -170,7 +170,9 @@ func TestATestKeySendOnASandboxChannelIsSimulatedAndFree(t *testing.T) {
 	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
-	sender := h.approvedSenderOn(tenant, "WHATSAPP")
+	// A number whose WhatsApp setup is finished: an unfinished one is refused
+	// onboarding_incomplete before the channel's mode is ever consulted.
+	sender, _ := h.whatsAppSender(tenant, true)
 	template := h.wildcardTemplate(tenant, sender)
 	h.fundWallet(tenant)
 	before := h.walletBalance(tenant)
@@ -182,10 +184,11 @@ func TestATestKeySendOnASandboxChannelIsSimulatedAndFree(t *testing.T) {
 		CostMinor int64   `json:"costMinor"`
 		ErrorCode *string `json:"errorCode"`
 	}
-	h.do(http.MethodPost, "/v1/messages", testKey, map[string]any{
-		"senderId": sender, "templateId": template, "to": "9876543210", "body": "Hello"}).decode(t, &sent)
+	res := h.do(http.MethodPost, "/v1/messages", testKey, map[string]any{
+		"senderId": sender, "templateId": template, "to": "9876543210", "body": "Hello"})
+	res.decode(t, &sent)
 	if sent.Status == "rejected" || sent.CostMinor != 0 || sent.ID == nil {
-		t.Fatalf("test-key send on sandbox = %+v, want accepted at cost 0", sent)
+		t.Fatalf("test-key send on sandbox = %d %s, want accepted at cost 0", res.Code, res.Body)
 	}
 	var logged struct {
 		Simulated *bool `json:"simulated"`

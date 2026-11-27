@@ -99,6 +99,12 @@ func (f *fixture) seedApprovedSender(header, channel string) uuid.UUID {
 	if channel == "RCS" {
 		f.attachRCSAgent(id)
 	}
+	if channel == "EMAIL" {
+		// An email sender sends only once its domain's DKIM is verified.
+		f.exec(`INSERT INTO sender_dns_records (tenant_id, sender_id, record_type, host, value, status, required)
+		        VALUES ($1, $2, 'DKIM', 'relay._domainkey.relay.test', 'relay.dkim.amazonses.com', 'verified', true)`,
+			f.identity.TenantID, id)
+	}
 	return id
 }
 

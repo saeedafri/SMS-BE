@@ -282,12 +282,16 @@ func TestAnEmailCampaignThroughTheProvider(t *testing.T) {
 	service := &sending.Service{DB: h.server.DB, ClickHouse: conn, Connector: h.server.Connector,
 		Settled: h.server.MessageSettled, EmailEvents: h.server.EmailEventWebhook}
 	var bounce connector.EmailEvent
+	bounces := 0 // both launches mailed the bounce address: one bounce each
 	for _, event := range events {
 		if err := service.ApplyEmailEvent(ctx, event); err != nil {
 			t.Fatalf("apply %s: %v", event.Type, err)
 		}
-		if event.Type == "bounce" && bounce.EventID == "" {
-			bounce = event
+		if event.Type == "bounce" {
+			bounces++
+			if bounce.EventID == "" {
+				bounce = event
+			}
 		}
 	}
 	// Row 2: the same event again changes nothing.
@@ -326,8 +330,8 @@ func TestAnEmailCampaignThroughTheProvider(t *testing.T) {
 	waitFor(t, "message.bounced", func() bool { return len(endpoint.received("message.bounced")) > 0 })
 	time.Sleep(500 * time.Millisecond)
 	hooks := endpoint.received("message.bounced")
-	if len(hooks) != 1 {
-		t.Errorf("row 2: %d bounced webhooks for one bounce, want 1", len(hooks))
+	if len(hooks) != bounces {
+		t.Errorf("row 2: %d bounced webhooks for %d bounces and one replay, want %d", len(hooks), bounces, bounces)
 	}
 	var body struct {
 		Data struct {
