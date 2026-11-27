@@ -206,6 +206,17 @@ if [[ $(echo "$entry" | jq -r '.error.code // empty') == validation_failed ]]; t
     "$(grep -q 'not available on this deployment' <<<"$entry" && echo true || echo false)"
   balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r 'length')
   check "a refused top-up credits nothing ($balance balances)" "$([[ $balance == 0 ]] && echo true || echo false)"
+  # Fund it the way such a deployment does: an operator issues credit on account.
+  op_token=$(curl -s --max-time 10 -X POST "$API/v1/operator/login" -H 'content-type: application/json' \
+    -d "{\"email\":\"${OPERATOR_EMAIL:-ops@relay.internal}\",\"password\":\"${OPERATOR_PASSWORD:-relay-ops-dev}\"}" \
+    | jq -r '.token // .session.token // empty')
+  tenant_id=$(echo "$me" | jq -r .tenantId)
+  credit=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/operator/tenants/$tenant_id/wallet/credit" \
+    -H "authorization: Bearer $op_token" -H 'content-type: application/json' \
+    -d "{\"currency\":\"INR\",\"amountMinor\":250000,\"reference\":\"E2E-${stamp}\"}")
+  check "operator credit on account is issued (got $credit)" "$([[ $credit == 201 ]] && echo true || echo false)"
+  balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r '.[0].balanceMinor')
+  check "balance reads back as $balance" "$([[ $balance == 250000 ]] && echo true || echo false)"
 else
   check "top-up credits the wallet" \
     "$([[ $(echo "$entry" | jq -r .balanceAfterMinor) == 250000 ]] && echo true || echo false)"
