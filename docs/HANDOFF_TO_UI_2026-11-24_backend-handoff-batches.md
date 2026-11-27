@@ -5,11 +5,9 @@ Answers `docs/backend-handoff/PROMPT_FOR_BACKEND_AGENT.md`. Built against your c
 
 ## Read this before you switch any mock off
 
-**Nothing here is deployed.** Our AWS server (`relay-aws`) has not answered SSH or HTTPS since
-23 Nov. The code is on `main` (`31ec59f` and earlier), but the deploy for it failed at
-`ssh: connect to host ... port 22: Connection timed out`, so production still runs the 3 Nov build.
-The tests that need a database have not run (they run on that server). Every channel is
-**code-complete on the fake**; none is live-verified. Keep your mocks on for all six packages until we
+**Update, 27 Nov:** this is now deployed on the Hostinger server (`http://189.72.144.98:8080`) and
+its database tests ran and pass; see `HANDOFF_TO_UI_2026-11-27_api-on-hostinger.md`. As first
+written: nothing was deployed and no database test had run. Keep your mocks on for all six packages until we
 send the follow-up that says each acceptance row ran against the deployment.
 
 ## Where the detail is (in SMS-BE)
