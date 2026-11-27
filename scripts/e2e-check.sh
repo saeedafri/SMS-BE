@@ -127,7 +127,7 @@ change=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X PATCH "$API/v1/
   -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -d '{"currentPassword":"wrong-password","newPassword":"another-password"}')
 check "changing a password needs the current one (got $change)" \
-  "$([[ $change == 403 ]] && echo true || echo false)"
+  "$([[ $change == 401 ]] && echo true || echo false)"
 
 forgot_known=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/auth/password/forgot" \
   -H 'content-type: application/json' -d "{\"email\":\"$email\"}")
@@ -199,14 +199,22 @@ check "first card becomes the default" \
 entry=$(curl -s --max-time 10 -X POST "$API/v1/wallet/topup" \
   -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -d "{\"currency\":\"INR\",\"amountMinor\":250000,\"paymentMethodId\":\"$card_id\"}")
-check "top-up credits the wallet" \
-  "$([[ $(echo "$entry" | jq -r .balanceAfterMinor) == 250000 ]] && echo true || echo false)"
-check "ledger amount stays positive (sign implied by type)" \
-  "$([[ $(echo "$entry" | jq -r .amountMinor) == 250000 && $(echo "$entry" | jq -r .type) == topup ]] && echo true || echo false)"
-
-balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r '.[0].balanceMinor')
-check "balance reads back as $balance" \
-  "$([[ $balance == 250000 ]] && echo true || echo false)"
+# With no payment processor configured a card top-up must be refused, never
+# credited for free (ce98310); with one, it credits the wallet.
+if [[ $(echo "$entry" | jq -r '.error.code // empty') == validation_failed ]]; then
+  check "card top-up refused without a payment processor" \
+    "$(grep -q 'not available on this deployment' <<<"$entry" && echo true || echo false)"
+  balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r 'length')
+  check "a refused top-up credits nothing ($balance balances)" "$([[ $balance == 0 ]] && echo true || echo false)"
+else
+  check "top-up credits the wallet" \
+    "$([[ $(echo "$entry" | jq -r .balanceAfterMinor) == 250000 ]] && echo true || echo false)"
+  check "ledger amount stays positive (sign implied by type)" \
+    "$([[ $(echo "$entry" | jq -r .amountMinor) == 250000 && $(echo "$entry" | jq -r .type) == topup ]] && echo true || echo false)"
+  balance=$(curl -s --max-time 10 "$API/v1/wallet/balances" -H "authorization: Bearer $token" | jq -r '.[0].balanceMinor')
+  check "balance reads back as $balance" \
+    "$([[ $balance == 250000 ]] && echo true || echo false)"
+fi
 
 overdraw=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$API/v1/wallet/topup" \
   -H "authorization: Bearer $token" -H 'content-type: application/json' \
@@ -225,7 +233,7 @@ est2=$(curl -s --max-time 10 -X POST "$API/v1/billing/estimate" \
   -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -d "{\"country\":\"IN\",\"channel\":\"SMS\",\"recipientCount\":1,\"primaryBody\":\"$long_body\"}")
 check "161 characters bills as 2 segments" \
-  "$([[ $(echo "$est2" | jq -r .segmentsPerMessage) == 2 ]] && echo true || echo false)"
+  "$([[ $(echo "$est2" | jq -r .segmentsPerMessageMax) == 2 ]] && echo true || echo false)"
 
 echo
 echo "== money reaches the UI =="

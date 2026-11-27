@@ -67,9 +67,9 @@ check "delete another tenant's list"            404 "$(code -X DELETE "$API/v1/c
 check "rename another tenant's list"            404 "$(code -X PATCH "$API/v1/contact-lists/$victim_list" -H "$AT" -H 'content-type: application/json' -d '{"name":"pwned"}')"
 # 404 not 403 is deliberate: a 403 would confirm the id exists.
 check "victim's list is untouched"              "Victim private list" \
-  "$(curl -s "$API/v1/contact-lists" -H "$VI" | jq -r '.[] | select(.id=="'"$victim_list"'") | .name')"
+  "$(curl -s "$API/v1/contact-lists" -H "$VI" | jq -r '.lists[] | select(.id=="'"$victim_list"'") | .name')"
 check "attacker sees zero of victim's lists"    0 \
-  "$(curl -s "$API/v1/contact-lists" -H "$AT" | jq '[.[] | select(.name=="Victim private list")] | length')"
+  "$(curl -s "$API/v1/contact-lists" -H "$AT" | jq '[.lists[] | select(.name=="Victim private list")] | length')"
 
 echo
 echo "=== AUTHENTICATION ==="
@@ -118,8 +118,9 @@ check "ledger DELETE refused even as owner"     1 "$ledger_delete"
 
 echo
 echo "=== RESOURCE LIMITS ==="
-check "oversized page limit is bounded"         200 "$(code "$API/v1/contacts?limit=999999" -H "$AT")"
-check "negative limit does not crash"           200 "$(code "$API/v1/contacts?limit=-5" -H "$AT")"
+# The contract bounds limit to 1..200, so out-of-range is a 422, not a silent clamp.
+check "oversized page limit is refused"         422 "$(code "$API/v1/contacts?limit=999999" -H "$AT")"
+check "negative limit is refused"               422 "$(code "$API/v1/contacts?limit=-5" -H "$AT")"
 check "unknown endpoint"                        404 "$(code "$API/v1/does-not-exist" -H "$AT")"
 check "wrong method on real endpoint"           405 "$(code -X DELETE "$API/v1/me" -H "$AT")"
 
