@@ -77,7 +77,7 @@ func (s *Service) resolveLeg(ctx context.Context, identity store.Identity,
 		rcsCarrier: rcsCarrier, agentID: agentID,
 		variableMapping: mapping,
 		skipped:         skipped,
-		channelRefused:  disposition != SendLive,
+		disposition:     disposition,
 	}, nil
 }
 

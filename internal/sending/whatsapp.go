@@ -7,9 +7,14 @@ import (
 )
 
 // whatsAppIncomplete says a WhatsApp sender cannot send yet: its setup is not
-// finished, or the number was disconnected.
-func whatsAppIncomplete(sender store.SenderID) bool {
-	return sender.Channel == "WHATSAPP" && (sender.WhatsApp == nil || !sender.WhatsApp.Ready())
+// finished, or the number was disconnected. A simulated send is exempt. It is
+// a test-key send on a sandbox channel, the only kind channelDisposition
+// simulates: nothing reaches Meta and nothing is billed, so a developer can
+// build an integration before the business finishes onboarding. A live key, a
+// live channel, a campaign and a reply are never simulated, so never exempt.
+func whatsAppIncomplete(sender store.SenderID, disposition Disposition) bool {
+	return disposition != SendSimulated && sender.Channel == "WHATSAPP" &&
+		(sender.WhatsApp == nil || !sender.WhatsApp.Ready())
 }
 
 // SendableStatus is the approval a send judges a template by. A WhatsApp

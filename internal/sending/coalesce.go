@@ -302,7 +302,7 @@ func (s *Service) sendMixedBatch(ctx context.Context, batch []*pendingSend) {
 		gateErr := messaging.Check(messaging.GateInput{
 			TenantStatus: state.status, ChannelUnavailable: plan.disposition == SendRefused,
 			SenderStatus: emailSenderStatus(plan.sender), SendingPaused: plan.emailPaused,
-			OnboardingIncomplete: whatsAppIncomplete(plan.sender),
+			OnboardingIncomplete: whatsAppIncomplete(plan.sender, plan.disposition),
 			EntityNotRegistered: !store.CachedEntityRegistered(ctx, s.DB, s.Hot,
 				plan.pending.identity, plan.sender.Country),
 			SenderID:       plan.sender.ID.String(),

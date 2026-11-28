@@ -167,9 +167,9 @@ func (s *Service) SendBatch(ctx context.Context, identity store.Identity,
 			return 0, 0, 0, err
 		}
 		gateErr := messaging.Check(messaging.GateInput{
-			TenantStatus: context.tenantStatus, ChannelUnavailable: context.channelRefused,
+			TenantStatus: context.tenantStatus, ChannelUnavailable: context.disposition != SendLive,
 			SenderStatus: emailSenderStatus(context.sender), SendingPaused: paused,
-			OnboardingIncomplete: whatsAppIncomplete(context.sender),
+			OnboardingIncomplete: whatsAppIncomplete(context.sender, context.disposition),
 			EntityNotRegistered:  !entityRegistered,
 			SenderID:             context.sender.ID.String(), TemplateStatus: context.templateStatus,
 			TemplateSender: context.templateSender, Suppressed: suppressed[msisdn],
@@ -467,8 +467,9 @@ type batchContext struct {
 	// richFallback are the contacts on this (fallback) leg because their
 	// handset could not render the primary's rich RCS content.
 	richFallback map[uuid.UUID]bool
-	// channelRefused says the leg's channel is not live for this tenant.
-	channelRefused bool
+	// disposition is what the leg's channel does for this tenant; anything
+	// but SendLive refuses the leg.
+	disposition    Disposition
 	templateID     uuid.UUID
 	templateStatus string
 	templateSender string

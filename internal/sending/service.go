@@ -409,7 +409,7 @@ func (s *Service) sendOne(ctx context.Context, identity store.Identity, request 
 	gateErr := messaging.Check(messaging.GateInput{
 		TenantStatus: tenantStatus, ChannelUnavailable: disposition == SendRefused,
 		SenderStatus: emailSenderStatus(sender), SendingPaused: paused,
-		OnboardingIncomplete: whatsAppIncomplete(sender),
+		OnboardingIncomplete: whatsAppIncomplete(sender, disposition),
 		EntityNotRegistered:  !store.CachedEntityRegistered(ctx, s.DB, s.Hot, identity, sender.Country),
 		SenderID:             sender.ID.String(), TemplateStatus: templateStatus,
 		TemplateSender: templateSender, Suppressed: suppressed,

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/saeedafri/sms-be/internal/connector"
 	"github.com/saeedafri/sms-be/internal/store"
 )
 
@@ -170,8 +171,6 @@ func TestATestKeySendOnASandboxChannelIsSimulatedAndFree(t *testing.T) {
 	t.Parallel()
 	h := newSendHarness(t)
 	tenant := h.newAccount("owner")
-	// A number whose WhatsApp setup is finished: an unfinished one is refused
-	// onboarding_incomplete before the channel's mode is ever consulted.
 	sender, _ := h.whatsAppSender(tenant, true)
 	template := h.wildcardTemplate(tenant, sender)
 	h.fundWallet(tenant)
@@ -294,5 +293,191 @@ func TestTenantDetailCarriesItsChannels(t *testing.T) {
 		decode(t, &detail)
 	if len(detail.Channels) != 5 {
 		t.Fatalf("tenant detail channels = %d, want 5", len(detail.Channels))
+	}
+}
+
+// metaSlot counts what reaches the WhatsApp carrier slot. It reviews no
+// templates, so the gate judges a send as it does with no WhatsApp carrier
+// configured, which is the deployment's case.
+type metaSlot struct{ countingSandbox }
+
+func (*metaSlot) TemplatesReviewed() bool { return false }
+
+// unfinishedWhatsApp gives a funded tenant a WhatsApp number whose setup is not
+// finished, and a template on it. meta counts what reaches the carrier slot
+// Meta takes; sandbox counts what the simulator takes.
+func (h *harness) unfinishedWhatsApp() (tenant account, sender, template string,
+	meta *metaSlot, sandbox *countingSandbox) {
+
+	h.t.Helper()
+	tenant = h.newAccount("owner")
+	h.fundWallet(tenant)
+	sender, _ = h.whatsAppSender(tenant, false)
+	template = h.wildcardTemplate(tenant, sender)
+	meta = &metaSlot{countingSandbox{Connector: connector.NewSandbox(0)}}
+	sandbox = &countingSandbox{Connector: connector.NewSandbox(0)}
+	h.server.Carriers = connector.Registry{ByChannel: map[string]connector.Connector{"WHATSAPP": meta}}
+	h.server.Connector = sandbox
+	return tenant, sender, template, meta, sandbox
+}
+
+func (h *harness) liveKey(tenant account) string {
+	h.t.Helper()
+	key, err := store.CreateAPIKey(context.Background(), h.pool,
+		store.Identity{TenantID: tenant.TenantID}, "live key", "live", []string{"send:whatsapp"})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return key.Secret
+}
+
+// sendPaths is the two ways a transactional send is built: alone, and through
+// the coalescer, which is how the deployment sends. Each builds the gate's
+// input itself, so a rule has to hold on both. The second starts the coalescer.
+var sendPaths = []struct{ name, to string }{{"single", "9876543220"}, {"coalesced", "9876543221"}}
+
+func (h *harness) useSendPath(name string) {
+	if name == "coalesced" {
+		h.server.StartSendCoalescer()
+		h.t.Cleanup(h.server.StopSendCoalescer)
+	}
+}
+
+// sendWithKey sends one WhatsApp message and returns the verdict and its
+// error code ("" when accepted).
+func (h *harness) sendWithKey(key, sender, template, to string) (sendOutcome, string) {
+	h.t.Helper()
+	res := h.do(http.MethodPost, "/v1/messages", key, map[string]any{
+		"senderId": sender, "templateId": template, "to": to, "body": "Hello"})
+	if res.Code != http.StatusAccepted {
+		h.t.Fatalf("send = %d\n%s", res.Code, res.Body)
+	}
+	var out sendOutcome
+	res.decode(h.t, &out)
+	code := ""
+	if out.ErrorCode != nil {
+		code = *out.ErrorCode
+	}
+	return out, code
+}
+
+// Ask 74 S1: a developer can build against the sandbox before the business has
+// finished Meta's onboarding. A test-key send on a sandbox channel is not
+// refused for unfinished setup: it is accepted, simulated, free and labelled so.
+func TestSandboxTestKeySendSkipsWhatsAppSetup(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	tenant, sender, template, _, _ := h.unfinishedWhatsApp()
+	key := h.apiKey(tenant, []string{"send:whatsapp"})
+	before := h.walletBalance(tenant)
+
+	for _, path := range sendPaths {
+		h.useSendPath(path.name)
+		sent, code := h.sendWithKey(key, sender, template, path.to)
+		if sent.Status == "rejected" || sent.CostMinor != 0 || sent.ID == nil {
+			t.Fatalf("%s: test key, sandbox channel, setup unfinished = %s %s cost %d, want accepted at cost 0",
+				path.name, sent.Status, code, sent.CostMinor)
+		}
+		var logged struct {
+			Simulated *bool `json:"simulated"`
+			CostMinor int64 `json:"costMinor"`
+		}
+		h.do(http.MethodGet, "/v1/messages/"+*sent.ID, tenant.Token, nil).decode(t, &logged)
+		if logged.Simulated == nil || !*logged.Simulated || logged.CostMinor != 0 {
+			t.Errorf("%s: logged = simulated %v cost %d, want simulated at 0",
+				path.name, logged.Simulated, logged.CostMinor)
+		}
+	}
+	if after := h.walletBalance(tenant); after != before {
+		t.Errorf("balance moved from %d to %d for a simulated message", before, after)
+	}
+}
+
+// Ask 74 S2: a live key never gets the allowance. On a sandbox channel the gate
+// refuses it channel_unavailable, which it checks before setup; on a live
+// channel, onboarding_incomplete. Nothing is sent either way.
+func TestSandboxLiveKeySendStillNeedsWhatsAppSetup(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	tenant, sender, template, meta, sandbox := h.unfinishedWhatsApp()
+	key := h.liveKey(tenant)
+
+	if sent, code := h.sendWithKey(key, sender, template, "9876543211"); sent.Status != "rejected" || code != "channel_unavailable" {
+		t.Errorf("live key, sandbox channel = %s %s, want rejected channel_unavailable", sent.Status, code)
+	}
+	h.whatsAppLive(tenant)
+	if sent, code := h.sendWithKey(key, sender, template, "9876543212"); sent.Status != "rejected" || code != "onboarding_incomplete" {
+		t.Errorf("live key, live channel = %s %s, want rejected onboarding_incomplete", sent.Status, code)
+	}
+	if meta.submitted.Load() != 0 || sandbox.submitted.Load() != 0 {
+		t.Errorf("submitted: Meta %d, sandbox %d, want nothing", meta.submitted.Load(), sandbox.submitted.Load())
+	}
+}
+
+// Ask 74 S3: a test key on a live channel is not simulated, so it is never
+// exempt. Unfinished setup refuses it and nothing reaches Meta.
+func TestLiveChannelTestKeySendStillNeedsWhatsAppSetup(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	tenant, sender, template, meta, _ := h.unfinishedWhatsApp()
+	h.whatsAppLive(tenant)
+	key := h.apiKey(tenant, []string{"send:whatsapp"})
+
+	for _, path := range sendPaths {
+		h.useSendPath(path.name)
+		sent, code := h.sendWithKey(key, sender, template, path.to)
+		if sent.Status != "rejected" || code != "onboarding_incomplete" {
+			t.Errorf("%s: test key, live channel = %s %s, want rejected onboarding_incomplete",
+				path.name, sent.Status, code)
+		}
+	}
+	if got := meta.submitted.Load(); got != 0 {
+		t.Errorf("%d messages reached Meta from a number whose setup is unfinished", got)
+	}
+}
+
+// Ask 74 S4: a dashboard campaign sends with a session, never a test key, so it
+// never gets the allowance. On a sandbox channel it is refused
+// channel_unavailable before setup is looked at; on a live channel,
+// onboarding_incomplete.
+func TestCampaignStillNeedsWhatsAppSetup(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	tenant, sender, _, meta, sandbox := h.unfinishedWhatsApp()
+	template, _ := h.whatsAppTemplate(tenant, sender, "approved")
+	list := h.whatsAppList(tenant, 2)
+
+	if res := h.whatsAppCampaign(tenant, sender, template, list); res.Code != http.StatusUnprocessableEntity ||
+		res.errorCode(t) != "channel_unavailable" {
+		t.Errorf("campaign, sandbox channel = %d %s, want 422 channel_unavailable", res.Code, res.Body)
+	}
+	h.whatsAppLive(tenant)
+	if res := h.whatsAppCampaign(tenant, sender, template, list); res.Code != http.StatusUnprocessableEntity ||
+		res.errorCode(t) != "onboarding_incomplete" {
+		t.Errorf("campaign, live channel = %d %s, want 422 onboarding_incomplete", res.Code, res.Body)
+	}
+	if meta.submitted.Load() != 0 || sandbox.submitted.Load() != 0 {
+		t.Errorf("submitted: Meta %d, sandbox %d, want nothing", meta.submitted.Load(), sandbox.submitted.Load())
+	}
+}
+
+// Ask 74 S5: the allowance holds only because nothing leaves the building. The
+// S1 sends, one per path, reach the simulator and never Meta.
+func TestSandboxTestKeySendNeverReachesMeta(t *testing.T) {
+	t.Parallel()
+	h := newSendHarness(t)
+	tenant, sender, template, meta, sandbox := h.unfinishedWhatsApp()
+	key := h.apiKey(tenant, []string{"send:whatsapp"})
+
+	for _, path := range sendPaths {
+		h.useSendPath(path.name)
+		if sent, code := h.sendWithKey(key, sender, template, path.to); sent.Status == "rejected" {
+			t.Fatalf("%s: test key, sandbox channel = rejected %s, want accepted", path.name, code)
+		}
+	}
+	t.Logf("provider calls: Meta %d, sandbox %d", meta.submitted.Load(), sandbox.submitted.Load())
+	if meta.submitted.Load() != 0 || sandbox.submitted.Load() != int32(len(sendPaths)) {
+		t.Errorf("provider calls: Meta %d, sandbox %d, want 0 and %d",
+			meta.submitted.Load(), sandbox.submitted.Load(), len(sendPaths))
 	}
 }
