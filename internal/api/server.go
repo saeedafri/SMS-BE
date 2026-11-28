@@ -223,6 +223,10 @@ type Server struct {
 	// Nil means no restriction.
 	CarrierWebhookAllowlist *ipAllowlist
 
+	// MetricsToken, when set, is the bearer token GET /metrics requires.
+	// METRICS_TOKEN; empty leaves /metrics open to whoever can reach it.
+	MetricsToken string
+
 	// RCSCarrier answers handset capability discovery — whether a number can
 	// receive RCS at all, and which rich features will render on it. Nil means
 	// the deployment has no RCS carrier credentials, and the endpoint says so
@@ -427,9 +431,8 @@ func NewRouter(s *Server) http.Handler {
 	// Liveness vs readiness are different questions: healthz says "this process
 	// works", readyz says "send it traffic". A load balancer wants the second.
 	r.Get("/readyz", s.readiness)
-	// Live counters, timings and recent incidents. No tenant data, so no auth —
-	// an observability endpoint that needs a working login is useless exactly
-	// when login is what has broken.
+	// Live counters, timings and recent incidents. No login, and no internet:
+	// see metrics for the edge rule and METRICS_TOKEN.
 	r.Get("/metrics", s.metrics)
 
 	// The generated routes go in FIRST, and every route mounted directly below

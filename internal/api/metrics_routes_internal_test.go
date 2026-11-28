@@ -33,3 +33,38 @@ func TestUnmatchedPathsShareOneMetricsKey(t *testing.T) {
 		t.Fatalf("metrics routes = %v, want %v", counts, want)
 	}
 }
+
+// With METRICS_TOKEN set, /metrics answers only its bearer. Behind nginx every
+// request arrives from the proxy, so if the edge rule is ever lost this token is
+// what still stands. A token of another length must be refused, not panic.
+func TestMetricsTokenGuardsMetrics(t *testing.T) {
+	guarded := &Server{Metrics: NewMetrics(), MetricsToken: "metrics-token-0123456789"}
+	cases := []struct {
+		name, header string
+		want         int
+	}{
+		{"no header", "", http.StatusUnauthorized},
+		{"wrong token", "Bearer metrics-token-9876543210", http.StatusUnauthorized},
+		{"shorter token", "Bearer metrics", http.StatusUnauthorized},
+		{"longer token", "Bearer metrics-token-0123456789-and-more", http.StatusUnauthorized},
+		{"right token", "Bearer metrics-token-0123456789", http.StatusOK},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		if c.header != "" {
+			req.Header.Set("Authorization", c.header)
+		}
+		res := httptest.NewRecorder()
+		guarded.metrics(res, req)
+		if res.Code != c.want {
+			t.Errorf("%s: /metrics = %d, want %d", c.name, res.Code, c.want)
+		}
+	}
+
+	open := &Server{Metrics: NewMetrics()}
+	res := httptest.NewRecorder()
+	open.metrics(res, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if res.Code != http.StatusOK {
+		t.Errorf("METRICS_TOKEN unset: /metrics = %d, want 200 as before", res.Code)
+	}
+}

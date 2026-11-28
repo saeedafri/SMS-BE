@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"runtime"
 	"sort"
@@ -207,11 +208,21 @@ func (m *Metrics) Snapshot() map[string]any {
 	}
 }
 
-// metrics serves the live picture. It requires no authentication because it
-// exposes no tenant data — only counters, timings and route names — and an
-// observability endpoint that needs a working login is useless exactly when
-// login is what has broken.
-func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
+// metrics serves the live picture: counters, timings, route names and worker
+// incidents, no tenant data. It needs no login, because an observability
+// endpoint that needs a working login is useless exactly when login is what has
+// broken. It is not for the internet either: nginx refuses it at the edge, and
+// MetricsToken, when set, is the second layer, because behind nginx every
+// request arrives from the proxy and this process cannot tell the box from the
+// internet.
+func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
+	if s.MetricsToken != "" {
+		token, _ := bearerToken(r)
+		if subtle.ConstantTimeCompare([]byte(token), []byte(s.MetricsToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, codeUnauthenticated, "Missing or invalid bearer token")
+			return
+		}
+	}
 	if s.Metrics == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
 		return

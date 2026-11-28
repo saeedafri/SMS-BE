@@ -364,6 +364,7 @@ func run() error {
 		CarrierWebhookToken:      cfg.CarrierWebhookToken,
 		GoogleWebhookClientToken: cfg.RCSGoogleWebhookClientToken,
 		CarrierWebhookAllowlist:  carrierWebhookAllowlist,
+		MetricsToken:             strings.TrimSpace(os.Getenv("METRICS_TOKEN")),
 		Mail: &mailer.Mailer{
 			APIKey: cfg.ResendAPIKey, From: cfg.MailFrom, Logger: logger,
 		}}
